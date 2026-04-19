@@ -63,7 +63,7 @@ class AudiobookConverterApp:
         list_frame = ttk.Frame(ch_frame)
         list_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.chapter_listbox = tk.Listbox(list_frame, selectmode=tk.MULTIPLE, height=6, font=("Helvetica", 11))
+        self.chapter_listbox = tk.Listbox(list_frame, selectmode=tk.EXTENDED, height=6, font=("Helvetica", 11))
         ch_scroll = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.chapter_listbox.yview)
         self.chapter_listbox.config(yscrollcommand=ch_scroll.set)
         self.chapter_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
