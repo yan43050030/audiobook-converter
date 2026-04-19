@@ -1,4 +1,4 @@
-"""GUI界面 - 文字转有声读物 v2.0"""
+"""GUI界面 - 文字转有声读物 v2.1"""
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
@@ -6,16 +6,19 @@ import threading
 import os
 import subprocess
 import platform
+import logging
 
 from tts_engine import (
     VERSION,
+    LOG_PATH,
     get_voice_list,
     get_voice_id,
     generate_preview,
-    generate_one,
     convert_batch,
     detect_chapters,
     load_progress,
+    merge_mp3_files,
+    logger,
 )
 
 
@@ -127,7 +130,7 @@ class AudiobookConverterApp:
 
         ttk.Separator(right, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=8)
 
-        # 按钮
+        # 操作按钮
         ttk.Button(right, text="试听（前200字）", command=self._preview).pack(fill=tk.X, pady=2)
         self.btn_convert = ttk.Button(right, text="生成MP3", command=self._start_convert)
         self.btn_convert.pack(fill=tk.X, pady=2)
@@ -136,8 +139,15 @@ class AudiobookConverterApp:
         self.btn_resume = ttk.Button(right, text="继续生成", command=self._resume_convert)
         self.btn_resume.pack(fill=tk.X, pady=2)
 
-        # 检查是否有可恢复的进度
-        self._check_resumable()
+        ttk.Separator(right, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=8)
+
+        # 合并MP3
+        ttk.Button(right, text="合并MP3文件", command=self._merge_mp3).pack(fill=tk.X, pady=2)
+
+        ttk.Separator(right, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=8)
+
+        # 查看日志
+        ttk.Button(right, text="查看日志", command=self._show_log).pack(fill=tk.X, pady=2)
 
         # 底部进度
         bottom = ttk.Frame(main)
@@ -204,8 +214,10 @@ class AudiobookConverterApp:
             filename = os.path.basename(path)
             self.file_label.config(text=filename, foreground="black")
             self.status_label.config(text=f"已加载: {filename}（{len(content)}字）")
+            logger.info(f"加载文件: {path} ({len(content)}字)")
             self._refresh_chapters()
         except Exception as e:
+            logger.error(f"读取文件失败: {e}")
             messagebox.showerror("错误", f"读取文件失败: {e}")
 
     def _refresh_chapters(self):
@@ -221,6 +233,7 @@ class AudiobookConverterApp:
             self.chapter_count_label.config(text=f"共 {count} 章/段")
         else:
             self.chapter_count_label.config(text="未检测到章节")
+        logger.info(f"检测到 {count} 个章节/段落")
 
     def _select_all_chapters(self):
         self.chapter_listbox.selection_set(0, tk.END)
@@ -252,6 +265,7 @@ class AudiobookConverterApp:
                 self.root.after(0, lambda: self._play_audio(path))
                 self.root.after(0, lambda: self.status_label.config(text="预览生成完成，正在播放..."))
             except Exception as e:
+                logger.error(f"预览失败: {e}")
                 self.root.after(0, lambda: messagebox.showerror("错误", f"预览失败: {e}"))
                 self.root.after(0, lambda: self.status_label.config(text="预览失败"))
 
@@ -272,7 +286,6 @@ class AudiobookConverterApp:
     # ===== 生成控制 =====
 
     def _get_selected_indices(self) -> list:
-        """获取选中的章节索引"""
         selection = self.chapter_listbox.curselection()
         if not selection:
             return []
@@ -304,7 +317,6 @@ class AudiobookConverterApp:
         self._run_convert(output_dir, file_prefix, selected, resume=False)
 
     def _resume_convert(self):
-        """从断点继续"""
         output_dir = filedialog.askdirectory(title="选择之前保存的目录（包含进度文件）")
         if not output_dir:
             return
@@ -316,11 +328,6 @@ class AudiobookConverterApp:
 
         file_prefix = "有声读物"
         self._run_convert(output_dir, file_prefix, selected_indices=None, resume=True)
-
-    def _check_resumable(self):
-        """检查文本区域附近的目录是否有可恢复的进度"""
-        # 按钮始终可用，用户手动选择目录
-        pass
 
     def _run_convert(self, output_dir: str, file_prefix: str, selected_indices: list, resume: bool):
         self.is_converting = True
@@ -367,6 +374,7 @@ class AudiobookConverterApp:
                 else:
                     self.root.after(0, lambda: self._on_convert_done(output_dir, files))
             except Exception as e:
+                logger.error(f"转换异常: {e}", exc_info=True)
                 self.root.after(0, lambda: messagebox.showerror("错误", f"转换失败: {e}"))
                 self.root.after(0, lambda: self.status_label.config(text="转换失败"))
             finally:
@@ -380,6 +388,7 @@ class AudiobookConverterApp:
     def _pause_convert(self):
         self.should_stop = True
         self.status_label.config(text="正在暂停...")
+        logger.info("用户点击暂停")
 
     def _on_pause(self, output_dir: str):
         self.status_label.config(text=f"已暂停，进度已保存到: {output_dir}")
@@ -390,6 +399,7 @@ class AudiobookConverterApp:
         self.progress["value"] = 100
         count = len(files)
         self.status_label.config(text=f"完成! 共生成 {count} 个文件")
+        logger.info(f"批量生成完成: {count} 个文件 → {output_dir}")
 
         names = [os.path.basename(f) for f in files[:8]]
         preview = "\n".join(names)
@@ -407,3 +417,55 @@ class AudiobookConverterApp:
                 os.startfile(output_dir)
             else:
                 subprocess.Popen(["xdg-open", output_dir])
+
+    # ===== 合并 MP3 =====
+
+    def _merge_mp3(self):
+        """选择多个MP3文件合并为一个"""
+        files = filedialog.askopenfilenames(
+            title="选择要合并的MP3文件",
+            filetypes=[("MP3文件", "*.mp3"), ("所有文件", "*.*")]
+        )
+        if not files:
+            return
+
+        if len(files) < 2:
+            messagebox.showinfo("提示", "请选择至少2个文件")
+            return
+
+        # 排序（按文件名自然顺序）
+        file_list = sorted(list(files))
+
+        output_path = filedialog.asksaveasfilename(
+            title="保存合并后的MP3",
+            initialfile="合并_有声读物.mp3",
+            defaultextension=".mp3",
+            filetypes=[("MP3文件", "*.mp3")]
+        )
+        if not output_path:
+            return
+
+        try:
+            self.status_label.config(text="正在合并MP3...")
+            merge_mp3_files(file_list, output_path)
+            size_mb = os.path.getsize(output_path) / (1024 * 1024)
+            self.status_label.config(text=f"合并完成: {os.path.basename(output_path)} ({size_mb:.1f}MB)")
+            logger.info(f"合并完成: {len(file_list)} 个文件 → {output_path} ({size_mb:.1f}MB)")
+            messagebox.showinfo("完成", f"已合并 {len(file_list)} 个文件:\n{os.path.basename(output_path)}\n\n大小: {size_mb:.1f}MB")
+        except Exception as e:
+            logger.error(f"合并失败: {e}")
+            messagebox.showerror("错误", f"合并失败: {e}")
+
+    # ===== 日志查看 =====
+
+    def _show_log(self):
+        """打开日志文件"""
+        if os.path.exists(LOG_PATH):
+            if platform.system() == "Darwin":
+                subprocess.Popen(["open", LOG_PATH])
+            elif platform.system() == "Windows":
+                os.startfile(LOG_PATH)
+            else:
+                subprocess.Popen(["xdg-open", LOG_PATH])
+        else:
+            messagebox.showinfo("提示", "日志文件不存在")

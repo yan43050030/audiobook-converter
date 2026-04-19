@@ -1,7 +1,8 @@
-"""TTS引擎封装 - 支持 edge-tts（联网）和本地语音（离线）"""
+"""TTS引擎封装 - 支持 edge-tts（联网）和本地语音（离线） v2.1.0"""
 
 import asyncio
 import json
+import logging
 import os
 import re
 import shutil
@@ -11,11 +12,30 @@ from typing import Optional
 
 import edge_tts
 
-VERSION = "2.0.0"
+VERSION = "2.1.0"
+
+# ======== 日志 ========
+
+LOG_PATH = os.path.join(tempfile.gettempdir(), "audiobook_converter.log")
+logger = logging.getLogger("audiobook_converter")
+logger.setLevel(logging.DEBUG)
+
+_fh = logging.FileHandler(LOG_PATH, encoding="utf-8")
+_fh.setLevel(logging.DEBUG)
+_fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+logger.addHandler(_fh)
+
+_ch = logging.StreamHandler()
+_ch.setLevel(logging.INFO)
+_ch.setFormatter(logging.Formatter("%(message)s"))
+logger.addHandler(_ch)
+
+logger.info(f"=== Audiobook Converter v{VERSION} 启动 ===")
+logger.info(f"日志文件: {LOG_PATH}")
+
 
 # ======== 通用配置 ========
 
-# edge-tts 中文语音
 EDGE_VOICES = {
     "晓晓（女声，自然）": "zh-CN-XiaoxiaoNeural",
     "云希（男声，自然）": "zh-CN-YunxiNeural",
@@ -26,7 +46,6 @@ EDGE_VOICES = {
 }
 EDGE_DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
 
-# macOS 本地中文语音
 LOCAL_VOICES = {
     "Ting-Ting（中文）": "Ting-Ting",
     "Eddy（中文）": "Eddy (zh_CN)",
@@ -40,27 +59,26 @@ LOCAL_VOICES = {
 }
 LOCAL_DEFAULT_VOICE = "Ting-Ting"
 
-# 估计：中文约 2.5 字/秒（edge-tts rate +0% 时）
 CHARS_PER_SECOND_BASE = 2.5
-
 PROGRESS_FILENAME = ".audiobook_progress.json"
+MAX_RETRIES = 2  # 生成失败时重试次数
 
 
 # ======== 工具函数 ========
 
-def get_voice_list(engine: str = "edge") -> list[str]:
+def get_voice_list(engine="edge"):
     if engine == "local":
         return list(LOCAL_VOICES.keys())
     return list(EDGE_VOICES.keys())
 
 
-def get_voice_id(display_name: str, engine: str = "edge") -> str:
+def get_voice_id(display_name, engine="edge"):
     if engine == "local":
         return LOCAL_VOICES.get(display_name, LOCAL_DEFAULT_VOICE)
     return EDGE_VOICES.get(display_name, EDGE_DEFAULT_VOICE)
 
 
-def estimate_duration(text: str, rate: str = "+0%") -> float:
+def estimate_duration(text, rate="+0%"):
     rate_val = int(rate.replace("%", "").replace("+", ""))
     speed_factor = 1 + rate_val / 100.0
     cps = CHARS_PER_SECOND_BASE * speed_factor
@@ -69,7 +87,7 @@ def estimate_duration(text: str, rate: str = "+0%") -> float:
     return len(text) / cps
 
 
-def sanitize_filename(name: str) -> str:
+def sanitize_filename(name):
     name = re.sub(r'[\\/:*?"<>|]', '_', name)
     name = name.strip(". ")
     return name[:80] if name else "untitled"
@@ -83,7 +101,7 @@ CHAPTER_PATTERNS = [
 ]
 
 
-def detect_chapters(text: str) -> list[dict]:
+def detect_chapters(text):
     lines = text.split("\n")
     chapter_starts = []
     for i, line in enumerate(lines):
@@ -116,7 +134,7 @@ def detect_chapters(text: str) -> list[dict]:
 
 # ======== 文本分段 ========
 
-def split_text(text: str, max_length: int = 3000) -> list[str]:
+def split_text(text, max_length=3000):
     if len(text) <= max_length:
         return [text]
 
@@ -147,7 +165,7 @@ def split_text(text: str, max_length: int = 3000) -> list[str]:
     return segments
 
 
-def _split_by_sentences(text: str, max_length: int) -> list[str]:
+def _split_by_sentences(text, max_length):
     sentences = re.split(r'([。！？；])', text)
     segments, current = [], ""
     i = 0
@@ -169,7 +187,7 @@ def _split_by_sentences(text: str, max_length: int) -> list[str]:
     return segments
 
 
-def split_by_duration(chapter_text: str, max_seconds: int, rate: str = "+0%") -> list[str]:
+def split_by_duration(chapter_text, max_seconds, rate="+0%"):
     rate_val = int(rate.replace("%", "").replace("+", ""))
     max_chars = int(max_seconds * CHARS_PER_SECOND_BASE * (1 + rate_val / 100.0))
     max_chars = max(max_chars, 500)
@@ -178,29 +196,43 @@ def split_by_duration(chapter_text: str, max_seconds: int, rate: str = "+0%") ->
 
 # ======== 音频文件合并 ========
 
-def _merge_mp3_files(file_paths: list[str], output_path: str):
+def _merge_mp3_files(file_paths, output_path):
+    """合并多个MP3文件为一个，跳过后续文件的ID3标签"""
     with open(output_path, "wb") as outfile:
         for idx, path in enumerate(file_paths):
             with open(path, "rb") as infile:
                 data = infile.read()
-                if idx == 0:
-                    outfile.write(data)
-                else:
-                    if data[:3] == b'ID3':
-                        size = (data[6] << 21) | (data[7] << 14) | (data[8] << 7) | data[9]
-                        outfile.write(data[10 + size:])
+            if not data:
+                logger.warning(f"合并时跳过空文件: {path}")
+                continue
+            if idx == 0:
+                outfile.write(data)
+            else:
+                # 跳过 ID3v2 标签
+                if len(data) > 10 and data[:3] == b'ID3':
+                    size = (data[6] << 21) | (data[7] << 14) | (data[8] << 7) | data[9]
+                    header_end = 10 + size
+                    if header_end < len(data):
+                        outfile.write(data[header_end:])
                     else:
-                        outfile.write(data)
+                        logger.warning(f"ID3标签异常大，跳过: {path}")
+                else:
+                    outfile.write(data)
+
+
+def merge_mp3_files(file_paths, output_path):
+    """公开接口：合并多个MP3文件"""
+    _merge_mp3_files(file_paths, output_path)
 
 
 # ======== Edge TTS 引擎 ========
 
-async def _edge_generate(text: str, voice: str, rate: str, output_path: str):
+async def _edge_generate(text, voice, rate, output_path):
     communicate = edge_tts.Communicate(text, voice, rate=rate)
     await communicate.save(output_path)
 
 
-async def _edge_generate_multi(segments: list[str], voice: str, rate: str, output_path: str):
+async def _edge_generate_multi(segments, voice, rate, output_path):
     temp_dir = tempfile.mkdtemp()
     temp_files = []
     try:
@@ -213,10 +245,67 @@ async def _edge_generate_multi(segments: list[str], voice: str, rate: str, outpu
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+# ======== 批量 Edge TTS（单一事件循环） ========
+
+async def _edge_batch_generate(items, voice, rate, output_dir, progress_callback, should_stop):
+    """
+    在单一事件循环中批量生成所有文件，避免反复创建/销毁事件循环。
+    """
+    done_count = 0
+    total_active = sum(1 for it in items if it["status"] not in ("done", "skipped"))
+
+    for item in items:
+        if item["status"] == "done":
+            continue
+        if item["status"] == "skipped":
+            continue
+        if should_stop and should_stop():
+            logger.info("用户暂停生成")
+            break
+
+        out_path = os.path.join(output_dir, item["filename"])
+        segments = split_text(item["text"])
+
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                logger.info(f"生成 [{item['title']}] → {item['filename']} (尝试 {attempt + 1})")
+
+                if len(segments) == 1:
+                    await _edge_generate(segments[0], voice, rate, out_path)
+                else:
+                    temp_dir = tempfile.mkdtemp()
+                    temp_files = []
+                    try:
+                        for si, seg in enumerate(segments):
+                            tp = os.path.join(temp_dir, f"seg_{si:04d}.mp3")
+                            await _edge_generate(seg, voice, rate, tp)
+                            temp_files.append(tp)
+                        _merge_mp3_files(temp_files, out_path)
+                    finally:
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+
+                # 验证文件
+                if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
+                    item["status"] = "done"
+                    logger.info(f"完成 [{item['title']}] ({os.path.getsize(out_path)} bytes)")
+                    break
+                else:
+                    raise RuntimeError(f"生成文件为空: {out_path}")
+
+            except Exception as e:
+                logger.error(f"生成失败 [{item['title']}] 尝试{attempt + 1}: {e}")
+                if attempt == MAX_RETRIES:
+                    item["status"] = "error"
+                    item["error"] = str(e)
+
+        done_count += 1
+        if progress_callback:
+            progress_callback(done_count, total_active)
+
+
 # ======== 本地 TTS 引擎 (macOS say) ========
 
-def _local_generate(text: str, voice: str, rate: str, output_path: str):
-    """用 macOS say 命令生成音频并转为 MP3"""
+def _local_generate(text, voice, rate, output_path):
     rate_val = int(rate.replace("%", "").replace("+", ""))
     wpm = int(175 * (1 + rate_val / 100.0))
     wpm = max(wpm, 50)
@@ -227,7 +316,6 @@ def _local_generate(text: str, voice: str, rate: str, output_path: str):
             ["say", "-v", voice, "-r", str(wpm), "-o", aiff_path, text],
             check=True, capture_output=True
         )
-        # aiff → mp3
         subprocess.run(
             ["afconvert", "-f", "mp4f", "-d", "aac", aiff_path, output_path],
             check=True, capture_output=True
@@ -237,45 +325,58 @@ def _local_generate(text: str, voice: str, rate: str, output_path: str):
             os.remove(aiff_path)
 
 
-def _local_generate_multi(segments: list[str], voice: str, rate: str, output_path: str):
-    temp_dir = tempfile.mkdtemp()
-    temp_files = []
-    try:
-        for i, seg in enumerate(segments):
-            tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
-            _local_generate(seg, voice, rate, tp)
-            temp_files.append(tp)
-        _merge_mp3_files(temp_files, output_path)
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+# ======== 统一生成接口 ========
 
-
-# ======== 统一接口 ========
-
-def generate_one(text: str, voice: str, rate: str, output_path: str, engine: str = "edge"):
-    """生成单个 MP3 文件"""
+def _generate_one_safe(text, voice, rate, output_path, engine="edge"):
+    """生成单个MP3，带重试和验证"""
     segments = split_text(text)
-    if engine == "local":
-        if len(segments) == 1:
-            _local_generate(segments[0], voice, rate, output_path)
-        else:
-            _local_generate_multi(segments, voice, rate, output_path)
-    else:
-        if len(segments) == 1:
-            asyncio.run(_edge_generate(segments[0], voice, rate, output_path))
-        else:
-            asyncio.run(_edge_generate_multi(segments, voice, rate, output_path))
+
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            logger.info(f"生成单文件 → {output_path} (尝试 {attempt + 1})")
+
+            if engine == "local":
+                if len(segments) == 1:
+                    _local_generate(segments[0], voice, rate, output_path)
+                else:
+                    temp_dir = tempfile.mkdtemp()
+                    temp_files = []
+                    try:
+                        for i, seg in enumerate(segments):
+                            tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
+                            _local_generate(seg, voice, rate, tp)
+                            temp_files.append(tp)
+                        _merge_mp3_files(temp_files, output_path)
+                    finally:
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+            else:
+                if len(segments) == 1:
+                    asyncio.run(_edge_generate(segments[0], voice, rate, output_path))
+                else:
+                    asyncio.run(_edge_generate_multi(segments, voice, rate, output_path))
+
+            # 验证
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                logger.info(f"完成: {output_path} ({os.path.getsize(output_path)} bytes)")
+                return
+            else:
+                raise RuntimeError(f"生成文件为空: {output_path}")
+
+        except Exception as e:
+            logger.error(f"生成失败 尝试{attempt + 1}: {e}")
+            if attempt == MAX_RETRIES:
+                raise
 
 
 # ======== 进度管理 ========
 
-def save_progress(output_dir: str, items: list[dict]):
+def save_progress(output_dir, items):
     path = os.path.join(output_dir, PROGRESS_FILENAME)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(items, f, ensure_ascii=False, indent=2)
 
 
-def load_progress(output_dir: str) -> Optional[list]:
+def load_progress(output_dir):
     path = os.path.join(output_dir, PROGRESS_FILENAME)
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
@@ -283,7 +384,7 @@ def load_progress(output_dir: str) -> Optional[list]:
     return None
 
 
-def clear_progress(output_dir: str):
+def clear_progress(output_dir):
     path = os.path.join(output_dir, PROGRESS_FILENAME)
     if os.path.exists(path):
         os.remove(path)
@@ -292,36 +393,25 @@ def clear_progress(output_dir: str):
 # ======== 批量生成（支持断点续传 + 选择生成） ========
 
 def convert_batch(
-    text: str,
-    voice: str,
-    rate: str,
-    output_dir: str,
-    split_mode: str = "chapter",
-    time_minutes: int = 30,
-    file_prefix: str = "有声读物",
-    selected_indices: Optional[list] = None,
-    engine: str = "edge",
+    text,
+    voice,
+    rate,
+    output_dir,
+    split_mode="chapter",
+    time_minutes=30,
+    file_prefix="有声读物",
+    selected_indices=None,
+    engine="edge",
     progress_callback=None,
     should_stop=None,
-    resume: bool = False,
-) -> list[str]:
-    """
-    批量生成 MP3。
-
-    split_mode: "chapter" | "time" | "single"
-    selected_indices: None=全部，否则只生成指定索引
-    should_stop: 可调用对象，返回 True 时暂停
-    resume: True 时从已有进度恢复
-    """
+    resume=False,
+):
     os.makedirs(output_dir, exist_ok=True)
 
     # 构建任务列表
     if resume:
         items = load_progress(output_dir)
-        if items:
-            # 保留已有进度
-            pass
-        else:
+        if not items:
             resume = False
 
     if not resume:
@@ -348,7 +438,6 @@ def convert_batch(
                     fn = f"{file_idx:03d}_{sanitize_filename(label or file_prefix)}.mp3"
                     items.append({"title": label or file_prefix, "text": part, "filename": fn, "status": "pending"})
 
-        # 过滤选择项
         if selected_indices is not None:
             for i, item in enumerate(items):
                 if i not in selected_indices:
@@ -356,52 +445,62 @@ def convert_batch(
 
         save_progress(output_dir, items)
 
-    # 执行生成
-    output_files = []
-    pending = [it for it in items if it["status"] == "pending"]
-    done_count = sum(1 for it in items if it["status"] == "done")
-    total_active = sum(1 for it in items if it["status"] != "skipped")
+    logger.info(f"批量生成开始: {sum(1 for it in items if it['status'] not in ('done','skipped'))} 个待处理, 引擎={engine}")
 
-    for i, item in enumerate(items):
-        if item["status"] == "done":
-            output_files.append(os.path.join(output_dir, item["filename"]))
-            continue
-        if item["status"] == "skipped":
-            continue
+    if engine == "edge":
+        # 用单一事件循环批量生成
+        asyncio.run(_edge_batch_generate(items, voice, rate, output_dir, progress_callback, should_stop))
+    else:
+        # 本地引擎同步逐个生成
+        done_count = 0
+        total_active = sum(1 for it in items if it["status"] not in ("done", "skipped"))
 
-        if should_stop and should_stop():
+        for item in items:
+            if item["status"] == "done":
+                continue
+            if item["status"] == "skipped":
+                continue
+            if should_stop and should_stop():
+                logger.info("用户暂停生成")
+                break
+
+            out_path = os.path.join(output_dir, item["filename"])
+            try:
+                _generate_one_safe(item["text"], voice, rate, out_path, engine="local")
+                item["status"] = "done"
+            except Exception as e:
+                item["status"] = "error"
+                item["error"] = str(e)
+                logger.error(f"本地引擎生成失败 [{item['title']}]: {e}")
+
             save_progress(output_dir, items)
-            break
+            done_count += 1
+            if progress_callback:
+                progress_callback(done_count, total_active)
 
-        out_path = os.path.join(output_dir, item["filename"])
-        try:
-            generate_one(item["text"], voice, rate, out_path, engine=engine)
-            item["status"] = "done"
-            output_files.append(out_path)
-        except Exception as e:
-            item["status"] = "error"
-            item["error"] = str(e)
+    # 收集结果
+    output_files = [os.path.join(output_dir, it["filename"])
+                    for it in items if it["status"] == "done"]
 
-        save_progress(output_dir, items)
-
-        done_count += 1
-        if progress_callback:
-            progress_callback(done_count, total_active)
-
-    # 如果全部完成，清理进度文件
+    # 全部完成则清理进度
     all_done = all(it["status"] in ("done", "skipped") for it in items)
     if all_done:
         clear_progress(output_dir)
+        logger.info("全部完成，已清理进度文件")
+
+    error_count = sum(1 for it in items if it["status"] == "error")
+    if error_count:
+        logger.warning(f"{error_count} 个文件生成失败")
 
     return output_files
 
 
 # ======== 试听 ========
 
-def generate_preview(text: str, voice: str, rate: str = "+0%", engine: str = "edge") -> str:
+def generate_preview(text, voice, rate="+0%", engine="edge"):
     preview_text = text[:200]
     if not preview_text.strip():
         raise ValueError("没有可预览的文本")
     temp_path = os.path.join(tempfile.gettempdir(), "audiobook_preview.mp3")
-    generate_one(preview_text, voice, rate, temp_path, engine=engine)
+    _generate_one_safe(preview_text, voice, rate, temp_path, engine=engine)
     return temp_path
