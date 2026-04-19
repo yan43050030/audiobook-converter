@@ -26,7 +26,7 @@ class AudiobookConverterApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title(f"文字转有声读物 v{VERSION}")
-        self.root.geometry("1020x750")
+        self.root.geometry("1100x750")
         self.root.minsize(860, 600)
 
         self.file_path = None
@@ -76,13 +76,13 @@ class AudiobookConverterApp:
         self.text_area.pack(fill=tk.BOTH, expand=True)
 
         # ===== 右侧：控制面板 =====
-        right = ttk.LabelFrame(body, text="设置", padding=10, width=250)
+        right = ttk.LabelFrame(body, text="设置", padding=10, width=320)
         right.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 0))
         right.pack_propagate(False)
 
         # 文件
         ttk.Button(right, text="选择文本文件", command=self._select_file).pack(fill=tk.X, pady=(0, 3))
-        self.file_label = ttk.Label(right, text="未选择文件", wraplength=210, foreground="gray")
+        self.file_label = ttk.Label(right, text="未选择文件", wraplength=280, foreground="gray")
         self.file_label.pack(fill=tk.X, pady=(0, 10))
 
         # TTS 引擎
