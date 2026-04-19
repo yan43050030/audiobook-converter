@@ -225,6 +225,11 @@ def merge_mp3_files(file_paths, output_path):
     _merge_mp3_files(file_paths, output_path)
 
 
+# ======== 并发数配置 ========
+
+CONCURRENCY = 5  # 同时处理的章节数
+
+
 # ======== Edge TTS 引擎 ========
 
 async def _edge_generate(text, voice, rate, output_path):
@@ -233,39 +238,29 @@ async def _edge_generate(text, voice, rate, output_path):
 
 
 async def _edge_generate_multi(segments, voice, rate, output_path):
+    """单个文件内多段文本也并行生成"""
     temp_dir = tempfile.mkdtemp()
     temp_files = []
     try:
+        tasks = []
         for i, seg in enumerate(segments):
             tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
-            await _edge_generate(seg, voice, rate, tp)
+            tasks.append(_edge_generate(seg, voice, rate, tp))
             temp_files.append(tp)
+        await asyncio.gather(*tasks)
         _merge_mp3_files(temp_files, output_path)
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-# ======== 批量 Edge TTS（单一事件循环） ========
+# ======== 批量 Edge TTS（并发 + 单一事件循环） ========
 
-async def _edge_batch_generate(items, voice, rate, output_dir, progress_callback, should_stop):
-    """
-    在单一事件循环中批量生成所有文件，避免反复创建/销毁事件循环。
-    """
-    done_count = 0
-    total_active = sum(1 for it in items if it["status"] not in ("done", "skipped"))
+async def _generate_one_item(item, voice, rate, output_dir, semaphore):
+    """生成单个章节，由信号量控制并发"""
+    out_path = os.path.join(output_dir, item["filename"])
+    segments = split_text(item["text"])
 
-    for item in items:
-        if item["status"] == "done":
-            continue
-        if item["status"] == "skipped":
-            continue
-        if should_stop and should_stop():
-            logger.info("用户暂停生成")
-            break
-
-        out_path = os.path.join(output_dir, item["filename"])
-        segments = split_text(item["text"])
-
+    async with semaphore:
         for attempt in range(MAX_RETRIES + 1):
             try:
                 logger.info(f"生成 [{item['title']}] → {item['filename']} (尝试 {attempt + 1})")
@@ -273,22 +268,13 @@ async def _edge_batch_generate(items, voice, rate, output_dir, progress_callback
                 if len(segments) == 1:
                     await _edge_generate(segments[0], voice, rate, out_path)
                 else:
-                    temp_dir = tempfile.mkdtemp()
-                    temp_files = []
-                    try:
-                        for si, seg in enumerate(segments):
-                            tp = os.path.join(temp_dir, f"seg_{si:04d}.mp3")
-                            await _edge_generate(seg, voice, rate, tp)
-                            temp_files.append(tp)
-                        _merge_mp3_files(temp_files, out_path)
-                    finally:
-                        shutil.rmtree(temp_dir, ignore_errors=True)
+                    await _edge_generate_multi(segments, voice, rate, out_path)
 
                 # 验证文件
                 if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
                     item["status"] = "done"
                     logger.info(f"完成 [{item['title']}] ({os.path.getsize(out_path)} bytes)")
-                    break
+                    return
                 else:
                     raise RuntimeError(f"生成文件为空: {out_path}")
 
@@ -298,9 +284,35 @@ async def _edge_batch_generate(items, voice, rate, output_dir, progress_callback
                     item["status"] = "error"
                     item["error"] = str(e)
 
+
+async def _edge_batch_generate(items, voice, rate, output_dir, progress_callback, should_stop):
+    """
+    并发批量生成，同时处理 CONCURRENCY 个章节。
+    """
+    pending_items = [it for it in items if it["status"] not in ("done", "skipped")]
+    total_active = len(pending_items)
+    done_count = 0
+
+    semaphore = asyncio.Semaphore(CONCURRENCY)
+
+    async def _process_item(item):
+        nonlocal done_count
+        if should_stop and should_stop():
+            logger.info("用户暂停生成")
+            return
+
+        await _generate_one_item(item, voice, rate, output_dir, semaphore)
+
         done_count += 1
         if progress_callback:
             progress_callback(done_count, total_active)
+
+        # 保存进度
+        save_progress(output_dir, items)
+
+    # 并发执行所有待处理项
+    tasks = [_process_item(item) for item in pending_items]
+    await asyncio.gather(*tasks)
 
 
 # ======== 本地 TTS 引擎 (macOS say) ========
