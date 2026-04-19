@@ -12,7 +12,7 @@ from typing import Optional
 
 import edge_tts
 
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 
 # ======== 日志 ========
 
@@ -61,7 +61,9 @@ LOCAL_DEFAULT_VOICE = "Ting-Ting"
 
 CHARS_PER_SECOND_BASE = 2.5
 PROGRESS_FILENAME = ".audiobook_progress.json"
-MAX_RETRIES = 2  # 生成失败时重试次数
+MAX_RETRIES = 3  # 生成失败时重试次数
+RETRY_DELAY = 5  # 重试前等待秒数（指数退避基础值）
+CONCURRENCY = 3  # 同时处理的章节数（降低并发避免触发限流/网络拥塞）
 
 
 # ======== 工具函数 ========
@@ -227,8 +229,6 @@ def merge_mp3_files(file_paths, output_path):
 
 # ======== 并发数配置 ========
 
-CONCURRENCY = 5  # 同时处理的章节数
-
 
 # ======== Edge TTS 引擎 ========
 
@@ -238,16 +238,14 @@ async def _edge_generate(text, voice, rate, output_path):
 
 
 async def _edge_generate_multi(segments, voice, rate, output_path):
-    """单个文件内多段文本也并行生成"""
+    """单个文件内多段文本串行生成（避免并发过多触发限流）"""
     temp_dir = tempfile.mkdtemp()
     temp_files = []
     try:
-        tasks = []
         for i, seg in enumerate(segments):
             tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
-            tasks.append(_edge_generate(seg, voice, rate, tp))
+            await _edge_generate(seg, voice, rate, tp)
             temp_files.append(tp)
-        await asyncio.gather(*tasks)
         _merge_mp3_files(temp_files, output_path)
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -263,7 +261,7 @@ async def _generate_one_item(item, voice, rate, output_dir, semaphore):
     async with semaphore:
         for attempt in range(MAX_RETRIES + 1):
             try:
-                logger.info(f"生成 [{item['title']}] → {item['filename']} (尝试 {attempt + 1})")
+                logger.info(f"生成 [{item['title']}] → {item['filename']} (尝试 {attempt + 1}/{MAX_RETRIES + 1})")
 
                 if len(segments) == 1:
                     await _edge_generate(segments[0], voice, rate, out_path)
@@ -279,8 +277,12 @@ async def _generate_one_item(item, voice, rate, output_dir, semaphore):
                     raise RuntimeError(f"生成文件为空: {out_path}")
 
             except Exception as e:
-                logger.error(f"生成失败 [{item['title']}] 尝试{attempt + 1}: {e}")
-                if attempt == MAX_RETRIES:
+                delay = RETRY_DELAY * (2 ** attempt)  # 指数退避: 5s, 10s, 20s
+                logger.error(f"生成失败 [{item['title']}] 尝试{attempt + 1}/{MAX_RETRIES + 1}: {e}")
+                if attempt < MAX_RETRIES:
+                    logger.info(f"等待 {delay}秒 后重试...")
+                    await asyncio.sleep(delay)
+                else:
                     item["status"] = "error"
                     item["error"] = str(e)
 
@@ -288,6 +290,7 @@ async def _generate_one_item(item, voice, rate, output_dir, semaphore):
 async def _edge_batch_generate(items, voice, rate, output_dir, progress_callback, should_stop):
     """
     并发批量生成，同时处理 CONCURRENCY 个章节。
+    使用信号量限流 + 批次启动（一次启动CONCURRENCY个，完成一个再启动下一个）。
     """
     pending_items = [it for it in items if it["status"] not in ("done", "skipped")]
     total_active = len(pending_items)
@@ -297,9 +300,6 @@ async def _edge_batch_generate(items, voice, rate, output_dir, progress_callback
 
     async def _process_item(item):
         nonlocal done_count
-        if should_stop and should_stop():
-            logger.info("用户暂停生成")
-            return
 
         await _generate_one_item(item, voice, rate, output_dir, semaphore)
 
@@ -310,9 +310,16 @@ async def _edge_batch_generate(items, voice, rate, output_dir, progress_callback
         # 保存进度
         save_progress(output_dir, items)
 
-    # 并发执行所有待处理项
-    tasks = [_process_item(item) for item in pending_items]
-    await asyncio.gather(*tasks)
+    # 逐个启动任务，每个任务内部通过 semaphore 限流
+    tasks = []
+    for item in pending_items:
+        if should_stop and should_stop():
+            logger.info("用户暂停生成，停止启动新任务")
+            break
+        tasks.append(asyncio.create_task(_process_item(item)))
+
+    if tasks:
+        await asyncio.gather(*tasks)
 
 
 # ======== 本地 TTS 引擎 (macOS say) ========
@@ -375,8 +382,13 @@ def _generate_one_safe(text, voice, rate, output_path, engine="edge"):
                 raise RuntimeError(f"生成文件为空: {output_path}")
 
         except Exception as e:
-            logger.error(f"生成失败 尝试{attempt + 1}: {e}")
-            if attempt == MAX_RETRIES:
+            delay = RETRY_DELAY * (2 ** attempt)
+            logger.error(f"生成失败 尝试{attempt + 1}/{MAX_RETRIES + 1}: {e}")
+            if attempt < MAX_RETRIES:
+                logger.info(f"等待 {delay}秒 后重试...")
+                import time
+                time.sleep(delay)
+            else:
                 raise
 
 
