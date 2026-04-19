@@ -168,18 +168,19 @@ class AudiobookConverterApp:
         if voices:
             self.voice_combo.current(0)
 
-        # Piper引擎需要ffmpeg
-        if engine == "piper":
-            from tts_engine import _check_ffmpeg
-            if not _check_ffmpeg():
-                self.status_label.config(
-                    text="警告: 未检测到ffmpeg，Piper引擎将无法使用",
-                    foreground="red"
-                )
+        # Piper引擎需要ffmpeg（仅在status_label已创建后检查）
+        if hasattr(self, "status_label"):
+            if engine == "piper":
+                from tts_engine import _check_ffmpeg
+                if not _check_ffmpeg():
+                    self.status_label.config(
+                        text="警告: 未检测到ffmpeg，Piper引擎将无法使用",
+                        foreground="red"
+                    )
+                else:
+                    self.status_label.config(text="就绪", foreground="gray")
             else:
                 self.status_label.config(text="就绪", foreground="gray")
-        else:
-            self.status_label.config(text="就绪", foreground="gray")
 
     # ===== UI 回调 =====
 
