@@ -48,8 +48,8 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'AudiobookConverter',
         'CFBundleDisplayName': '文字转有声读物',
-        'CFBundleVersion': '2.0.0',
-        'CFBundleShortVersionString': '2.0.0',
+        'CFBundleVersion': '2.3.0',
+        'CFBundleShortVersionString': '2.3.0',
         'NSHighResolutionCapable': True,
     },
 )

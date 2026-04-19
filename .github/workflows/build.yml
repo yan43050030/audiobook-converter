@@ -1,0 +1,91 @@
+name: Build Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+
+      - name: Build macOS app
+        run: |
+          pyinstaller audiobook_converter_mac.spec --clean --noconfirm
+
+      - name: Zip macOS app
+        run: |
+          cd dist
+          zip -r AudiobookConverter_macOS.zip AudiobookConverter.app
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macOS-app
+          path: dist/AudiobookConverter_macOS.zip
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install -r requirements.txt
+
+      - name: Build Windows exe
+        run: |
+          pyinstaller audiobook_converter_win.spec --clean --noconfirm
+
+      - name: Zip Windows exe
+        run: |
+          cd dist
+          Compress-Archive -Path audiobook_converter.exe -DestinationPath audiobook_converter_Windows.zip
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-exe
+          path: dist/audiobook_converter_Windows.zip
+
+  create-release:
+    needs: [build-macos, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/macOS-app/AudiobookConverter_macOS.zip
+            artifacts/Windows-exe/audiobook_converter_Windows.zip
+          generate_release_notes: true

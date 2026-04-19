@@ -8,11 +8,37 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
+import urllib.parse
+from shutil import which
 from typing import Optional
 
 import edge_tts
 
-VERSION = "2.2.0"
+# 可选导入 - Piper TTS和音频处理
+try:
+    from piper import PiperVoice
+    PIPER_PYTHON_AVAILABLE = True
+except ImportError:
+    PIPER_PYTHON_AVAILABLE = False
+    PiperVoice = None
+
+# 检测 Piper CLI 命令行工具
+PIPER_CLI_PATH = which("piper") or which("piper.exe")
+PIPER_CLI_AVAILABLE = bool(PIPER_CLI_PATH)
+PIPER_AVAILABLE = PIPER_PYTHON_AVAILABLE or PIPER_CLI_AVAILABLE
+
+try:
+    from pydub import AudioSegment
+    PYDUB_AVAILABLE = True
+except ImportError:
+    PYDUB_AVAILABLE = False
+    AudioSegment = None
+
+# ffmpeg 可用性缓存
+_FFMPEG_AVAILABLE = None
+
+VERSION = "2.3.0"
 
 # ======== 日志 ========
 
@@ -59,6 +85,39 @@ LOCAL_VOICES = {
 }
 LOCAL_DEFAULT_VOICE = "Ting-Ting"
 
+PIPER_VOICES = {
+    "Piper中文女声（中等质量）": "zh_CN-huayan-medium",
+    "Piper中文女声（较低质量）": "zh_CN-huayan-low",
+}
+PIPER_DEFAULT_VOICE = "zh_CN-huayan-medium"
+
+# Piper模型存储目录
+PIPER_MODEL_DIR = os.path.join(os.path.expanduser("~"), ".piper-tts", "models")
+# Piper模型下载URL（Hugging Face）
+PIPER_MODEL_URLS = {
+    "zh_CN-huayan-medium": "https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx",
+    "zh_CN-huayan-low": "https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/low/zh_CN-huayan-low.onnx",
+}
+# 模型配置URL（与模型文件同名，扩展名.json）
+PIPER_CONFIG_URLS = {
+    "zh_CN-huayan-medium": "https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json",
+    "zh_CN-huayan-low": "https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/low/zh_CN-huayan-low.onnx.json",
+}
+
+# 国内镜像
+HF_MIRROR_DOMAIN = "hf-mirror.com"
+HF_ORIGIN_DOMAIN = "huggingface.co"
+
+
+def _get_mirror_url(url: str) -> str:
+    """将HuggingFace URL替换为hf-mirror镜像"""
+    return url.replace(HF_ORIGIN_DOMAIN, HF_MIRROR_DOMAIN)
+
+
+# Piper运行模式
+PIPER_MODE_PYTHON = "python"
+PIPER_MODE_CLI = "cli"
+
 CHARS_PER_SECOND_BASE = 2.5
 PROGRESS_FILENAME = ".audiobook_progress.json"
 MAX_RETRIES = 3  # 生成失败时重试次数
@@ -71,12 +130,16 @@ CONCURRENCY = 3  # 同时处理的章节数（降低并发避免触发限流/网
 def get_voice_list(engine="edge"):
     if engine == "local":
         return list(LOCAL_VOICES.keys())
+    elif engine == "piper":
+        return list(PIPER_VOICES.keys())
     return list(EDGE_VOICES.keys())
 
 
 def get_voice_id(display_name, engine="edge"):
     if engine == "local":
         return LOCAL_VOICES.get(display_name, LOCAL_DEFAULT_VOICE)
+    elif engine == "piper":
+        return PIPER_VOICES.get(display_name, PIPER_DEFAULT_VOICE)
     return EDGE_VOICES.get(display_name, EDGE_DEFAULT_VOICE)
 
 
@@ -93,6 +156,17 @@ def sanitize_filename(name):
     name = re.sub(r'[\\/:*?"<>|]', '_', name)
     name = name.strip(". ")
     return name[:80] if name else "untitled"
+
+
+def _check_ffmpeg() -> bool:
+    """检查ffmpeg是否可用，结果缓存"""
+    global _FFMPEG_AVAILABLE
+    if _FFMPEG_AVAILABLE is not None:
+        return _FFMPEG_AVAILABLE
+    _FFMPEG_AVAILABLE = which("ffmpeg") is not None
+    if not _FFMPEG_AVAILABLE:
+        logger.warning("未检测到ffmpeg，Piper引擎的WAV->MP3转换将不可用。请安装ffmpeg。")
+    return _FFMPEG_AVAILABLE
 
 
 # ======== 章节识别 ========
@@ -194,6 +268,279 @@ def split_by_duration(chapter_text, max_seconds, rate="+0%"):
     max_chars = int(max_seconds * CHARS_PER_SECOND_BASE * (1 + rate_val / 100.0))
     max_chars = max(max_chars, 500)
     return split_text(chapter_text, max_length=max_chars)
+
+
+# ======== Piper 模型缓存 ========
+
+_piper_model_cache: dict = {}
+
+
+def _get_piper_mode() -> str:
+    """确定Piper运行模式：优先Python包，其次CLI"""
+    if PIPER_PYTHON_AVAILABLE:
+        return PIPER_MODE_PYTHON
+    if PIPER_CLI_AVAILABLE:
+        return PIPER_MODE_CLI
+    raise RuntimeError(
+        "Piper TTS不可用。请安装piper-tts包: pip install piper-tts\n"
+        "或下载piper命令行工具并加入PATH: https://github.com/rhasspy/piper/releases"
+    )
+
+
+def _load_piper_model(voice_name):
+    """加载Piper模型，使用缓存避免重复加载"""
+    model_path = _ensure_piper_model(voice_name)
+    config_path = model_path + ".json"
+    cache_key = (voice_name, model_path)
+
+    if cache_key in _piper_model_cache:
+        logger.debug(f"使用缓存的Piper模型: {voice_name}")
+        return _piper_model_cache[cache_key]
+
+    mode = _get_piper_mode()
+
+    if mode == PIPER_MODE_PYTHON:
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f"Piper配置文件不存在: {config_path}")
+        voice_model = PiperVoice.load(model_path, config_path)
+        _piper_model_cache[cache_key] = voice_model
+        logger.info(f"Piper模型已加载并缓存: {voice_name}")
+        return voice_model
+    else:
+        # CLI模式：仅验证文件存在，不加载到内存
+        if not os.path.exists(config_path):
+            raise FileNotFoundError(f"Piper配置文件不存在: {config_path}")
+        _piper_model_cache[cache_key] = None  # CLI模式缓存标记
+        logger.info(f"Piper CLI模式就绪: {voice_name}")
+        return None
+
+
+def _unload_piper_model(voice_name=None):
+    """卸载Piper模型，释放内存"""
+    global _piper_model_cache
+    if voice_name is None:
+        _piper_model_cache.clear()
+        logger.info("已卸载所有Piper模型")
+    else:
+        model_path = _get_piper_model_path(voice_name)
+        cache_key = (voice_name, model_path)
+        if cache_key in _piper_model_cache:
+            del _piper_model_cache[cache_key]
+            logger.info(f"已卸载Piper模型: {voice_name}")
+
+
+# ======== Piper TTS 引擎 ========
+
+def _get_piper_model_path(voice_name):
+    """获取Piper模型文件路径"""
+    model_dir = PIPER_MODEL_DIR
+    os.makedirs(model_dir, exist_ok=True)
+
+    # 模型文件命名约定：voice_name.onnx
+    model_file = f"{voice_name}.onnx"
+    return os.path.join(model_dir, model_file)
+
+
+def _download_file_with_progress(url, filepath, description="", timeout=60):
+    """下载文件并显示进度，支持镜像回退"""
+    urls_to_try = [url, _get_mirror_url(url)]
+    last_exception = None
+
+    for try_url in urls_to_try:
+        try:
+            _download_file_single(try_url, filepath, description, timeout)
+            return
+        except Exception as e:
+            last_exception = e
+            logger.warning(f"下载失败，尝试镜像: {try_url} -> {e}")
+
+    raise RuntimeError(f"所有下载源均失败: {last_exception}")
+
+
+def _download_file_single(url, filepath, description="", timeout=60):
+    """单次下载实现，支持断点续传"""
+    import requests
+    from tqdm import tqdm
+
+    headers = {}
+    existing_size = 0
+    mode = "wb"
+
+    if os.path.exists(filepath):
+        existing_size = os.path.getsize(filepath)
+        headers["Range"] = f"bytes={existing_size}-"
+        mode = "ab"
+        logger.info(f"断点续传 {description}: {filepath} (已下载 {existing_size} bytes)")
+
+    logger.info(f"下载 {description}: {url}")
+    response = requests.get(url, stream=True, headers=headers, timeout=timeout)
+
+    # 如果服务器不支持Range且文件已存在，重新下载
+    if response.status_code == 416:  # Range Not Satisfiable
+        logger.info("服务器不支持断点续传，重新下载")
+        os.remove(filepath)
+        response = requests.get(url, stream=True, timeout=timeout)
+        mode = "wb"
+        existing_size = 0
+    elif response.status_code == 200 and existing_size > 0 and "Content-Range" not in response.headers:
+        # 服务器忽略Range，返回完整内容
+        logger.info("服务器忽略Range头，重新下载")
+        os.remove(filepath)
+        mode = "wb"
+        existing_size = 0
+    else:
+        response.raise_for_status()
+
+    total_size = int(response.headers.get('content-length', 0))
+    if response.status_code == 206:
+        total_size += existing_size
+
+    block_size = 8192
+    with open(filepath, mode) as f, tqdm(
+        desc=description,
+        total=total_size,
+        initial=existing_size,
+        unit='B',
+        unit_scale=True,
+        unit_divisor=1024,
+    ) as pbar:
+        for chunk in response.iter_content(chunk_size=block_size):
+            if chunk:
+                f.write(chunk)
+                pbar.update(len(chunk))
+
+    logger.info(f"下载完成: {filepath}")
+
+
+def _download_piper_model(voice_name):
+    """下载Piper模型文件"""
+    if voice_name not in PIPER_MODEL_URLS:
+        raise ValueError(f"不支持的Piper语音: {voice_name}")
+
+    model_url = PIPER_MODEL_URLS[voice_name]
+    model_path = _get_piper_model_path(voice_name)
+    config_url = PIPER_CONFIG_URLS[voice_name]
+    config_path = model_path + ".json"
+
+    # 下载模型文件
+    _download_file_with_progress(model_url, model_path, f"Piper模型 {voice_name}")
+
+    # 下载配置文件
+    _download_file_with_progress(config_url, config_path, f"Piper配置 {voice_name}")
+
+    logger.info(f"Piper模型下载完成: {voice_name}")
+
+
+def _ensure_piper_model(voice_name):
+    """确保Piper模型存在，如果不存在则下载"""
+    model_path = _get_piper_model_path(voice_name)
+    if not os.path.exists(model_path):
+        logger.info(f"模型不存在，开始下载: {voice_name}")
+        _download_piper_model(voice_name)
+    return model_path
+
+
+def _convert_wav_to_mp3(wav_path, mp3_path=None):
+    """将WAV文件转换为MP3格式"""
+    if not PYDUB_AVAILABLE:
+        raise ImportError("pydub库未安装，无法转换音频格式")
+
+    if mp3_path is None:
+        mp3_path = wav_path.replace('.wav', '.mp3')
+
+    audio = AudioSegment.from_wav(wav_path)
+    audio.export(mp3_path, format="mp3", bitrate="128k")
+    return mp3_path
+
+
+def _piper_generate_cli(text, voice_name, speed, wav_path):
+    """使用piper CLI命令生成音频"""
+    model_path = _get_piper_model_path(voice_name)
+    config_path = model_path + ".json"
+
+    cmd = [
+        PIPER_CLI_PATH,
+        "--model", model_path,
+        "--config", config_path,
+        "--output_file", wav_path,
+    ]
+    if speed != 1.0:
+        cmd.extend(["--length_scale", str(1.0 / speed)])
+
+    result = subprocess.run(
+        cmd,
+        input=text.encode("utf-8"),
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
+        raise RuntimeError(f"Piper CLI失败 (code {result.returncode}): {stderr}")
+
+
+def _piper_generate(text, voice, rate, output_path):
+    """使用Piper TTS生成音频（支持Python包和CLI两种模式）"""
+    if not PIPER_AVAILABLE:
+        raise RuntimeError(
+            "Piper TTS不可用。请安装piper-tts包: pip install piper-tts\n"
+            "或下载piper命令行工具并加入PATH: https://github.com/rhasspy/piper/releases"
+        )
+
+    if not _check_ffmpeg():
+        raise RuntimeError("ffmpeg未安装，Piper引擎需要ffmpeg进行WAV到MP3的转换")
+
+    # 加载/获取模型（使用缓存）
+    voice_model = _load_piper_model(voice)
+
+    # 计算速度因子（Piper的speed参数：0.5-2.0，默认1.0）
+    rate_val = int(rate.replace("%", "").replace("+", ""))
+    speed = 1.0 + rate_val / 100.0
+    speed = max(0.5, min(2.0, speed))
+
+    # 临时WAV文件路径
+    wav_path = output_path.replace('.mp3', '.wav')
+
+    try:
+        mode = _get_piper_mode()
+
+        if mode == PIPER_MODE_PYTHON:
+            with open(wav_path, "wb") as f:
+                for audio_bytes in voice_model.synthesize_stream_raw(text, speed=speed):
+                    f.write(audio_bytes)
+        else:
+            _piper_generate_cli(text, voice, speed, wav_path)
+
+        # 转换为MP3格式
+        _convert_wav_to_mp3(wav_path, output_path)
+
+    finally:
+        # 清理临时WAV文件
+        if os.path.exists(wav_path):
+            os.remove(wav_path)
+
+
+def _piper_generate_safe(text, voice, rate, output_path):
+    """安全的Piper生成函数，包含重试机制"""
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            logger.info(f"Piper生成 → {output_path} (尝试 {attempt + 1})")
+            _piper_generate(text, voice, rate, output_path)
+
+            # 验证
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                logger.info(f"Piper完成: {output_path} ({os.path.getsize(output_path)} bytes)")
+                return
+            else:
+                raise RuntimeError(f"生成文件为空: {output_path}")
+
+        except Exception as e:
+            delay = RETRY_DELAY * (2 ** attempt)
+            logger.error(f"Piper生成失败 尝试{attempt + 1}/{MAX_RETRIES + 1}: {e}")
+            if attempt < MAX_RETRIES:
+                logger.info(f"等待 {delay}秒 后重试...")
+                import time
+                time.sleep(delay)
+            else:
+                raise
 
 
 # ======== 音频文件合并 ========
@@ -368,6 +715,20 @@ def _generate_one_safe(text, voice, rate, output_path, engine="edge"):
                         _merge_mp3_files(temp_files, output_path)
                     finally:
                         shutil.rmtree(temp_dir, ignore_errors=True)
+            elif engine == "piper":
+                if len(segments) == 1:
+                    _piper_generate_safe(segments[0], voice, rate, output_path)
+                else:
+                    temp_dir = tempfile.mkdtemp()
+                    temp_files = []
+                    try:
+                        for i, seg in enumerate(segments):
+                            tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
+                            _piper_generate_safe(seg, voice, rate, tp)
+                            temp_files.append(tp)
+                        _merge_mp3_files(temp_files, output_path)
+                    finally:
+                        shutil.rmtree(temp_dir, ignore_errors=True)
             else:
                 if len(segments) == 1:
                     asyncio.run(_edge_generate(segments[0], voice, rate, output_path))
@@ -474,33 +835,39 @@ def convert_batch(
     if engine == "edge":
         # 用单一事件循环批量生成
         asyncio.run(_edge_batch_generate(items, voice, rate, output_dir, progress_callback, should_stop))
-    else:
-        # 本地引擎同步逐个生成
+    elif engine in ("local", "piper"):
+        # 本地引擎或Piper引擎同步逐个生成
         done_count = 0
         total_active = sum(1 for it in items if it["status"] not in ("done", "skipped"))
 
-        for item in items:
-            if item["status"] == "done":
-                continue
-            if item["status"] == "skipped":
-                continue
-            if should_stop and should_stop():
-                logger.info("用户暂停生成")
-                break
+        try:
+            for item in items:
+                if item["status"] == "done":
+                    continue
+                if item["status"] == "skipped":
+                    continue
+                if should_stop and should_stop():
+                    logger.info("用户暂停生成")
+                    break
 
-            out_path = os.path.join(output_dir, item["filename"])
-            try:
-                _generate_one_safe(item["text"], voice, rate, out_path, engine="local")
-                item["status"] = "done"
-            except Exception as e:
-                item["status"] = "error"
-                item["error"] = str(e)
-                logger.error(f"本地引擎生成失败 [{item['title']}]: {e}")
+                out_path = os.path.join(output_dir, item["filename"])
+                try:
+                    _generate_one_safe(item["text"], voice, rate, out_path, engine=engine)
+                    item["status"] = "done"
+                except Exception as e:
+                    item["status"] = "error"
+                    item["error"] = str(e)
+                    logger.error(f"{engine}引擎生成失败 [{item['title']}]: {e}")
 
-            save_progress(output_dir, items)
-            done_count += 1
-            if progress_callback:
-                progress_callback(done_count, total_active)
+                save_progress(output_dir, items)
+                done_count += 1
+                if progress_callback:
+                    progress_callback(done_count, total_active)
+        finally:
+            if engine == "piper":
+                _unload_piper_model()
+    else:
+        raise ValueError(f"不支持的引擎类型: {engine}")
 
     # 收集结果
     output_files = [os.path.join(output_dir, it["filename"])

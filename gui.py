@@ -94,6 +94,8 @@ class AudiobookConverterApp:
                         value="edge", command=self._on_engine_change).pack(side=tk.LEFT)
         ttk.Radiobutton(eng_frame, text="本地（离线）", variable=self.engine_var,
                         value="local", command=self._on_engine_change).pack(side=tk.LEFT, padx=(8, 0))
+        ttk.Radiobutton(eng_frame, text="Piper（离线高质量）", variable=self.engine_var,
+                        value="piper", command=self._on_engine_change).pack(side=tk.LEFT, padx=(8, 0))
 
         # 语音
         ttk.Label(right, text="语音:").pack(anchor=tk.W, pady=(6, 0))
@@ -165,6 +167,19 @@ class AudiobookConverterApp:
         self.voice_combo["values"] = voices
         if voices:
             self.voice_combo.current(0)
+
+        # Piper引擎需要ffmpeg
+        if engine == "piper":
+            from tts_engine import _check_ffmpeg
+            if not _check_ffmpeg():
+                self.status_label.config(
+                    text="警告: 未检测到ffmpeg，Piper引擎将无法使用",
+                    foreground="red"
+                )
+            else:
+                self.status_label.config(text="就绪", foreground="gray")
+        else:
+            self.status_label.config(text="就绪", foreground="gray")
 
     # ===== UI 回调 =====
 
