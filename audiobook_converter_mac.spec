@@ -7,7 +7,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('icon.png', '.'), ('icon.ico', '.')],
+    datas=[('icon.png', '.'), ('icon.ico', '.'), ('icon.icns', '.')],
     hiddenimports=['edge_tts', 'aiohttp', 'aiosignal', 'frozenlist', 'multidict', 'yarl', 'propcache', 'attr', 'attrs', 'certifi'],
     hookspath=[],
     hooksconfig={},
@@ -34,7 +34,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='icon.ico',
+    icon='icon.icns',
 )
 
 app = BUNDLE(
@@ -43,7 +43,7 @@ app = BUNDLE(
     a.zipfiles,
     a.datas,
     name='AudiobookConverter.app',
-    icon='icon.ico',
+    icon='icon.icns',
     bundle_identifier='com.audiobookconverter.app',
     info_plist={
         'CFBundleName': 'AudiobookConverter',
