@@ -91,11 +91,15 @@ class AudiobookConverterApp:
         eng_frame = ttk.Frame(right)
         eng_frame.pack(fill=tk.X, pady=(2, 2))
         ttk.Radiobutton(eng_frame, text="Edge（联网）", variable=self.engine_var,
-                        value="edge", command=self._on_engine_change).pack(side=tk.LEFT)
+                        value="edge", command=self._on_engine_change).pack(anchor=tk.W)
         ttk.Radiobutton(eng_frame, text="本地（离线）", variable=self.engine_var,
-                        value="local", command=self._on_engine_change).pack(side=tk.LEFT, padx=(8, 0))
+                        value="local", command=self._on_engine_change).pack(anchor=tk.W)
         ttk.Radiobutton(eng_frame, text="Piper（离线高质量）", variable=self.engine_var,
-                        value="piper", command=self._on_engine_change).pack(side=tk.LEFT, padx=(8, 0))
+                        value="piper", command=self._on_engine_change).pack(anchor=tk.W)
+
+        # 引擎状态
+        self.engine_status_label = ttk.Label(right, text="", wraplength=280, foreground="gray")
+        self.engine_status_label.pack(fill=tk.X, pady=(0, 4))
 
         # 语音
         ttk.Label(right, text="语音:").pack(anchor=tk.W, pady=(6, 0))
@@ -168,19 +172,24 @@ class AudiobookConverterApp:
         if voices:
             self.voice_combo.current(0)
 
-        # Piper引擎需要ffmpeg（仅在status_label已创建后检查）
-        if hasattr(self, "status_label"):
-            if engine == "piper":
-                from tts_engine import _check_ffmpeg
-                if not _check_ffmpeg():
-                    self.status_label.config(
-                        text="警告: 未检测到ffmpeg，Piper引擎将无法使用",
-                        foreground="red"
-                    )
-                else:
-                    self.status_label.config(text="就绪", foreground="gray")
+        # 检测引擎可用性并更新状态和按钮
+        if hasattr(self, "engine_status_label"):
+            from tts_engine import check_engine_ready
+            ready, msg = check_engine_ready(engine)
+            if ready:
+                self.engine_status_label.config(text=msg, foreground="green")
             else:
-                self.status_label.config(text="就绪", foreground="gray")
+                self.engine_status_label.config(text=msg, foreground="red")
+
+            # 根据引擎可用性控制按钮
+            state = "normal" if ready else "disabled"
+            if hasattr(self, "btn_convert"):
+                self.btn_convert.config(state=state)
+            # 试听按钮不在 self 上，通过查找 parent 中的按钮来更新
+            # 但更简单的方式是在 _preview 中检查
+
+        if hasattr(self, "status_label"):
+            self.status_label.config(text="就绪", foreground="gray")
 
     # ===== UI 回调 =====
 
@@ -269,12 +278,18 @@ class AudiobookConverterApp:
             messagebox.showwarning("提示", "请先输入或导入文字内容")
             return
 
+        engine = self.engine_var.get()
+        from tts_engine import check_engine_ready
+        ready, msg = check_engine_ready(engine)
+        if not ready:
+            messagebox.showerror("引擎不可用", msg)
+            return
+
         self.status_label.config(text="正在生成预览...")
         self.progress["value"] = 0
 
         def run():
             try:
-                engine = self.engine_var.get()
                 voice = get_voice_id(self.voice_var.get(), engine)
                 rate = self._get_rate_string()
                 path = generate_preview(text, voice, rate, engine=engine)
@@ -320,6 +335,13 @@ class AudiobookConverterApp:
 
         if self.is_converting:
             messagebox.showinfo("提示", "正在转换中")
+            return
+
+        engine = self.engine_var.get()
+        from tts_engine import check_engine_ready
+        ready, msg = check_engine_ready(engine)
+        if not ready:
+            messagebox.showerror("引擎不可用", msg)
             return
 
         output_dir = filedialog.askdirectory(title="选择保存目录")

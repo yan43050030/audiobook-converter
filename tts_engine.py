@@ -72,18 +72,27 @@ EDGE_VOICES = {
 }
 EDGE_DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
 
-LOCAL_VOICES = {
-    "Ting-Ting（中文）": "Ting-Ting",
-    "Eddy（中文）": "Eddy (zh_CN)",
-    "Flo（中文）": "Flo (zh_CN)",
-    "Grandma（中文）": "Grandma (zh_CN)",
-    "Grandpa（中文）": "Grandpa (zh_CN)",
-    "Reed（中文）": "Reed (zh_CN)",
-    "Rocko（中文）": "Rocko (zh_CN)",
-    "Sandy（中文）": "Sandy (zh_CN)",
-    "Shelley（中文）": "Shelley (zh_CN)",
-}
-LOCAL_DEFAULT_VOICE = "Ting-Ting"
+def _detect_local_voices():
+    """动态检测 macOS say 可用的中文语音"""
+    voices = {}
+    try:
+        result = subprocess.run(["say", "-v", "?"], capture_output=True, text=True, timeout=10)
+        for line in result.stdout.splitlines():
+            # 格式: 语音名 (语言描述) 语言代码 # 示例
+            # 如: Eddy (中文（中国大陆）)     zh_CN    # 你好！我叫Eddy。
+            match = re.match(r'^(\S+)\s+\([^)]*\)\s+(zh_CN|zh_TW|zh_HK)', line)
+            if match:
+                voice_name = match.group(1)
+                lang = match.group(2)
+                display = f"{voice_name}（中文）" if lang == "zh_CN" else f"{voice_name}（{lang}）"
+                voices[display] = voice_name
+    except Exception as e:
+        logger.warning(f"检测本地语音失败: {e}")
+    return voices
+
+
+LOCAL_VOICES = _detect_local_voices()
+LOCAL_DEFAULT_VOICE = list(LOCAL_VOICES.values())[0] if LOCAL_VOICES else ""
 
 PIPER_VOICES = {
     "Piper中文女声（中等质量）": "zh_CN-huayan-medium",
@@ -141,6 +150,33 @@ def get_voice_id(display_name, engine="edge"):
     elif engine == "piper":
         return PIPER_VOICES.get(display_name, PIPER_DEFAULT_VOICE)
     return EDGE_VOICES.get(display_name, EDGE_DEFAULT_VOICE)
+
+
+def check_engine_ready(engine="edge"):
+    """检测引擎是否可用，返回 (ready: bool, message: str)"""
+    if engine == "edge":
+        return True, "Edge TTS 可用（需要联网）"
+
+    if engine == "local":
+        if not LOCAL_VOICES:
+            return False, "本地语音不可用：未检测到 macOS 中文语音"
+        return True, f"本地语音可用（{len(LOCAL_VOICES)} 个）"
+
+    if engine == "piper":
+        if not PIPER_AVAILABLE:
+            return False, (
+                "Piper 未安装。请:\n"
+                "1. 安装 Python 包: pip install piper-tts\n"
+                "2. 或下载 CLI 工具: https://github.com/rhasspy/piper/releases"
+            )
+        if not _check_ffmpeg():
+            return False, (
+                "ffmpeg 未安装，Piper 需要 ffmpeg 转换音频格式。\n"
+                "macOS: brew install ffmpeg"
+            )
+        return True, "Piper 可用（首次使用将自动下载语音模型）"
+
+    return False, f"未知引擎: {engine}"
 
 
 def estimate_duration(text, rate="+0%"):
