@@ -2,6 +2,7 @@ edge-tts>=6.1.0
 pydub>=0.25.1
 requests>=2.28.0
 tqdm>=4.65.0
+piper-tts>=1.0.0
 
-# Piper TTS - 可选，如果无法安装可使用piper CLI工具
-# piper-tts>=0.0.3
+# Python 3.13+ 兼容：audioop 已从标准库移除
+audioop-lts>=0.2.0; python_version>="3.13"

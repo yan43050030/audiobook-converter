@@ -1,14 +1,59 @@
 # -*- mode: python ; coding: utf-8 -*-
-# macOS .app bundle spec
+# macOS .app bundle spec - v2.3.1 with Piper TTS support
+
+import os
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs
 
 block_cipher = None
 
+# --- Collect Piper resources ---
+piper_datas = collect_data_files('piper')
+piper_hidden = collect_submodules('piper')
+
+# --- Collect Onnxruntime resources ---
+onnx_bins = collect_dynamic_libs('onnxruntime')
+onnx_datas = collect_data_files('onnxruntime')
+onnx_hidden = collect_submodules('onnxruntime')
+
+# --- Manual binary files ---
+import piper
+piper_dir = os.path.dirname(piper.__file__)
+
+manual_bins = [
+    # Piper's espeakbridge native library (not picked up by collect_dynamic_libs)
+    (os.path.join(piper_dir, 'espeakbridge.so'), 'piper'),
+]
+
+# audioop's _audioop.abi3.so (Python 3.13+ compat)
+try:
+    import audioop
+    audioop_dir = os.path.dirname(audioop.__file__)
+    audioop_so = os.path.join(audioop_dir, '_audioop.abi3.so')
+    if os.path.exists(audioop_so):
+        manual_bins.append((audioop_so, 'audioop'))
+except ImportError:
+    pass
+
+# --- Combine all resources ---
+base_datas = [('icon.png', '.'), ('icon.ico', '.'), ('icon.icns', '.')]
+all_datas = base_datas + piper_datas + onnx_datas
+
+all_bins = manual_bins + onnx_bins
+
+base_hidden = [
+    'edge_tts', 'aiohttp', 'aiosignal', 'frozenlist', 'multidict', 'yarl',
+    'propcache', 'attr', 'attrs', 'certifi', 'requests', 'tqdm', 'tabulate',
+    'onnxruntime', 'piper',
+]
+all_hidden = base_hidden + piper_hidden + onnx_hidden
+
+# --- Build Analysis ---
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
-    datas=[('icon.png', '.'), ('icon.ico', '.'), ('icon.icns', '.')],
-    hiddenimports=['edge_tts', 'aiohttp', 'aiosignal', 'frozenlist', 'multidict', 'yarl', 'propcache', 'attr', 'attrs', 'certifi'],
+    binaries=all_bins,
+    datas=all_datas,
+    hiddenimports=all_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -48,8 +93,8 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'AudiobookConverter',
         'CFBundleDisplayName': '文字转有声读物',
-        'CFBundleVersion': '2.3.0',
-        'CFBundleShortVersionString': '2.3.0',
+        'CFBundleVersion': '2.3.1',
+        'CFBundleShortVersionString': '2.3.1',
         'NSHighResolutionCapable': True,
     },
 )

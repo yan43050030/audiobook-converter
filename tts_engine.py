@@ -38,7 +38,7 @@ except ImportError:
 # ffmpeg 可用性缓存
 _FFMPEG_AVAILABLE = None
 
-VERSION = "2.3.0"
+VERSION = "2.3.1"
 
 # ======== 日志 ========
 
