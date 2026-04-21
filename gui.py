@@ -19,6 +19,13 @@ from tts_engine import (
     load_progress,
     merge_mp3_files,
     logger,
+    get_storage_dir,
+    set_storage_dir,
+    get_portable_bin_dir,
+    add_download_listener,
+    remove_download_listener,
+    refresh_local_voices,
+    check_engine_ready,
 )
 
 
@@ -33,8 +40,20 @@ class AudiobookConverterApp:
         self.is_converting = False
         self.should_stop = False
         self.chapters = []
+        self._last_download_desc = ""
 
         self._build_ui()
+
+        # 订阅下载进度事件（模型/依赖下载时触发）
+        add_download_listener(self._on_download_progress)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _on_close(self):
+        try:
+            remove_download_listener(self._on_download_progress)
+        except Exception:
+            pass
+        self.root.destroy()
 
     def _build_ui(self):
         main = ttk.Frame(self.root, padding=10)
@@ -102,11 +121,31 @@ class AudiobookConverterApp:
         self.engine_status_label.pack(fill=tk.X, pady=(0, 4))
 
         # 语音
-        ttk.Label(right, text="语音:").pack(anchor=tk.W, pady=(6, 0))
+        voice_row = ttk.Frame(right)
+        voice_row.pack(fill=tk.X, pady=(6, 0))
+        ttk.Label(voice_row, text="语音:").pack(side=tk.LEFT)
+        ttk.Button(voice_row, text="刷新", width=5, command=self._refresh_voices).pack(side=tk.RIGHT)
         self.voice_var = tk.StringVar()
         self.voice_combo = ttk.Combobox(right, textvariable=self.voice_var, state="readonly")
         self.voice_combo.pack(fill=tk.X, pady=(2, 8))
         self._on_engine_change()
+
+        ttk.Separator(right, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=4)
+
+        # 便携存储目录（Piper 模型、外置 ffmpeg/piper 可执行文件）
+        ttk.Label(right, text="便携存储目录（可选）:").pack(anchor=tk.W)
+        self.storage_var = tk.StringVar(value=get_storage_dir())
+        ttk.Entry(right, textvariable=self.storage_var, state="readonly").pack(fill=tk.X, pady=(2, 2))
+        storage_btns = ttk.Frame(right)
+        storage_btns.pack(fill=tk.X, pady=(0, 2))
+        ttk.Button(storage_btns, text="选择文件夹", command=self._choose_storage).pack(side=tk.LEFT, padx=(0, 3))
+        ttk.Button(storage_btns, text="打开", command=self._open_storage).pack(side=tk.LEFT, padx=(0, 3))
+        ttk.Button(storage_btns, text="恢复默认", command=self._reset_storage).pack(side=tk.LEFT)
+        ttk.Label(
+            right,
+            text="提示：放入 bin/ 可携带 ffmpeg、piper 可执行文件；piper-models/ 存放语音包。",
+            wraplength=280, foreground="gray",
+        ).pack(fill=tk.X, pady=(0, 4))
 
         # 语速
         ttk.Label(right, text="语速:").pack(anchor=tk.W)
@@ -163,6 +202,103 @@ class AudiobookConverterApp:
         self.status_label = ttk.Label(bottom, text="就绪", foreground="gray")
         self.status_label.pack(anchor=tk.W, pady=(4, 0))
 
+        # 下载进度（仅在下载模型/依赖时显示）
+        self.download_frame = ttk.Frame(main)
+        self.download_label = ttk.Label(self.download_frame, text="", foreground="#0066cc")
+        self.download_label.pack(anchor=tk.W)
+        self.download_progress = ttk.Progressbar(self.download_frame, mode="determinate")
+        self.download_progress.pack(fill=tk.X, pady=(2, 0))
+        # 默认隐藏
+
+    # ===== 存储目录 / 刷新语音 / 下载进度 =====
+
+    def _choose_storage(self):
+        path = filedialog.askdirectory(title="选择便携存储文件夹（建议放在U盘或外置硬盘）")
+        if not path:
+            return
+        try:
+            set_storage_dir(path)
+        except Exception as e:
+            logger.error(f"设置存储目录失败: {e}")
+            messagebox.showerror("错误", f"设置失败: {e}")
+            return
+        self.storage_var.set(get_storage_dir())
+        # 重新评估当前引擎可用性（可能因为外置 piper/ffmpeg 变了）
+        self._on_engine_change()
+        messagebox.showinfo(
+            "已切换存储目录",
+            f"当前目录：{get_storage_dir()}\n\n"
+            "可在该目录下：\n"
+            "  - bin/            放置 ffmpeg、piper 等可执行文件\n"
+            "  - piper-models/   放置或缓存 Piper 语音包",
+        )
+
+    def _reset_storage(self):
+        if not messagebox.askyesno("确认", "恢复为默认存储目录（用户主目录）？"):
+            return
+        set_storage_dir("")
+        self.storage_var.set(get_storage_dir())
+        self._on_engine_change()
+
+    def _open_storage(self):
+        path = get_storage_dir()
+        try:
+            if platform.system() == "Darwin":
+                subprocess.Popen(["open", path])
+            elif platform.system() == "Windows":
+                os.startfile(path)
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception as e:
+            messagebox.showinfo("目录", path)
+            logger.warning(f"打开目录失败: {e}")
+
+    def _refresh_voices(self):
+        """重新检测当前引擎的可用语音"""
+        if self.engine_var.get() == "local":
+            refresh_local_voices()
+        self._on_engine_change()
+
+    # ===== 下载进度回调 =====
+
+    def _on_download_progress(self, description: str, current: int, total: int):
+        """来自 tts_engine 的下载进度回调（可能在任意线程触发），转到主线程更新 UI"""
+        self.root.after(0, lambda: self._update_download_ui(description, current, total))
+
+    def _update_download_ui(self, description: str, current: int, total: int):
+        # 首次出现时显示进度条
+        if not self.download_frame.winfo_ismapped():
+            self.download_frame.pack(fill=tk.X, pady=(4, 0))
+
+        if total > 0:
+            pct = min(int(current / total * 100), 100)
+            mb_cur = current / (1024 * 1024)
+            mb_tot = total / (1024 * 1024)
+            self.download_progress.configure(mode="determinate", value=pct, maximum=100)
+            self.download_label.configure(text=f"下载中 {description}: {mb_cur:.1f}/{mb_tot:.1f} MB ({pct}%)")
+            if current >= total:
+                # 完成：延迟隐藏
+                self.root.after(1500, self._hide_download_ui)
+        else:
+            # 未知总大小：不确定模式
+            mb_cur = current / (1024 * 1024)
+            self.download_progress.configure(mode="indeterminate")
+            try:
+                self.download_progress.start(80)
+            except Exception:
+                pass
+            self.download_label.configure(text=f"下载中 {description}: {mb_cur:.1f} MB")
+
+    def _hide_download_ui(self):
+        try:
+            self.download_progress.stop()
+        except Exception:
+            pass
+        self.download_progress.configure(mode="determinate", value=0)
+        self.download_label.configure(text="")
+        if self.download_frame.winfo_ismapped():
+            self.download_frame.pack_forget()
+
     # ===== 引擎切换 =====
 
     def _on_engine_change(self):
@@ -174,7 +310,6 @@ class AudiobookConverterApp:
 
         # 检测引擎可用性并更新状态和按钮
         if hasattr(self, "engine_status_label"):
-            from tts_engine import check_engine_ready
             ready, msg = check_engine_ready(engine)
             if ready:
                 self.engine_status_label.config(text=msg, foreground="green")
@@ -279,7 +414,6 @@ class AudiobookConverterApp:
             return
 
         engine = self.engine_var.get()
-        from tts_engine import check_engine_ready
         ready, msg = check_engine_ready(engine)
         if not ready:
             messagebox.showerror("引擎不可用", msg)
@@ -338,7 +472,6 @@ class AudiobookConverterApp:
             return
 
         engine = self.engine_var.get()
-        from tts_engine import check_engine_ready
         ready, msg = check_engine_ready(engine)
         if not ready:
             messagebox.showerror("引擎不可用", msg)
@@ -425,7 +558,8 @@ class AudiobookConverterApp:
 
     def _pause_convert(self):
         self.should_stop = True
-        self.status_label.config(text="正在暂停...")
+        self.btn_pause.config(state="disabled")
+        self.status_label.config(text="正在暂停（等待当前片段结束）...")
         logger.info("用户点击暂停")
 
     def _on_pause(self, output_dir: str):

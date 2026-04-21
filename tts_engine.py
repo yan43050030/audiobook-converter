@@ -1,17 +1,19 @@
-"""TTS引擎封装 - 支持 edge-tts（联网）和本地语音（离线） v2.1.0"""
+"""TTS引擎封装 - 支持 edge-tts（联网）、系统语音（跨平台离线）、Piper（离线高质量） v2.4.0"""
 
 import asyncio
 import json
 import logging
 import os
+import platform
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.parse
 from shutil import which
-from typing import Optional
+from typing import Callable, List, Optional
 
 import edge_tts
 
@@ -23,11 +25,6 @@ except ImportError:
     PIPER_PYTHON_AVAILABLE = False
     PiperVoice = None
 
-# 检测 Piper CLI 命令行工具
-PIPER_CLI_PATH = which("piper") or which("piper.exe")
-PIPER_CLI_AVAILABLE = bool(PIPER_CLI_PATH)
-PIPER_AVAILABLE = PIPER_PYTHON_AVAILABLE or PIPER_CLI_AVAILABLE
-
 try:
     from pydub import AudioSegment
     PYDUB_AVAILABLE = True
@@ -35,10 +32,10 @@ except ImportError:
     PYDUB_AVAILABLE = False
     AudioSegment = None
 
-# ffmpeg 可用性缓存
-_FFMPEG_AVAILABLE = None
+VERSION = "2.4.0"
 
-VERSION = "2.3.1"
+# 当前平台
+_PLATFORM = platform.system()  # "Darwin" / "Windows" / "Linux"
 
 # ======== 日志 ========
 
@@ -58,6 +55,109 @@ logger.addHandler(_ch)
 
 logger.info(f"=== Audiobook Converter v{VERSION} 启动 ===")
 logger.info(f"日志文件: {LOG_PATH}")
+logger.info(f"运行平台: {_PLATFORM}")
+
+
+# ======== 应用配置（便携存储目录） ========
+
+DEFAULT_STORAGE_DIR = os.path.join(os.path.expanduser("~"), ".audiobook_converter")
+CONFIG_PATH = os.path.join(DEFAULT_STORAGE_DIR, "config.json")
+
+_config_cache: Optional[dict] = None
+
+
+def _load_config() -> dict:
+    """加载配置文件"""
+    global _config_cache
+    if _config_cache is not None:
+        return _config_cache
+    try:
+        if os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                _config_cache = json.load(f) or {}
+        else:
+            _config_cache = {}
+    except Exception as e:
+        logger.warning(f"读取配置失败，使用默认值: {e}")
+        _config_cache = {}
+    return _config_cache
+
+
+def _save_config(cfg: dict) -> None:
+    """保存配置文件"""
+    global _config_cache
+    _config_cache = cfg
+    try:
+        os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"保存配置失败: {e}")
+
+
+def get_storage_dir() -> str:
+    """获取当前存储目录（便携模式优先，否则默认用户主目录）"""
+    cfg = _load_config()
+    path = cfg.get("storage_dir", "").strip()
+    if path and os.path.isdir(path):
+        return path
+    # 默认：~/.audiobook_converter
+    os.makedirs(DEFAULT_STORAGE_DIR, exist_ok=True)
+    return DEFAULT_STORAGE_DIR
+
+
+def set_storage_dir(path: str) -> None:
+    """设置便携存储目录。传空字符串恢复默认。"""
+    cfg = _load_config()
+    if path:
+        path = os.path.abspath(path)
+        os.makedirs(path, exist_ok=True)
+        cfg["storage_dir"] = path
+    else:
+        cfg.pop("storage_dir", None)
+    _save_config(cfg)
+    logger.info(f"存储目录已更新: {get_storage_dir()}")
+
+
+def get_piper_model_dir() -> str:
+    """Piper 模型目录（跟随存储目录）"""
+    path = os.path.join(get_storage_dir(), "piper-models")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def get_portable_bin_dir() -> str:
+    """便携可执行文件目录。用户可将 ffmpeg、piper CLI 等放入此目录。"""
+    path = os.path.join(get_storage_dir(), "bin")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _which_portable(name: str) -> Optional[str]:
+    """优先在便携 bin 目录查找，其次系统 PATH。支持 Windows .exe 后缀。"""
+    candidates = [name]
+    if _PLATFORM == "Windows" and not name.lower().endswith(".exe"):
+        candidates.insert(0, name + ".exe")
+
+    bin_dir = get_portable_bin_dir()
+    for cand in candidates:
+        p = os.path.join(bin_dir, cand)
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+        # Windows 上 os.access X_OK 可能不可靠，按文件存在判断
+        if _PLATFORM == "Windows" and os.path.isfile(p):
+            return p
+
+    for cand in candidates:
+        p = which(cand)
+        if p:
+            return p
+    return None
+
+
+def _refresh_piper_cli_path() -> Optional[str]:
+    """每次使用时重新解析 piper CLI 路径（便携目录可能动态变更）"""
+    return _which_portable("piper")
 
 
 # ======== 通用配置 ========
@@ -72,14 +172,22 @@ EDGE_VOICES = {
 }
 EDGE_DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
 
-def _detect_local_voices():
-    """动态检测 macOS say 可用的中文语音"""
-    voices = {}
+
+# ======== 跨平台本地系统语音 ========
+
+# 运行时诊断信息，便于 UI 展示具体失败原因
+_LOCAL_UNAVAILABLE_REASON: str = ""
+
+
+def _detect_local_voices_macos() -> dict:
+    """macOS: 通过 say -v ? 枚举中文语音"""
+    voices: dict = {}
+    say_path = which("say")
+    if not say_path:
+        return voices
     try:
-        result = subprocess.run(["say", "-v", "?"], capture_output=True, text=True, timeout=10)
+        result = subprocess.run([say_path, "-v", "?"], capture_output=True, text=True, timeout=10)
         for line in result.stdout.splitlines():
-            # 格式: 语音名 (语言描述) 语言代码 # 示例
-            # 如: Eddy (中文（中国大陆）)     zh_CN    # 你好！我叫Eddy。
             match = re.match(r'^(\S+)\s+\([^)]*\)\s+(zh_CN|zh_TW|zh_HK)', line)
             if match:
                 voice_name = match.group(1)
@@ -87,8 +195,126 @@ def _detect_local_voices():
                 display = f"{voice_name}（中文）" if lang == "zh_CN" else f"{voice_name}（{lang}）"
                 voices[display] = voice_name
     except Exception as e:
-        logger.warning(f"检测本地语音失败: {e}")
+        logger.warning(f"macOS 语音检测失败: {e}")
     return voices
+
+
+_POWERSHELL_LIST_VOICES = (
+    "Add-Type -AssemblyName System.Speech; "
+    "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+    "$s.GetInstalledVoices() | ForEach-Object { "
+    "  $i = $_.VoiceInfo; "
+    "  \"$($i.Name)|$($i.Culture.Name)|$($i.Gender)\" "
+    "}"
+)
+
+
+def _detect_local_voices_windows() -> dict:
+    """Windows: 通过 PowerShell 枚举 SAPI 已安装语音，筛选中文"""
+    voices: dict = {}
+    ps = which("powershell") or which("pwsh")
+    if not ps:
+        return voices
+    try:
+        result = subprocess.run(
+            [ps, "-NoProfile", "-NonInteractive", "-Command", _POWERSHELL_LIST_VOICES],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            logger.warning(f"PowerShell 枚举语音失败: {result.stderr.strip()}")
+            return voices
+        for line in result.stdout.splitlines():
+            parts = line.strip().split("|")
+            if len(parts) < 2:
+                continue
+            name, culture = parts[0].strip(), parts[1].strip()
+            if not name:
+                continue
+            if culture.lower().startswith("zh"):
+                gender = parts[2].strip() if len(parts) > 2 else ""
+                gender_tag = "女声" if "Female" in gender else ("男声" if "Male" in gender else "")
+                display = f"{name}（{culture}{('，' + gender_tag) if gender_tag else ''}）"
+                voices[display] = name
+    except Exception as e:
+        logger.warning(f"Windows 语音检测失败: {e}")
+    return voices
+
+
+def _detect_local_voices_linux() -> dict:
+    """Linux: 通过 espeak-ng --voices 枚举中文语音"""
+    voices: dict = {}
+    espeak = which("espeak-ng") or which("espeak")
+    if not espeak:
+        return voices
+    try:
+        result = subprocess.run(
+            [espeak, "--voices=zh"], capture_output=True, text=True, timeout=10
+        )
+        for line in result.stdout.splitlines()[1:]:  # 跳过标题
+            cols = line.split()
+            if len(cols) >= 4:
+                lang = cols[1]
+                voice_id = cols[3]
+                if lang.lower().startswith("zh"):
+                    display = f"{voice_id}（{lang}）"
+                    voices[display] = voice_id
+        # 至少保留一个默认选项
+        if not voices:
+            voices["espeak-ng 中文"] = "zh"
+    except Exception as e:
+        logger.warning(f"Linux 语音检测失败: {e}")
+    return voices
+
+
+def _detect_local_voices() -> dict:
+    """根据当前平台检测可用的本地语音，并记录不可用原因"""
+    global _LOCAL_UNAVAILABLE_REASON
+    _LOCAL_UNAVAILABLE_REASON = ""
+
+    if _PLATFORM == "Darwin":
+        voices = _detect_local_voices_macos()
+        if not voices:
+            _LOCAL_UNAVAILABLE_REASON = (
+                "macOS 未检测到中文语音。\n"
+                "请在 系统设置 → 辅助功能 → 语音内容 → 系统语音 中下载中文语音包。"
+            )
+        return voices
+
+    if _PLATFORM == "Windows":
+        ps = which("powershell") or which("pwsh")
+        if not ps:
+            _LOCAL_UNAVAILABLE_REASON = "未找到 powershell，无法调用 Windows 系统语音。"
+            return {}
+        voices = _detect_local_voices_windows()
+        if not voices:
+            _LOCAL_UNAVAILABLE_REASON = (
+                "Windows 未检测到中文语音。\n"
+                "请在 设置 → 时间和语言 → 语言 → 添加中文 → 安装语音包；\n"
+                "或 设置 → 辅助功能 → 讲述人 → 添加自然语音 中下载中文语音。"
+            )
+        return voices
+
+    if _PLATFORM == "Linux":
+        espeak = which("espeak-ng") or which("espeak")
+        if not espeak:
+            _LOCAL_UNAVAILABLE_REASON = (
+                "未检测到 espeak-ng。请安装：\n"
+                "  Debian/Ubuntu: sudo apt install espeak-ng\n"
+                "  Fedora:        sudo dnf install espeak-ng\n"
+                "  Arch:          sudo pacman -S espeak-ng"
+            )
+            return {}
+        return _detect_local_voices_linux()
+
+    _LOCAL_UNAVAILABLE_REASON = f"暂不支持的平台：{_PLATFORM}"
+    return {}
+
+
+def refresh_local_voices() -> None:
+    """重新扫描本地语音（在用户安装语音包后可手动触发）"""
+    global LOCAL_VOICES, LOCAL_DEFAULT_VOICE
+    LOCAL_VOICES = _detect_local_voices()
+    LOCAL_DEFAULT_VOICE = list(LOCAL_VOICES.values())[0] if LOCAL_VOICES else ""
 
 
 LOCAL_VOICES = _detect_local_voices()
@@ -100,8 +326,6 @@ PIPER_VOICES = {
 }
 PIPER_DEFAULT_VOICE = "zh_CN-huayan-medium"
 
-# Piper模型存储目录
-PIPER_MODEL_DIR = os.path.join(os.path.expanduser("~"), ".piper-tts", "models")
 # Piper模型下载URL（Hugging Face）
 PIPER_MODEL_URLS = {
     "zh_CN-huayan-medium": "https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx",
@@ -134,6 +358,99 @@ RETRY_DELAY = 5  # 重试前等待秒数（指数退避基础值）
 CONCURRENCY = 3  # 同时处理的章节数（降低并发避免触发限流/网络拥塞）
 
 
+# ======== 下载进度监听器（供 UI 订阅） ========
+
+DownloadProgressCallback = Callable[[str, int, int], None]
+# 签名: callback(description, current_bytes, total_bytes)
+# total_bytes <= 0 表示未知，current_bytes == total_bytes 表示完成
+
+_download_listeners: List[DownloadProgressCallback] = []
+
+
+def add_download_listener(cb: DownloadProgressCallback) -> None:
+    """订阅下载进度事件（UI 用）"""
+    if cb not in _download_listeners:
+        _download_listeners.append(cb)
+
+
+def remove_download_listener(cb: DownloadProgressCallback) -> None:
+    if cb in _download_listeners:
+        _download_listeners.remove(cb)
+
+
+def _notify_download(description: str, current: int, total: int) -> None:
+    for cb in list(_download_listeners):
+        try:
+            cb(description, current, total)
+        except Exception as e:
+            logger.warning(f"下载监听器异常: {e}")
+
+
+# ======== 可中断辅助（暂停支持） ========
+
+class StopRequested(Exception):
+    """用户请求暂停时抛出，由调度层捕获以跳过后续处理"""
+
+
+def _interruptible_sleep(total_seconds: float, should_stop=None, step: float = 0.2) -> bool:
+    """将长 sleep 切成小段，检测到 should_stop 立刻返回。返回 True 表示被中断。"""
+    elapsed = 0.0
+    while elapsed < total_seconds:
+        if should_stop and should_stop():
+            return True
+        time.sleep(min(step, total_seconds - elapsed))
+        elapsed += step
+    return False
+
+
+def _run_subprocess_interruptible(cmd, should_stop=None, input_bytes: Optional[bytes] = None,
+                                  timeout: Optional[float] = None, poll_interval: float = 0.2,
+                                  **popen_kwargs):
+    """以 Popen 启动子进程，支持在运行中响应 should_stop 立刻终止。"""
+    popen_kwargs.setdefault("stdout", subprocess.PIPE)
+    popen_kwargs.setdefault("stderr", subprocess.PIPE)
+    if input_bytes is not None:
+        popen_kwargs.setdefault("stdin", subprocess.PIPE)
+
+    proc = subprocess.Popen(cmd, **popen_kwargs)
+
+    # 写 stdin（阻塞但通常很短）
+    if input_bytes is not None and proc.stdin:
+        try:
+            proc.stdin.write(input_bytes)
+            proc.stdin.close()
+        except Exception:
+            pass
+
+    start = time.monotonic()
+    while True:
+        rc = proc.poll()
+        if rc is not None:
+            break
+        if should_stop and should_stop():
+            logger.info(f"用户暂停，终止子进程: {cmd[0] if cmd else '?'}")
+            try:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+            finally:
+                raise StopRequested("用户暂停")
+        if timeout is not None and (time.monotonic() - start) > timeout:
+            proc.kill()
+            raise subprocess.TimeoutExpired(cmd, timeout)
+        time.sleep(poll_interval)
+
+    stdout, stderr = b"", b""
+    try:
+        stdout = proc.stdout.read() if proc.stdout else b""
+        stderr = proc.stderr.read() if proc.stderr else b""
+    except Exception:
+        pass
+    return proc.returncode, stdout, stderr
+
+
 # ======== 工具函数 ========
 
 def get_voice_list(engine="edge"):
@@ -152,28 +469,51 @@ def get_voice_id(display_name, engine="edge"):
     return EDGE_VOICES.get(display_name, EDGE_DEFAULT_VOICE)
 
 
+def _piper_available() -> bool:
+    """动态检测 Piper 是否可用（Python 包或便携 / PATH 中的 CLI）"""
+    if PIPER_PYTHON_AVAILABLE:
+        return True
+    return _refresh_piper_cli_path() is not None
+
+
+def _ffmpeg_path() -> Optional[str]:
+    """动态解析 ffmpeg 路径（便携目录优先）"""
+    return _which_portable("ffmpeg")
+
+
+def _ffmpeg_install_hint() -> str:
+    if _PLATFORM == "Darwin":
+        return "macOS: brew install ffmpeg"
+    if _PLATFORM == "Windows":
+        return "Windows: 从 https://www.gyan.dev/ffmpeg/builds/ 下载 ffmpeg.exe，放入便携 bin 目录或系统 PATH"
+    return "Linux: sudo apt install ffmpeg（或对应发行版包管理器）"
+
+
+def _piper_install_hint() -> str:
+    return (
+        "方式 1: pip install piper-tts\n"
+        "方式 2: 从 https://github.com/rhasspy/piper/releases 下载 piper 可执行文件，\n"
+        "        放入便携 bin 目录或系统 PATH"
+    )
+
+
 def check_engine_ready(engine="edge"):
     """检测引擎是否可用，返回 (ready: bool, message: str)"""
     if engine == "edge":
-        return True, "Edge TTS 可用（需要联网）"
+        return True, "Edge TTS 可用（微软在线语音，需要联网）"
 
     if engine == "local":
-        if not LOCAL_VOICES:
-            return False, "本地语音不可用：未检测到 macOS 中文语音"
-        return True, f"本地语音可用（{len(LOCAL_VOICES)} 个）"
+        if LOCAL_VOICES:
+            plat_name = {"Darwin": "macOS", "Windows": "Windows", "Linux": "Linux"}.get(_PLATFORM, _PLATFORM)
+            return True, f"{plat_name} 系统语音可用（{len(LOCAL_VOICES)} 个中文语音）"
+        reason = _LOCAL_UNAVAILABLE_REASON or "未检测到中文系统语音"
+        return False, f"本地语音不可用：\n{reason}"
 
     if engine == "piper":
-        if not PIPER_AVAILABLE:
-            return False, (
-                "Piper 未安装。请:\n"
-                "1. 安装 Python 包: pip install piper-tts\n"
-                "2. 或下载 CLI 工具: https://github.com/rhasspy/piper/releases"
-            )
-        if not _check_ffmpeg():
-            return False, (
-                "ffmpeg 未安装，Piper 需要 ffmpeg 转换音频格式。\n"
-                "macOS: brew install ffmpeg"
-            )
+        if not _piper_available():
+            return False, "Piper 未安装。\n" + _piper_install_hint()
+        if _ffmpeg_path() is None:
+            return False, "ffmpeg 未安装（Piper 需要 ffmpeg 转换音频）。\n" + _ffmpeg_install_hint()
         return True, "Piper 可用（首次使用将自动下载语音模型）"
 
     return False, f"未知引擎: {engine}"
@@ -194,15 +534,22 @@ def sanitize_filename(name):
     return name[:80] if name else "untitled"
 
 
-def _check_ffmpeg() -> bool:
-    """检查ffmpeg是否可用，结果缓存"""
-    global _FFMPEG_AVAILABLE
-    if _FFMPEG_AVAILABLE is not None:
-        return _FFMPEG_AVAILABLE
-    _FFMPEG_AVAILABLE = which("ffmpeg") is not None
-    if not _FFMPEG_AVAILABLE:
-        logger.warning("未检测到ffmpeg，Piper引擎的WAV->MP3转换将不可用。请安装ffmpeg。")
-    return _FFMPEG_AVAILABLE
+def _configure_pydub_ffmpeg() -> bool:
+    """让 pydub 使用便携 bin 目录中的 ffmpeg/ffprobe（若存在）"""
+    if not PYDUB_AVAILABLE:
+        return False
+    ff = _ffmpeg_path()
+    if ff is None:
+        return False
+    try:
+        # 让 pydub 知道 ffmpeg 具体位置
+        AudioSegment.converter = ff
+        ffprobe = _which_portable("ffprobe")
+        if ffprobe:
+            AudioSegment.ffprobe = ffprobe
+    except Exception as e:
+        logger.warning(f"pydub ffmpeg 配置失败: {e}")
+    return True
 
 
 # ======== 章节识别 ========
@@ -312,20 +659,17 @@ _piper_model_cache: dict = {}
 
 
 def _get_piper_mode() -> str:
-    """确定Piper运行模式：优先Python包，其次CLI"""
+    """确定Piper运行模式：优先Python包，其次CLI（便携目录优先）"""
     if PIPER_PYTHON_AVAILABLE:
         return PIPER_MODE_PYTHON
-    if PIPER_CLI_AVAILABLE:
+    if _refresh_piper_cli_path():
         return PIPER_MODE_CLI
-    raise RuntimeError(
-        "Piper TTS不可用。请安装piper-tts包: pip install piper-tts\n"
-        "或下载piper命令行工具并加入PATH: https://github.com/rhasspy/piper/releases"
-    )
+    raise RuntimeError("Piper TTS 不可用。\n" + _piper_install_hint())
 
 
-def _load_piper_model(voice_name):
+def _load_piper_model(voice_name, should_stop=None):
     """加载Piper模型，使用缓存避免重复加载"""
-    model_path = _ensure_piper_model(voice_name)
+    model_path = _ensure_piper_model(voice_name, should_stop=should_stop)
     config_path = model_path + ".json"
     cache_key = (voice_name, model_path)
 
@@ -368,24 +712,25 @@ def _unload_piper_model(voice_name=None):
 # ======== Piper TTS 引擎 ========
 
 def _get_piper_model_path(voice_name):
-    """获取Piper模型文件路径"""
-    model_dir = PIPER_MODEL_DIR
-    os.makedirs(model_dir, exist_ok=True)
-
-    # 模型文件命名约定：voice_name.onnx
+    """获取Piper模型文件路径（跟随当前存储目录）"""
+    model_dir = get_piper_model_dir()
     model_file = f"{voice_name}.onnx"
     return os.path.join(model_dir, model_file)
 
 
-def _download_file_with_progress(url, filepath, description="", timeout=60):
+def _download_file_with_progress(url, filepath, description="", timeout=60, should_stop=None):
     """下载文件并显示进度，支持镜像回退"""
     urls_to_try = [url, _get_mirror_url(url)]
     last_exception = None
 
     for try_url in urls_to_try:
+        if should_stop and should_stop():
+            raise StopRequested("用户暂停")
         try:
-            _download_file_single(try_url, filepath, description, timeout)
+            _download_file_single(try_url, filepath, description, timeout, should_stop=should_stop)
             return
+        except StopRequested:
+            raise
         except Exception as e:
             last_exception = e
             logger.warning(f"下载失败，尝试镜像: {try_url} -> {e}")
@@ -393,8 +738,8 @@ def _download_file_with_progress(url, filepath, description="", timeout=60):
     raise RuntimeError(f"所有下载源均失败: {last_exception}")
 
 
-def _download_file_single(url, filepath, description="", timeout=60):
-    """单次下载实现，支持断点续传"""
+def _download_file_single(url, filepath, description="", timeout=60, should_stop=None):
+    """单次下载实现，支持断点续传，同时向 UI 监听器推送进度"""
     import requests
     from tqdm import tqdm
 
@@ -432,6 +777,10 @@ def _download_file_single(url, filepath, description="", timeout=60):
         total_size += existing_size
 
     block_size = 8192
+    current = existing_size
+    last_notify = 0.0
+    _notify_download(description, current, total_size)
+
     with open(filepath, mode) as f, tqdm(
         desc=description,
         total=total_size,
@@ -441,14 +790,26 @@ def _download_file_single(url, filepath, description="", timeout=60):
         unit_divisor=1024,
     ) as pbar:
         for chunk in response.iter_content(chunk_size=block_size):
+            if should_stop and should_stop():
+                try:
+                    response.close()
+                except Exception:
+                    pass
+                raise StopRequested("用户暂停")
             if chunk:
                 f.write(chunk)
                 pbar.update(len(chunk))
+                current += len(chunk)
+                now = time.monotonic()
+                if now - last_notify >= 0.2 or current == total_size:
+                    _notify_download(description, current, total_size)
+                    last_notify = now
 
+    _notify_download(description, total_size or current, total_size or current)
     logger.info(f"下载完成: {filepath}")
 
 
-def _download_piper_model(voice_name):
+def _download_piper_model(voice_name, should_stop=None):
     """下载Piper模型文件"""
     if voice_name not in PIPER_MODEL_URLS:
         raise ValueError(f"不支持的Piper语音: {voice_name}")
@@ -458,21 +819,18 @@ def _download_piper_model(voice_name):
     config_url = PIPER_CONFIG_URLS[voice_name]
     config_path = model_path + ".json"
 
-    # 下载模型文件
-    _download_file_with_progress(model_url, model_path, f"Piper模型 {voice_name}")
-
-    # 下载配置文件
-    _download_file_with_progress(config_url, config_path, f"Piper配置 {voice_name}")
+    _download_file_with_progress(model_url, model_path, f"Piper模型 {voice_name}", should_stop=should_stop)
+    _download_file_with_progress(config_url, config_path, f"Piper配置 {voice_name}", should_stop=should_stop)
 
     logger.info(f"Piper模型下载完成: {voice_name}")
 
 
-def _ensure_piper_model(voice_name):
+def _ensure_piper_model(voice_name, should_stop=None):
     """确保Piper模型存在，如果不存在则下载"""
     model_path = _get_piper_model_path(voice_name)
     if not os.path.exists(model_path):
         logger.info(f"模型不存在，开始下载: {voice_name}")
-        _download_piper_model(voice_name)
+        _download_piper_model(voice_name, should_stop=should_stop)
     return model_path
 
 
@@ -489,13 +847,16 @@ def _convert_wav_to_mp3(wav_path, mp3_path=None):
     return mp3_path
 
 
-def _piper_generate_cli(text, voice_name, speed, wav_path):
-    """使用piper CLI命令生成音频"""
+def _piper_generate_cli(text, voice_name, speed, wav_path, should_stop=None):
+    """使用piper CLI命令生成音频（可中断）"""
     model_path = _get_piper_model_path(voice_name)
     config_path = model_path + ".json"
+    cli_path = _refresh_piper_cli_path()
+    if not cli_path:
+        raise RuntimeError("Piper CLI 不可用。\n" + _piper_install_hint())
 
     cmd = [
-        PIPER_CLI_PATH,
+        cli_path,
         "--model", model_path,
         "--config", config_path,
         "--output_file", wav_path,
@@ -503,36 +864,28 @@ def _piper_generate_cli(text, voice_name, speed, wav_path):
     if speed != 1.0:
         cmd.extend(["--length_scale", str(1.0 / speed)])
 
-    result = subprocess.run(
-        cmd,
-        input=text.encode("utf-8"),
-        capture_output=True,
+    rc, _out, err = _run_subprocess_interruptible(
+        cmd, should_stop=should_stop, input_bytes=text.encode("utf-8"),
     )
-    if result.returncode != 0:
-        stderr = result.stderr.decode("utf-8", errors="replace") if result.stderr else ""
-        raise RuntimeError(f"Piper CLI失败 (code {result.returncode}): {stderr}")
+    if rc != 0:
+        stderr = err.decode("utf-8", errors="replace") if err else ""
+        raise RuntimeError(f"Piper CLI失败 (code {rc}): {stderr}")
 
 
-def _piper_generate(text, voice, rate, output_path):
+def _piper_generate(text, voice, rate, output_path, should_stop=None):
     """使用Piper TTS生成音频（支持Python包和CLI两种模式）"""
-    if not PIPER_AVAILABLE:
-        raise RuntimeError(
-            "Piper TTS不可用。请安装piper-tts包: pip install piper-tts\n"
-            "或下载piper命令行工具并加入PATH: https://github.com/rhasspy/piper/releases"
-        )
+    if not _piper_available():
+        raise RuntimeError("Piper TTS 不可用。\n" + _piper_install_hint())
 
-    if not _check_ffmpeg():
-        raise RuntimeError("ffmpeg未安装，Piper引擎需要ffmpeg进行WAV到MP3的转换")
+    if not _configure_pydub_ffmpeg():
+        raise RuntimeError("ffmpeg 未安装，Piper 引擎需要 ffmpeg 进行 WAV→MP3 转换。\n" + _ffmpeg_install_hint())
 
-    # 加载/获取模型（使用缓存）
-    voice_model = _load_piper_model(voice)
+    voice_model = _load_piper_model(voice, should_stop=should_stop)
 
-    # 计算速度因子（Piper的speed参数：0.5-2.0，默认1.0）
     rate_val = int(rate.replace("%", "").replace("+", ""))
     speed = 1.0 + rate_val / 100.0
     speed = max(0.5, min(2.0, speed))
 
-    # 临时WAV文件路径
     wav_path = output_path.replace('.mp3', '.wav')
 
     try:
@@ -541,40 +894,48 @@ def _piper_generate(text, voice, rate, output_path):
         if mode == PIPER_MODE_PYTHON:
             with open(wav_path, "wb") as f:
                 for audio_bytes in voice_model.synthesize_stream_raw(text, speed=speed):
+                    if should_stop and should_stop():
+                        raise StopRequested("用户暂停")
                     f.write(audio_bytes)
         else:
-            _piper_generate_cli(text, voice, speed, wav_path)
+            _piper_generate_cli(text, voice, speed, wav_path, should_stop=should_stop)
 
-        # 转换为MP3格式
+        if should_stop and should_stop():
+            raise StopRequested("用户暂停")
         _convert_wav_to_mp3(wav_path, output_path)
 
     finally:
-        # 清理临时WAV文件
         if os.path.exists(wav_path):
-            os.remove(wav_path)
+            try:
+                os.remove(wav_path)
+            except Exception:
+                pass
 
 
-def _piper_generate_safe(text, voice, rate, output_path):
-    """安全的Piper生成函数，包含重试机制"""
+def _piper_generate_safe(text, voice, rate, output_path, should_stop=None):
+    """安全的Piper生成函数，包含重试机制（可中断）"""
     for attempt in range(MAX_RETRIES + 1):
+        if should_stop and should_stop():
+            raise StopRequested("用户暂停")
         try:
             logger.info(f"Piper生成 → {output_path} (尝试 {attempt + 1})")
-            _piper_generate(text, voice, rate, output_path)
+            _piper_generate(text, voice, rate, output_path, should_stop=should_stop)
 
-            # 验证
             if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
                 logger.info(f"Piper完成: {output_path} ({os.path.getsize(output_path)} bytes)")
                 return
             else:
                 raise RuntimeError(f"生成文件为空: {output_path}")
 
+        except StopRequested:
+            raise
         except Exception as e:
             delay = RETRY_DELAY * (2 ** attempt)
             logger.error(f"Piper生成失败 尝试{attempt + 1}/{MAX_RETRIES + 1}: {e}")
             if attempt < MAX_RETRIES:
                 logger.info(f"等待 {delay}秒 后重试...")
-                import time
-                time.sleep(delay)
+                if _interruptible_sleep(delay, should_stop):
+                    raise StopRequested("用户暂停")
             else:
                 raise
 
@@ -636,13 +997,28 @@ async def _edge_generate_multi(segments, voice, rate, output_path):
 
 # ======== 批量 Edge TTS（并发 + 单一事件循环） ========
 
-async def _generate_one_item(item, voice, rate, output_dir, semaphore):
-    """生成单个章节，由信号量控制并发"""
+async def _interruptible_asleep(seconds: float, stop_event: "asyncio.Event") -> bool:
+    """异步版可中断睡眠。返回 True 表示被 stop_event 唤醒。"""
+    try:
+        await asyncio.wait_for(stop_event.wait(), timeout=seconds)
+        return True
+    except asyncio.TimeoutError:
+        return False
+
+
+async def _generate_one_item(item, voice, rate, output_dir, semaphore, stop_event):
+    """生成单个章节，由信号量控制并发（支持暂停）"""
+    if stop_event.is_set():
+        return
     out_path = os.path.join(output_dir, item["filename"])
     segments = split_text(item["text"])
 
     async with semaphore:
+        if stop_event.is_set():
+            return
         for attempt in range(MAX_RETRIES + 1):
+            if stop_event.is_set():
+                return
             try:
                 logger.info(f"生成 [{item['title']}] → {item['filename']} (尝试 {attempt + 1}/{MAX_RETRIES + 1})")
 
@@ -651,7 +1027,6 @@ async def _generate_one_item(item, voice, rate, output_dir, semaphore):
                 else:
                     await _edge_generate_multi(segments, voice, rate, out_path)
 
-                # 验证文件
                 if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
                     item["status"] = "done"
                     logger.info(f"完成 [{item['title']}] ({os.path.getsize(out_path)} bytes)")
@@ -664,103 +1039,220 @@ async def _generate_one_item(item, voice, rate, output_dir, semaphore):
                 logger.error(f"生成失败 [{item['title']}] 尝试{attempt + 1}/{MAX_RETRIES + 1}: {e}")
                 if attempt < MAX_RETRIES:
                     logger.info(f"等待 {delay}秒 后重试...")
-                    await asyncio.sleep(delay)
+                    if await _interruptible_asleep(delay, stop_event):
+                        return
                 else:
                     item["status"] = "error"
                     item["error"] = str(e)
 
 
 async def _edge_batch_generate(items, voice, rate, output_dir, progress_callback, should_stop):
-    """
-    并发批量生成，同时处理 CONCURRENCY 个章节。
-    使用信号量限流 + 批次启动（一次启动CONCURRENCY个，完成一个再启动下一个）。
-    """
+    """并发批量生成，支持暂停（stop_event 即时传播）"""
     pending_items = [it for it in items if it["status"] not in ("done", "skipped")]
     total_active = len(pending_items)
     done_count = 0
 
     semaphore = asyncio.Semaphore(CONCURRENCY)
+    stop_event = asyncio.Event()
+
+    async def _watch_stop():
+        while not stop_event.is_set():
+            if should_stop and should_stop():
+                logger.info("用户暂停：广播取消事件")
+                stop_event.set()
+                return
+            await asyncio.sleep(0.2)
 
     async def _process_item(item):
         nonlocal done_count
-
-        await _generate_one_item(item, voice, rate, output_dir, semaphore)
-
+        await _generate_one_item(item, voice, rate, output_dir, semaphore, stop_event)
         done_count += 1
         if progress_callback:
-            progress_callback(done_count, total_active)
-
-        # 保存进度
+            try:
+                progress_callback(done_count, total_active)
+            except Exception:
+                pass
         save_progress(output_dir, items)
 
-    # 逐个启动任务，每个任务内部通过 semaphore 限流
-    tasks = []
-    for item in pending_items:
-        if should_stop and should_stop():
-            logger.info("用户暂停生成，停止启动新任务")
-            break
-        tasks.append(asyncio.create_task(_process_item(item)))
+    watcher = asyncio.create_task(_watch_stop())
+    tasks = [asyncio.create_task(_process_item(item)) for item in pending_items]
 
-    if tasks:
-        await asyncio.gather(*tasks)
+    try:
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+    finally:
+        stop_event.set()
+        watcher.cancel()
+        try:
+            await watcher
+        except Exception:
+            pass
 
 
-# ======== 本地 TTS 引擎 (macOS say) ========
+# ======== 本地 TTS 引擎 (跨平台) ========
 
-def _local_generate(text, voice, rate, output_path):
+def _wav_to_mp3(wav_path: str, mp3_path: str) -> None:
+    """用 pydub/ffmpeg 或直接调用 ffmpeg 将 WAV 转为 MP3"""
+    if PYDUB_AVAILABLE and _configure_pydub_ffmpeg():
+        audio = AudioSegment.from_wav(wav_path)
+        audio.export(mp3_path, format="mp3", bitrate="128k")
+        return
+
+    ff = _ffmpeg_path()
+    if not ff:
+        raise RuntimeError("ffmpeg 不可用，无法转换为 MP3。\n" + _ffmpeg_install_hint())
+    subprocess.run(
+        [ff, "-y", "-i", wav_path, "-codec:a", "libmp3lame", "-b:a", "128k", mp3_path],
+        check=True, capture_output=True,
+    )
+
+
+def _local_generate_macos(text: str, voice: str, rate: str, output_path: str, should_stop=None) -> None:
     rate_val = int(rate.replace("%", "").replace("+", ""))
-    wpm = int(175 * (1 + rate_val / 100.0))
-    wpm = max(wpm, 50)
+    wpm = max(int(175 * (1 + rate_val / 100.0)), 50)
 
     aiff_path = output_path.rsplit(".", 1)[0] + ".aiff"
     try:
-        subprocess.run(
+        rc, _o, err = _run_subprocess_interruptible(
             ["say", "-v", voice, "-r", str(wpm), "-o", aiff_path, text],
-            check=True, capture_output=True
+            should_stop=should_stop,
         )
-        subprocess.run(
+        if rc != 0:
+            raise RuntimeError(f"say 失败: {err.decode('utf-8', errors='replace')}")
+        rc, _o, err = _run_subprocess_interruptible(
             ["afconvert", "-f", "mp4f", "-d", "aac", aiff_path, output_path],
-            check=True, capture_output=True
+            should_stop=should_stop,
         )
+        if rc != 0:
+            raise RuntimeError(f"afconvert 失败: {err.decode('utf-8', errors='replace')}")
     finally:
         if os.path.exists(aiff_path):
-            os.remove(aiff_path)
+            try:
+                os.remove(aiff_path)
+            except Exception:
+                pass
+
+
+# PowerShell：使用 SAPI 合成到 WAV
+_POWERSHELL_SPEAK_TEMPLATE = (
+    "Add-Type -AssemblyName System.Speech; "
+    "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+    "try {{ $s.SelectVoice('{voice}') }} catch {{ }} "
+    "$s.Rate = {rate}; "
+    "$s.SetOutputToWaveFile('{wav}'); "
+    "$txt = [IO.File]::ReadAllText('{txtfile}', [Text.Encoding]::UTF8); "
+    "$s.Speak($txt); "
+    "$s.Dispose();"
+)
+
+
+def _local_generate_windows(text: str, voice: str, rate: str, output_path: str, should_stop=None) -> None:
+    """Windows: 用 PowerShell 调用 SAPI 合成 WAV，再转 MP3"""
+    ps = which("powershell") or which("pwsh")
+    if not ps:
+        raise RuntimeError("未找到 PowerShell，无法调用 Windows 系统语音")
+
+    rate_val = int(rate.replace("%", "").replace("+", ""))
+    sapi_rate = max(min(int(rate_val / 10), 10), -10)
+
+    tmpdir = tempfile.mkdtemp()
+    wav_path = os.path.join(tmpdir, "tts.wav")
+    txt_path = os.path.join(tmpdir, "tts.txt")
+    try:
+        with open(txt_path, "w", encoding="utf-8") as f:
+            f.write(text)
+        safe_voice = voice.replace("'", "''")
+        safe_wav = wav_path.replace("'", "''")
+        safe_txt = txt_path.replace("'", "''")
+        script = _POWERSHELL_SPEAK_TEMPLATE.format(
+            voice=safe_voice, rate=sapi_rate, wav=safe_wav, txtfile=safe_txt
+        )
+        rc, _out, err = _run_subprocess_interruptible(
+            [ps, "-NoProfile", "-NonInteractive", "-Command", script],
+            should_stop=should_stop, timeout=600,
+        )
+        if rc != 0 or not os.path.exists(wav_path) or os.path.getsize(wav_path) == 0:
+            raise RuntimeError(f"Windows SAPI 合成失败: {err.decode('utf-8', errors='replace').strip()}")
+        _wav_to_mp3(wav_path, output_path)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _local_generate_linux(text: str, voice: str, rate: str, output_path: str, should_stop=None) -> None:
+    """Linux: 用 espeak-ng 合成 WAV，再转 MP3"""
+    espeak = which("espeak-ng") or which("espeak")
+    if not espeak:
+        raise RuntimeError("未找到 espeak-ng，请先安装（sudo apt install espeak-ng）")
+
+    rate_val = int(rate.replace("%", "").replace("+", ""))
+    wpm = max(int(175 * (1 + rate_val / 100.0)), 80)
+
+    tmpdir = tempfile.mkdtemp()
+    wav_path = os.path.join(tmpdir, "tts.wav")
+    try:
+        rc, _out, err = _run_subprocess_interruptible(
+            [espeak, "-v", voice or "zh", "-s", str(wpm), "-w", wav_path, text],
+            should_stop=should_stop, timeout=600,
+        )
+        if rc != 0:
+            raise RuntimeError(f"espeak 失败: {err.decode('utf-8', errors='replace')}")
+        _wav_to_mp3(wav_path, output_path)
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _local_generate(text: str, voice: str, rate: str, output_path: str, should_stop=None) -> None:
+    """跨平台本地 TTS 调度器"""
+    if _PLATFORM == "Darwin":
+        _local_generate_macos(text, voice, rate, output_path, should_stop=should_stop)
+    elif _PLATFORM == "Windows":
+        _local_generate_windows(text, voice, rate, output_path, should_stop=should_stop)
+    elif _PLATFORM == "Linux":
+        _local_generate_linux(text, voice, rate, output_path, should_stop=should_stop)
+    else:
+        raise RuntimeError(f"暂不支持的平台: {_PLATFORM}")
 
 
 # ======== 统一生成接口 ========
 
-def _generate_one_safe(text, voice, rate, output_path, engine="edge"):
-    """生成单个MP3，带重试和验证"""
+def _generate_one_safe(text, voice, rate, output_path, engine="edge", should_stop=None):
+    """生成单个MP3，带重试和验证（可中断）"""
     segments = split_text(text)
 
     for attempt in range(MAX_RETRIES + 1):
+        if should_stop and should_stop():
+            raise StopRequested("用户暂停")
         try:
             logger.info(f"生成单文件 → {output_path} (尝试 {attempt + 1})")
 
             if engine == "local":
                 if len(segments) == 1:
-                    _local_generate(segments[0], voice, rate, output_path)
+                    _local_generate(segments[0], voice, rate, output_path, should_stop=should_stop)
                 else:
                     temp_dir = tempfile.mkdtemp()
                     temp_files = []
                     try:
                         for i, seg in enumerate(segments):
+                            if should_stop and should_stop():
+                                raise StopRequested("用户暂停")
                             tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
-                            _local_generate(seg, voice, rate, tp)
+                            _local_generate(seg, voice, rate, tp, should_stop=should_stop)
                             temp_files.append(tp)
                         _merge_mp3_files(temp_files, output_path)
                     finally:
                         shutil.rmtree(temp_dir, ignore_errors=True)
             elif engine == "piper":
                 if len(segments) == 1:
-                    _piper_generate_safe(segments[0], voice, rate, output_path)
+                    _piper_generate_safe(segments[0], voice, rate, output_path, should_stop=should_stop)
                 else:
                     temp_dir = tempfile.mkdtemp()
                     temp_files = []
                     try:
                         for i, seg in enumerate(segments):
+                            if should_stop and should_stop():
+                                raise StopRequested("用户暂停")
                             tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
-                            _piper_generate_safe(seg, voice, rate, tp)
+                            _piper_generate_safe(seg, voice, rate, tp, should_stop=should_stop)
                             temp_files.append(tp)
                         _merge_mp3_files(temp_files, output_path)
                     finally:
@@ -771,20 +1263,21 @@ def _generate_one_safe(text, voice, rate, output_path, engine="edge"):
                 else:
                     asyncio.run(_edge_generate_multi(segments, voice, rate, output_path))
 
-            # 验证
             if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
                 logger.info(f"完成: {output_path} ({os.path.getsize(output_path)} bytes)")
                 return
             else:
                 raise RuntimeError(f"生成文件为空: {output_path}")
 
+        except StopRequested:
+            raise
         except Exception as e:
             delay = RETRY_DELAY * (2 ** attempt)
             logger.error(f"生成失败 尝试{attempt + 1}/{MAX_RETRIES + 1}: {e}")
             if attempt < MAX_RETRIES:
                 logger.info(f"等待 {delay}秒 后重试...")
-                import time
-                time.sleep(delay)
+                if _interruptible_sleep(delay, should_stop):
+                    raise StopRequested("用户暂停")
             else:
                 raise
 
@@ -872,15 +1365,13 @@ def convert_batch(
         # 用单一事件循环批量生成
         asyncio.run(_edge_batch_generate(items, voice, rate, output_dir, progress_callback, should_stop))
     elif engine in ("local", "piper"):
-        # 本地引擎或Piper引擎同步逐个生成
+        # 本地引擎或Piper引擎同步逐个生成（支持暂停）
         done_count = 0
         total_active = sum(1 for it in items if it["status"] not in ("done", "skipped"))
 
         try:
             for item in items:
-                if item["status"] == "done":
-                    continue
-                if item["status"] == "skipped":
+                if item["status"] in ("done", "skipped"):
                     continue
                 if should_stop and should_stop():
                     logger.info("用户暂停生成")
@@ -888,8 +1379,13 @@ def convert_batch(
 
                 out_path = os.path.join(output_dir, item["filename"])
                 try:
-                    _generate_one_safe(item["text"], voice, rate, out_path, engine=engine)
+                    _generate_one_safe(item["text"], voice, rate, out_path,
+                                       engine=engine, should_stop=should_stop)
                     item["status"] = "done"
+                except StopRequested:
+                    logger.info(f"用户暂停：[{item['title']}] 未完成")
+                    save_progress(output_dir, items)
+                    break
                 except Exception as e:
                     item["status"] = "error"
                     item["error"] = str(e)
@@ -898,7 +1394,10 @@ def convert_batch(
                 save_progress(output_dir, items)
                 done_count += 1
                 if progress_callback:
-                    progress_callback(done_count, total_active)
+                    try:
+                        progress_callback(done_count, total_active)
+                    except Exception:
+                        pass
         finally:
             if engine == "piper":
                 _unload_piper_model()
@@ -924,10 +1423,10 @@ def convert_batch(
 
 # ======== 试听 ========
 
-def generate_preview(text, voice, rate="+0%", engine="edge"):
+def generate_preview(text, voice, rate="+0%", engine="edge", should_stop=None):
     preview_text = text[:200]
     if not preview_text.strip():
         raise ValueError("没有可预览的文本")
     temp_path = os.path.join(tempfile.gettempdir(), "audiobook_preview.mp3")
-    _generate_one_safe(preview_text, voice, rate, temp_path, engine=engine)
+    _generate_one_safe(preview_text, voice, rate, temp_path, engine=engine, should_stop=should_stop)
     return temp_path

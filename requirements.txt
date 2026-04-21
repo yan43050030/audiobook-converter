@@ -6,3 +6,9 @@ piper-tts>=1.0.0
 
 # Python 3.13+ 兼容：audioop 已从标准库移除
 audioop-lts>=0.2.0; python_version>="3.13"
+
+# 备注：本地系统语音无需额外依赖：
+#   macOS   - 内置 say 命令
+#   Windows - 内置 PowerShell + SAPI
+#   Linux   - 需手动安装 espeak-ng（sudo apt install espeak-ng 等）
+# 本地便携模式：可在"便携存储目录/bin"放入 ffmpeg、piper 可执行文件，携带到任意机器使用。
