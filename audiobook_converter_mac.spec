@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# macOS .app bundle spec - v2.4.0: cross-platform offline TTS + portable storage
+# macOS .app bundle spec - v2.5.0: Piper 新API + 滚动面板 + docx/md + HiDPI
 
 import os
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs
@@ -93,8 +93,9 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'AudiobookConverter',
         'CFBundleDisplayName': '文字转有声读物',
-        'CFBundleVersion': '2.4.0',
-        'CFBundleShortVersionString': '2.4.0',
+        'CFBundleVersion': '2.5.0',
+        'CFBundleShortVersionString': '2.5.0',
+        'NSHumanReadableCopyright': 'AudiobookConverter',
         'NSHighResolutionCapable': True,
     },
 )

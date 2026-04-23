@@ -7,6 +7,9 @@ piper-tts>=1.0.0
 # Python 3.13+ 兼容：audioop 已从标准库移除
 audioop-lts>=0.2.0; python_version>="3.13"
 
+# 可选：读取 Word .docx 更可靠（未安装时回退到内建 zip/xml 解析，仍可读文本）
+# python-docx>=1.1.0
+
 # 备注：本地系统语音无需额外依赖：
 #   macOS   - 内置 say 命令
 #   Windows - 内置 PowerShell + SAPI

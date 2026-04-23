@@ -1,4 +1,4 @@
-"""TTS引擎封装 - 支持 edge-tts（联网）、系统语音（跨平台离线）、Piper（离线高质量） v2.4.0"""
+"""TTS引擎封装 - 支持 edge-tts（联网）、系统语音（跨平台离线）、Piper（离线高质量） v2.5.0"""
 
 import asyncio
 import json
@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 import urllib.parse
+import wave
 from shutil import which
 from typing import Callable, List, Optional
 
@@ -25,6 +26,12 @@ except ImportError:
     PIPER_PYTHON_AVAILABLE = False
     PiperVoice = None
 
+# Piper 新 API (1.3.0+) 的 SynthesisConfig（可选）
+try:
+    from piper import SynthesisConfig as _PiperSynthesisConfig
+except Exception:
+    _PiperSynthesisConfig = None
+
 try:
     from pydub import AudioSegment
     PYDUB_AVAILABLE = True
@@ -32,7 +39,7 @@ except ImportError:
     PYDUB_AVAILABLE = False
     AudioSegment = None
 
-VERSION = "2.4.0"
+VERSION = "2.5.0"
 
 # 当前平台
 _PLATFORM = platform.system()  # "Darwin" / "Windows" / "Linux"
@@ -116,6 +123,7 @@ def set_storage_dir(path: str) -> None:
     else:
         cfg.pop("storage_dir", None)
     _save_config(cfg)
+    _invalidate_scan_cache()
     logger.info(f"存储目录已更新: {get_storage_dir()}")
 
 
@@ -133,26 +141,136 @@ def get_portable_bin_dir() -> str:
     return path
 
 
+# 扫描缓存：避免重复递归大目录；存储目录变更时自动失效
+_scan_cache: dict = {"storage_dir": None, "found": {}, "models": None}
+
+
+def _invalidate_scan_cache() -> None:
+    _scan_cache["storage_dir"] = None
+    _scan_cache["found"] = {}
+    _scan_cache["models"] = None
+
+
+def _search_in_tree(root_dir: str, target_names: List[str], max_depth: int = 4) -> Optional[str]:
+    """在根目录及其子目录（有限深度）中递归查找文件，返回首个匹配的绝对路径"""
+    if not root_dir or not os.path.isdir(root_dir):
+        return None
+    root_dir = os.path.abspath(root_dir)
+    lowered = {n.lower() for n in target_names}
+    try:
+        for dirpath, _dirs, files in os.walk(root_dir, followlinks=False):
+            # 限制递归深度
+            rel_depth = dirpath[len(root_dir):].count(os.sep)
+            if rel_depth > max_depth:
+                _dirs[:] = []
+                continue
+            for fn in files:
+                if fn.lower() in lowered:
+                    return os.path.join(dirpath, fn)
+    except Exception as e:
+        logger.warning(f"搜索 {root_dir} 失败: {e}")
+    return None
+
+
+def _search_models_in_tree(root_dir: str, max_depth: int = 4) -> List[str]:
+    """在根目录及其子目录中查找 Piper .onnx 模型文件"""
+    results = []
+    if not root_dir or not os.path.isdir(root_dir):
+        return results
+    root_dir = os.path.abspath(root_dir)
+    try:
+        for dirpath, _dirs, files in os.walk(root_dir, followlinks=False):
+            rel_depth = dirpath[len(root_dir):].count(os.sep)
+            if rel_depth > max_depth:
+                _dirs[:] = []
+                continue
+            for fn in files:
+                if fn.lower().endswith(".onnx"):
+                    results.append(os.path.join(dirpath, fn))
+    except Exception as e:
+        logger.warning(f"搜索模型 {root_dir} 失败: {e}")
+    return results
+
+
 def _which_portable(name: str) -> Optional[str]:
-    """优先在便携 bin 目录查找，其次系统 PATH。支持 Windows .exe 后缀。"""
+    """查找顺序：便携 bin 目录 → 便携存储目录递归 → 系统 PATH。结果缓存直到目录变更。"""
+    storage = get_storage_dir()
+    if _scan_cache["storage_dir"] != storage:
+        _scan_cache["storage_dir"] = storage
+        _scan_cache["found"] = {}
+        _scan_cache["models"] = None
+
+    if name in _scan_cache["found"]:
+        cached = _scan_cache["found"][name]
+        # 若缓存路径已不存在则重新查找
+        if cached is None or os.path.isfile(cached):
+            return cached
+
     candidates = [name]
     if _PLATFORM == "Windows" and not name.lower().endswith(".exe"):
         candidates.insert(0, name + ".exe")
 
     bin_dir = get_portable_bin_dir()
+    result: Optional[str] = None
+    # 1) bin/ 直接命中
     for cand in candidates:
         p = os.path.join(bin_dir, cand)
-        if os.path.isfile(p) and os.access(p, os.X_OK):
-            return p
-        # Windows 上 os.access X_OK 可能不可靠，按文件存在判断
-        if _PLATFORM == "Windows" and os.path.isfile(p):
-            return p
+        if os.path.isfile(p):
+            if _PLATFORM == "Windows" or os.access(p, os.X_OK):
+                result = p
+                break
 
-    for cand in candidates:
-        p = which(cand)
-        if p:
-            return p
-    return None
+    # 2) 存储目录递归搜索
+    if result is None:
+        result = _search_in_tree(storage, candidates, max_depth=4)
+
+    # 3) 系统 PATH
+    if result is None:
+        for cand in candidates:
+            p = which(cand)
+            if p:
+                result = p
+                break
+
+    _scan_cache["found"][name] = result
+    return result
+
+
+def scan_storage_dependencies() -> dict:
+    """扫描便携存储目录，汇总依赖与语音包现状"""
+    storage = get_storage_dir()
+    ffmpeg = _which_portable("ffmpeg")
+    ffprobe = _which_portable("ffprobe")
+    piper_cli = _which_portable("piper")
+
+    # 先找已预置的 Piper 模型目录（piper-models/），再递归全目录
+    piper_model_dir = get_piper_model_dir()
+    models: List[str] = []
+    seen = set()
+    for candidate in _search_models_in_tree(piper_model_dir) + _search_models_in_tree(storage):
+        key = os.path.abspath(candidate)
+        if key not in seen:
+            seen.add(key)
+            models.append(candidate)
+
+    missing: List[str] = []
+    if ffmpeg is None:
+        missing.append("ffmpeg（Piper/本地语音 MP3 转换依赖）")
+    if not PIPER_PYTHON_AVAILABLE and piper_cli is None:
+        missing.append("Piper 可执行文件（pip 未装 piper-tts 时需外置 piper）")
+    if not models:
+        missing.append("Piper 语音包（.onnx 模型）")
+
+    return {
+        "storage_dir": storage,
+        "bin_dir": get_portable_bin_dir(),
+        "ffmpeg": ffmpeg,
+        "ffprobe": ffprobe,
+        "piper_python": PIPER_PYTHON_AVAILABLE,
+        "piper_cli": piper_cli,
+        "piper_models": models,
+        "missing": missing,
+    }
 
 
 def _refresh_piper_cli_path() -> Optional[str]:
@@ -872,6 +990,105 @@ def _piper_generate_cli(text, voice_name, speed, wav_path, should_stop=None):
         raise RuntimeError(f"Piper CLI失败 (code {rc}): {stderr}")
 
 
+def _piper_sample_rate(voice_model) -> int:
+    """从 Piper 模型读取采样率，兼容新旧属性路径"""
+    cfg = getattr(voice_model, "config", None)
+    if cfg is None:
+        return 22050
+    for attr in ("sample_rate", "sampling_rate"):
+        v = getattr(cfg, attr, None)
+        if isinstance(v, int) and v > 0:
+            return v
+    audio_cfg = getattr(cfg, "audio", None)
+    if audio_cfg is not None:
+        for attr in ("sample_rate", "sampling_rate"):
+            v = getattr(audio_cfg, attr, None)
+            if isinstance(v, int) and v > 0:
+                return v
+    return 22050
+
+
+def _piper_chunk_bytes(chunk) -> Optional[bytes]:
+    """从 AudioChunk 取出 int16 PCM 字节（兼容多种属性名）"""
+    for attr in ("audio_int16_bytes", "audio_bytes", "int16_bytes"):
+        v = getattr(chunk, attr, None)
+        if isinstance(v, (bytes, bytearray)):
+            return bytes(v)
+    arr = getattr(chunk, "audio_int16_array", None)
+    if arr is not None:
+        try:
+            return arr.tobytes()
+        except Exception:
+            pass
+    # 兜底：假设 chunk 本身就是字节
+    if isinstance(chunk, (bytes, bytearray)):
+        return bytes(chunk)
+    return None
+
+
+def _piper_synthesize_to_wav(voice_model, text: str, speed: float,
+                             wav_path: str, should_stop=None) -> None:
+    """将 Piper 合成结果写入 WAV 文件（兼容新旧 API，支持暂停）"""
+    # 新 API (piper-tts 1.3.0+): 使用 synthesize(text) -> Iterable[AudioChunk]
+    if hasattr(voice_model, "synthesize"):
+        syn_config = None
+        if _PiperSynthesisConfig is not None and speed != 1.0:
+            try:
+                syn_config = _PiperSynthesisConfig(length_scale=1.0 / speed)
+            except Exception as e:
+                logger.warning(f"构造 SynthesisConfig 失败，忽略速度: {e}")
+                syn_config = None
+
+        try:
+            iterator = (
+                voice_model.synthesize(text, syn_config=syn_config)
+                if syn_config is not None
+                else voice_model.synthesize(text)
+            )
+        except TypeError:
+            # 某些版本签名不同
+            iterator = voice_model.synthesize(text)
+
+        sample_rate = _piper_sample_rate(voice_model)
+        with wave.open(wav_path, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            for chunk in iterator:
+                if should_stop and should_stop():
+                    raise StopRequested("用户暂停")
+                # 首块若携带 sample_rate，则修正
+                sr = getattr(chunk, "sample_rate", None)
+                if isinstance(sr, int) and sr > 0 and sr != sample_rate:
+                    wf.setframerate(sr)
+                    sample_rate = sr
+                data = _piper_chunk_bytes(chunk)
+                if not data:
+                    continue
+                wf.writeframes(data)
+        return
+
+    # 旧 API (piper-tts <1.3.0): synthesize_stream_raw 返回原始 PCM 字节流
+    if hasattr(voice_model, "synthesize_stream_raw"):
+        sample_rate = _piper_sample_rate(voice_model)
+        pcm = bytearray()
+        for audio_bytes in voice_model.synthesize_stream_raw(text, speed=speed):
+            if should_stop and should_stop():
+                raise StopRequested("用户暂停")
+            pcm.extend(audio_bytes)
+        with wave.open(wav_path, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            wf.writeframes(bytes(pcm))
+        return
+
+    raise RuntimeError(
+        "Piper API 不兼容：未找到 synthesize 或 synthesize_stream_raw 方法。"
+        "\n请升级或重装 piper-tts。"
+    )
+
+
 def _piper_generate(text, voice, rate, output_path, should_stop=None):
     """使用Piper TTS生成音频（支持Python包和CLI两种模式）"""
     if not _piper_available():
@@ -892,11 +1109,7 @@ def _piper_generate(text, voice, rate, output_path, should_stop=None):
         mode = _get_piper_mode()
 
         if mode == PIPER_MODE_PYTHON:
-            with open(wav_path, "wb") as f:
-                for audio_bytes in voice_model.synthesize_stream_raw(text, speed=speed):
-                    if should_stop and should_stop():
-                        raise StopRequested("用户暂停")
-                    f.write(audio_bytes)
+            _piper_synthesize_to_wav(voice_model, text, speed, wav_path, should_stop=should_stop)
         else:
             _piper_generate_cli(text, voice, speed, wav_path, should_stop=should_stop)
 

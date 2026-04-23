@@ -1,4 +1,4 @@
-"""GUI界面 - 文字转有声读物 v2.1"""
+"""GUI界面 - 文字转有声读物 v2.5"""
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
@@ -26,7 +26,58 @@ from tts_engine import (
     remove_download_listener,
     refresh_local_voices,
     check_engine_ready,
+    scan_storage_dependencies,
 )
+
+
+class ScrollableFrame(ttk.Frame):
+    """一个带垂直滚动条的容器，使用方式：把控件放到 .interior 上。"""
+
+    def __init__(self, parent, width=340, **kwargs):
+        super().__init__(parent, **kwargs)
+        self._canvas = tk.Canvas(self, borderwidth=0, highlightthickness=0, width=width)
+        self._vbar = ttk.Scrollbar(self, orient="vertical", command=self._canvas.yview)
+        self._canvas.configure(yscrollcommand=self._vbar.set)
+
+        self._vbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self._canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.interior = ttk.Frame(self._canvas)
+        self._window_id = self._canvas.create_window((0, 0), window=self.interior, anchor="nw")
+
+        self.interior.bind("<Configure>", self._on_inner_config)
+        self._canvas.bind("<Configure>", self._on_canvas_config)
+
+        # 鼠标滚轮：指针在控件上时启用，离开时解绑，避免影响其它滚动区
+        self.bind("<Enter>", self._bind_wheel)
+        self.bind("<Leave>", self._unbind_wheel)
+
+    def _on_inner_config(self, _event):
+        self._canvas.configure(scrollregion=self._canvas.bbox("all"))
+
+    def _on_canvas_config(self, event):
+        # 让内部 frame 宽度始终与 canvas 可见宽度一致
+        self._canvas.itemconfigure(self._window_id, width=event.width)
+
+    def _bind_wheel(self, _event):
+        # Windows / macOS
+        self._canvas.bind_all("<MouseWheel>", self._on_wheel)
+        # Linux (X11)
+        self._canvas.bind_all("<Button-4>", lambda e: self._canvas.yview_scroll(-3, "units"))
+        self._canvas.bind_all("<Button-5>", lambda e: self._canvas.yview_scroll(3, "units"))
+
+    def _unbind_wheel(self, _event):
+        self._canvas.unbind_all("<MouseWheel>")
+        self._canvas.unbind_all("<Button-4>")
+        self._canvas.unbind_all("<Button-5>")
+
+    def _on_wheel(self, event):
+        delta = event.delta
+        # macOS delta 很小，Windows 一般是 120 的倍数
+        if platform.system() == "Darwin":
+            self._canvas.yview_scroll(int(-delta), "units")
+        else:
+            self._canvas.yview_scroll(int(-delta / 120), "units")
 
 
 class AudiobookConverterApp:
@@ -94,10 +145,13 @@ class AudiobookConverterApp:
         self.text_area = scrolledtext.ScrolledText(text_frame, wrap=tk.WORD, font=("Helvetica", 12))
         self.text_area.pack(fill=tk.BOTH, expand=True)
 
-        # ===== 右侧：控制面板 =====
-        right = ttk.LabelFrame(body, text="设置", padding=10, width=320)
-        right.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 0))
-        right.pack_propagate(False)
+        # ===== 右侧：可滚动控制面板 =====
+        right_outer = ttk.LabelFrame(body, text="设置", padding=4, width=340)
+        right_outer.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 0))
+        right_outer.pack_propagate(False)
+        self._right_scroller = ScrollableFrame(right_outer, width=320)
+        self._right_scroller.pack(fill=tk.BOTH, expand=True)
+        right = self._right_scroller.interior
 
         # 文件
         ttk.Button(right, text="选择文本文件", command=self._select_file).pack(fill=tk.X, pady=(0, 3))
@@ -125,6 +179,7 @@ class AudiobookConverterApp:
         voice_row.pack(fill=tk.X, pady=(6, 0))
         ttk.Label(voice_row, text="语音:").pack(side=tk.LEFT)
         ttk.Button(voice_row, text="刷新", width=5, command=self._refresh_voices).pack(side=tk.RIGHT)
+        ttk.Button(voice_row, text="试听", width=5, command=self._preview_voice_sample).pack(side=tk.RIGHT, padx=(0, 3))
         self.voice_var = tk.StringVar()
         self.voice_combo = ttk.Combobox(right, textvariable=self.voice_var, state="readonly")
         self.voice_combo.pack(fill=tk.X, pady=(2, 8))
@@ -143,9 +198,21 @@ class AudiobookConverterApp:
         ttk.Button(storage_btns, text="恢复默认", command=self._reset_storage).pack(side=tk.LEFT)
         ttk.Label(
             right,
-            text="提示：放入 bin/ 可携带 ffmpeg、piper 可执行文件；piper-models/ 存放语音包。",
+            text="提示：放入 bin/ 可携带 ffmpeg、piper 可执行文件；piper-models/ 存放语音包。\n"
+                 "也可直接拷贝整个便携包到该目录，程序会自动在子目录里递归搜索。",
             wraplength=280, foreground="gray",
         ).pack(fill=tk.X, pady=(0, 4))
+
+        # 依赖检测面板
+        deps_frame = ttk.LabelFrame(right, text="依赖检测", padding=4)
+        deps_frame.pack(fill=tk.X, pady=(2, 4))
+        self.deps_text = tk.Text(deps_frame, height=6, wrap=tk.WORD, relief=tk.FLAT,
+                                 font=("Helvetica", 10), bg=right.winfo_toplevel().cget("bg"))
+        self.deps_text.pack(fill=tk.X)
+        self.deps_text.configure(state="disabled")
+        ttk.Button(deps_frame, text="重新扫描依赖",
+                   command=self._refresh_deps).pack(fill=tk.X, pady=(3, 0))
+        self._refresh_deps()
 
         # 语速
         ttk.Label(right, text="语速:").pack(anchor=tk.W)
@@ -223,14 +290,15 @@ class AudiobookConverterApp:
             messagebox.showerror("错误", f"设置失败: {e}")
             return
         self.storage_var.set(get_storage_dir())
-        # 重新评估当前引擎可用性（可能因为外置 piper/ffmpeg 变了）
-        self._on_engine_change()
+        # 重新扫描依赖 + 评估当前引擎可用性
+        self._refresh_deps()
         messagebox.showinfo(
             "已切换存储目录",
             f"当前目录：{get_storage_dir()}\n\n"
             "可在该目录下：\n"
             "  - bin/            放置 ffmpeg、piper 等可执行文件\n"
-            "  - piper-models/   放置或缓存 Piper 语音包",
+            "  - piper-models/   放置或缓存 Piper 语音包\n\n"
+            "程序已自动在子目录中搜索依赖，结果见「依赖检测」区。",
         )
 
     def _reset_storage(self):
@@ -238,7 +306,7 @@ class AudiobookConverterApp:
             return
         set_storage_dir("")
         self.storage_var.set(get_storage_dir())
-        self._on_engine_change()
+        self._refresh_deps()
 
     def _open_storage(self):
         path = get_storage_dir()
@@ -258,6 +326,94 @@ class AudiobookConverterApp:
         if self.engine_var.get() == "local":
             refresh_local_voices()
         self._on_engine_change()
+
+    # ===== 依赖检测（递归扫描便携目录） =====
+
+    def _refresh_deps(self):
+        """扫描便携存储目录及子目录，刷新依赖状态显示。"""
+        try:
+            info = scan_storage_dependencies()
+        except Exception as e:
+            logger.error(f"依赖扫描失败: {e}")
+            self._set_deps_text(f"扫描失败: {e}", color="red")
+            return
+
+        def short(p):
+            if not p:
+                return "未找到"
+            storage = info["storage_dir"]
+            if p.startswith(storage):
+                return "…" + p[len(storage):]
+            return p
+
+        lines = []
+        def add(label, found):
+            mark = "✓" if found else "✗"
+            lines.append(f"{mark} {label}: {short(found)}")
+
+        add("ffmpeg", info["ffmpeg"])
+        add("ffprobe", info["ffprobe"])
+        if info["piper_python"]:
+            lines.append("✓ Piper Python 包：已安装")
+        else:
+            add("Piper 可执行文件", info["piper_cli"])
+        lines.append(f"Piper 语音包：{len(info['piper_models'])} 个")
+        for m in info["piper_models"][:4]:
+            lines.append(f"   • {os.path.basename(m)}")
+        if len(info["piper_models"]) > 4:
+            lines.append(f"   … 另有 {len(info['piper_models']) - 4} 个")
+
+        if info["missing"]:
+            lines.append("")
+            lines.append("缺少：")
+            for m in info["missing"]:
+                lines.append(f"   - {m}")
+
+        text = "\n".join(lines)
+        color = "red" if info["missing"] else "black"
+        self._set_deps_text(text, color=color)
+        # 依赖更新后重估当前引擎可用性
+        self._on_engine_change()
+
+    def _set_deps_text(self, text: str, color: str = "black"):
+        if not hasattr(self, "deps_text"):
+            return
+        self.deps_text.configure(state="normal")
+        self.deps_text.delete("1.0", tk.END)
+        self.deps_text.insert("1.0", text)
+        self.deps_text.configure(state="disabled", foreground=color)
+
+    # ===== 试听当前语音（不依赖已加载文本） =====
+
+    SAMPLE_PREVIEW_TEXT = "你好，这是一段语音试听示例。春江潮水连海平，海上明月共潮生。"
+
+    def _preview_voice_sample(self):
+        """用固定样例句试听当前所选语音，方便在挑选语音时快速比较"""
+        engine = self.engine_var.get()
+        ready, msg = check_engine_ready(engine)
+        if not ready:
+            messagebox.showerror("引擎不可用", msg)
+            return
+        voice_display = self.voice_var.get()
+        if not voice_display:
+            messagebox.showwarning("提示", "当前引擎没有可用语音")
+            return
+
+        self.status_label.config(text="正在生成语音试听...")
+
+        def run():
+            try:
+                voice = get_voice_id(voice_display, engine)
+                rate = self._get_rate_string()
+                path = generate_preview(self.SAMPLE_PREVIEW_TEXT, voice, rate, engine=engine)
+                self.root.after(0, lambda: self._play_audio(path))
+                self.root.after(0, lambda: self.status_label.config(text="语音试听播放中..."))
+            except Exception as e:
+                logger.error(f"语音试听失败: {e}")
+                self.root.after(0, lambda: messagebox.showerror("错误", f"语音试听失败: {e}"))
+                self.root.after(0, lambda: self.status_label.config(text="语音试听失败"))
+
+        threading.Thread(target=run, daemon=True).start()
 
     # ===== 下载进度回调 =====
 
@@ -346,26 +502,99 @@ class AudiobookConverterApp:
     def _select_file(self):
         path = filedialog.askopenfilename(
             title="选择文本文件",
-            filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")]
+            filetypes=[
+                ("支持的文档", "*.txt *.md *.markdown *.docx"),
+                ("纯文本", "*.txt"),
+                ("Markdown", "*.md *.markdown"),
+                ("Word 文档", "*.docx"),
+                ("所有文件", "*.*"),
+            ],
         )
         if path:
             self._load_file(path)
 
+    def _read_docx(self, path: str) -> str:
+        """读取 .docx：优先用 python-docx，否则回退到直接解析 zip 中的 document.xml"""
+        # 优先 python-docx
+        try:
+            import docx  # type: ignore
+            d = docx.Document(path)
+            return "\n".join(p.text for p in d.paragraphs)
+        except ImportError:
+            pass
+        # 回退：直接解析 zip
+        import zipfile
+        import xml.etree.ElementTree as ET
+        with zipfile.ZipFile(path) as z:
+            with z.open("word/document.xml") as f:
+                tree = ET.parse(f)
+        ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        root = tree.getroot()
+        paragraphs = []
+        for p in root.iter(f"{ns}p"):
+            texts = [t.text or "" for t in p.iter(f"{ns}t")]
+            paragraphs.append("".join(texts))
+        return "\n".join(paragraphs)
+
+    def _read_markdown(self, path: str) -> str:
+        """读取 .md：保留结构，去掉基本 Markdown 标记使朗读更自然"""
+        import re as _re
+        raw = None
+        for enc in ("utf-8", "gbk", "gb2312", "latin-1"):
+            try:
+                with open(path, "r", encoding=enc) as f:
+                    raw = f.read()
+                break
+            except UnicodeDecodeError:
+                continue
+        if raw is None:
+            raise RuntimeError("无法解码 Markdown 文件")
+
+        text = raw
+        # 移除代码块（三引号）
+        text = _re.sub(r"```.*?```", "", text, flags=_re.DOTALL)
+        # 移除行内代码
+        text = _re.sub(r"`([^`]+)`", r"\1", text)
+        # 图片 ![alt](url) 只保留 alt
+        text = _re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", text)
+        # 链接 [text](url) 只保留 text
+        text = _re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
+        # 标题符号 # 去掉
+        text = _re.sub(r"^\s{0,3}#{1,6}\s+", "", text, flags=_re.MULTILINE)
+        # 引用 > 去掉
+        text = _re.sub(r"^\s{0,3}>\s?", "", text, flags=_re.MULTILINE)
+        # 列表符号 -/*/+ 和有序列表符号去掉
+        text = _re.sub(r"^\s{0,3}[-*+]\s+", "", text, flags=_re.MULTILINE)
+        text = _re.sub(r"^\s{0,3}\d+\.\s+", "", text, flags=_re.MULTILINE)
+        # 粗体 / 斜体 / 删除线
+        text = _re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
+        text = _re.sub(r"\*([^*]+)\*", r"\1", text)
+        text = _re.sub(r"__([^_]+)__", r"\1", text)
+        text = _re.sub(r"_([^_]+)_", r"\1", text)
+        text = _re.sub(r"~~([^~]+)~~", r"\1", text)
+        # 水平分割线
+        text = _re.sub(r"^\s{0,3}[-*_]{3,}\s*$", "", text, flags=_re.MULTILINE)
+        return text
+
     def _load_file(self, path: str):
         try:
-            encodings = ["utf-8", "gbk", "gb2312", "latin-1"]
-            content = None
-            for enc in encodings:
-                try:
-                    with open(path, "r", encoding=enc) as f:
-                        content = f.read()
-                    break
-                except UnicodeDecodeError:
-                    continue
-
-            if content is None:
-                messagebox.showerror("错误", "无法读取文件，编码不支持")
-                return
+            ext = os.path.splitext(path)[1].lower()
+            if ext == ".docx":
+                content = self._read_docx(path)
+            elif ext in (".md", ".markdown"):
+                content = self._read_markdown(path)
+            else:
+                content = None
+                for enc in ("utf-8", "gbk", "gb2312", "latin-1"):
+                    try:
+                        with open(path, "r", encoding=enc) as f:
+                            content = f.read()
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                if content is None:
+                    messagebox.showerror("错误", "无法读取文件，编码不支持")
+                    return
 
             self.file_path = path
             self.text_area.delete("1.0", tk.END)
@@ -374,7 +603,7 @@ class AudiobookConverterApp:
             filename = os.path.basename(path)
             self.file_label.config(text=filename, foreground="black")
             self.status_label.config(text=f"已加载: {filename}（{len(content)}字）")
-            logger.info(f"加载文件: {path} ({len(content)}字)")
+            logger.info(f"加载文件: {path} ({len(content)}字, 类型={ext})")
             self._refresh_chapters()
         except Exception as e:
             logger.error(f"读取文件失败: {e}")

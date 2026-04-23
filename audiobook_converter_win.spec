@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# Windows exe spec - v2.4.0: cross-platform offline TTS + portable storage
+# Windows exe spec - v2.5.0: Piper 新API + 滚动面板 + docx/md + HiDPI
 
 import os
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs
