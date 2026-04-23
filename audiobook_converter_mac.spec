@@ -41,8 +41,14 @@ all_datas = base_datas + piper_datas + onnx_datas
 all_bins = manual_bins + onnx_bins
 
 base_hidden = [
+    # 在线引擎
     'edge_tts', 'aiohttp', 'aiosignal', 'frozenlist', 'multidict', 'yarl',
-    'propcache', 'attr', 'attrs', 'certifi', 'requests', 'tqdm', 'tabulate',
+    'propcache', 'attr', 'attrs', 'certifi', 'charset_normalizer', 'idna', 'urllib3',
+    # 通用网络 / 进度
+    'requests', 'tqdm', 'tabulate',
+    # 音频
+    'pydub', 'wave', 'audioop',
+    # Piper 生态
     'onnxruntime', 'piper',
 ]
 all_hidden = base_hidden + piper_hidden + onnx_hidden

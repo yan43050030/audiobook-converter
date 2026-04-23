@@ -4,7 +4,18 @@ on:
   push:
     tags:
       - 'v*'
+  # 本地 tag 推送被环境阻断时，可用手动触发。填入 tag 名（例如 v2.5.0）即可，
+  # 工作流会在当前 main HEAD 创建该 tag 并在 Release 上挂载构建产物。
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag name (e.g., v2.5.0)。工作流会自动创建该 tag 并发布。'
+        required: true
+        default: 'v2.5.0'
+
+# Release 直传所需权限（contents: write）
+permissions:
+  contents: write
 
 jobs:
   build-macos:
@@ -32,11 +43,14 @@ jobs:
           cd dist
           zip -r AudiobookConverter_macOS.zip AudiobookConverter.app
 
-      - name: Upload macOS artifact
-        uses: actions/upload-artifact@v4
+      # 直接发布到 Release，不经过 actions/upload-artifact（避开 artifact 配额）
+      - name: Upload macOS build to Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: macOS-app
-          path: dist/AudiobookConverter_macOS.zip
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: dist/AudiobookConverter_macOS.zip
+          generate_release_notes: true
+          fail_on_unmatched_files: true
 
   build-windows:
     runs-on: windows-latest
@@ -63,29 +77,11 @@ jobs:
           cd dist
           Compress-Archive -Path audiobook_converter.exe -DestinationPath audiobook_converter_Windows.zip
 
-      - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Windows-exe
-          path: dist/audiobook_converter_Windows.zip
-
-  create-release:
-    needs: [build-macos, build-windows]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-
-      - name: Create Release
+      # 直接发布到 Release，不经过 actions/upload-artifact（避开 artifact 配额）
+      - name: Upload Windows build to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/macOS-app/AudiobookConverter_macOS.zip
-            artifacts/Windows-exe/audiobook_converter_Windows.zip
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: dist/audiobook_converter_Windows.zip
           generate_release_notes: true
+          fail_on_unmatched_files: true

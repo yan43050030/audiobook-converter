@@ -37,10 +37,28 @@ all_datas = base_datas + piper_datas + onnx_datas
 all_bins = piper_manual_bins + onnx_bins
 
 base_hidden = [
+    # 在线引擎
     'edge_tts', 'aiohttp', 'aiosignal', 'frozenlist', 'multidict', 'yarl',
-    'propcache', 'attr', 'attrs', 'certifi', 'requests', 'tqdm', 'tabulate',
+    'propcache', 'attr', 'attrs', 'certifi', 'charset_normalizer', 'idna', 'urllib3',
+    # 通用网络 / 进度
+    'requests', 'tqdm', 'tabulate',
+    # 音频与压缩
+    'pydub', 'wave', 'audioop',
 ]
 all_hidden = base_hidden + piper_hidden + onnx_hidden
+
+# audioop-lts（Python 3.13+ 兼容）
+try:
+    import audioop  # 有可能是 audioop-lts
+    audioop_dir = os.path.dirname(audioop.__file__)
+    # *.pyd / *.so（不同平台）
+    for fname in ('_audioop.pyd', '_audioop.abi3.pyd', '_audioop.abi3.so'):
+        src = os.path.join(audioop_dir, fname)
+        if os.path.exists(src):
+            all_bins.append((src, 'audioop'))
+            break
+except Exception:
+    pass
 
 a = Analysis(
     ['main.py'],
