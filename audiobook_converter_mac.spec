@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# macOS .app bundle spec - v2.5.0: Piper 新API + 滚动面板 + docx/md + HiDPI
+# macOS .app bundle spec - v2.6.0: 内置播放器 + 全文试听 + 可拖拽分隔条
 
 import os
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs
@@ -36,9 +36,19 @@ except ImportError:
 
 # --- Combine all resources ---
 base_datas = [('icon.png', '.'), ('icon.ico', '.'), ('icon.icns', '.')]
-all_datas = base_datas + piper_datas + onnx_datas
+all_datas = base_datas + piper_datas + onnx_datas + pygame_datas
 
-all_bins = manual_bins + onnx_bins
+all_bins = manual_bins + onnx_bins + pygame_bins
+
+# pygame 内置播放器（含 SDL 原生库）
+pygame_datas, pygame_hidden, pygame_bins = [], [], []
+try:
+    import pygame  # noqa: F401
+    pygame_datas = collect_data_files('pygame')
+    pygame_hidden = collect_submodules('pygame')
+    pygame_bins = collect_dynamic_libs('pygame')
+except Exception:
+    pass
 
 base_hidden = [
     # 在线引擎
@@ -50,8 +60,10 @@ base_hidden = [
     'pydub', 'wave', 'audioop',
     # Piper 生态
     'onnxruntime', 'piper',
+    # 内置播放器
+    'pygame',
 ]
-all_hidden = base_hidden + piper_hidden + onnx_hidden
+all_hidden = base_hidden + piper_hidden + onnx_hidden + pygame_hidden
 
 # --- Build Analysis ---
 a = Analysis(
@@ -99,8 +111,8 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'AudiobookConverter',
         'CFBundleDisplayName': '文字转有声读物',
-        'CFBundleVersion': '2.5.0',
-        'CFBundleShortVersionString': '2.5.0',
+        'CFBundleVersion': '2.6.0',
+        'CFBundleShortVersionString': '2.6.0',
         'NSHumanReadableCopyright': 'AudiobookConverter',
         'NSHighResolutionCapable': True,
     },

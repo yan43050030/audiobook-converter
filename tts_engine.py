@@ -39,7 +39,7 @@ except ImportError:
     PYDUB_AVAILABLE = False
     AudioSegment = None
 
-VERSION = "2.5.0"
+VERSION = "2.6.0"
 
 # 当前平台
 _PLATFORM = platform.system()  # "Darwin" / "Windows" / "Linux"
@@ -1636,10 +1636,20 @@ def convert_batch(
 
 # ======== 试听 ========
 
-def generate_preview(text, voice, rate="+0%", engine="edge", should_stop=None):
-    preview_text = text[:200]
+def generate_preview(text, voice, rate="+0%", engine="edge", should_stop=None, max_chars: int = 200):
+    """生成试听音频。
+
+    max_chars > 0 时截取前 max_chars 字符（用于「快速试听」）；
+    max_chars <= 0 时使用全部文本（用于「试听全文」）。
+    支持 should_stop 回调用于打断生成。
+    """
+    if max_chars and max_chars > 0:
+        preview_text = text[:max_chars]
+    else:
+        preview_text = text
     if not preview_text.strip():
         raise ValueError("没有可预览的文本")
-    temp_path = os.path.join(tempfile.gettempdir(), "audiobook_preview.mp3")
+    suffix = "_full" if max_chars <= 0 else "_short"
+    temp_path = os.path.join(tempfile.gettempdir(), f"audiobook_preview{suffix}.mp3")
     _generate_one_safe(preview_text, voice, rate, temp_path, engine=engine, should_stop=should_stop)
     return temp_path

@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# Windows exe spec - v2.5.0: Piper 新API + 滚动面板 + docx/md + HiDPI
+# Windows exe spec - v2.6.0: 内置播放器 + 全文试听 + 可拖拽分隔条
 
 import os
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs
@@ -32,9 +32,19 @@ try:
 except Exception:
     pass
 
+# 内置播放器（pygame + SDL）
+pygame_datas, pygame_hidden, pygame_bins = [], [], []
+try:
+    import pygame  # noqa: F401
+    pygame_datas = collect_data_files('pygame')
+    pygame_hidden = collect_submodules('pygame')
+    pygame_bins = collect_dynamic_libs('pygame')
+except Exception:
+    pass
+
 base_datas = [('icon.png', '.'), ('icon.ico', '.')]
-all_datas = base_datas + piper_datas + onnx_datas
-all_bins = piper_manual_bins + onnx_bins
+all_datas = base_datas + piper_datas + onnx_datas + pygame_datas
+all_bins = piper_manual_bins + onnx_bins + pygame_bins
 
 base_hidden = [
     # 在线引擎
@@ -44,8 +54,10 @@ base_hidden = [
     'requests', 'tqdm', 'tabulate',
     # 音频与压缩
     'pydub', 'wave', 'audioop',
+    # 内置播放器
+    'pygame',
 ]
-all_hidden = base_hidden + piper_hidden + onnx_hidden
+all_hidden = base_hidden + piper_hidden + onnx_hidden + pygame_hidden
 
 # audioop-lts（Python 3.13+ 兼容）
 try:

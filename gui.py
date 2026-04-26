@@ -28,6 +28,7 @@ from tts_engine import (
     check_engine_ready,
     scan_storage_dependencies,
 )
+from audio_player import AudioPlayer
 
 
 class ScrollableFrame(ttk.Frame):
@@ -93,15 +94,38 @@ class AudiobookConverterApp:
         self.chapters = []
         self._last_download_desc = ""
 
+        # 内置音频播放器
+        self.player = AudioPlayer(on_state_change=self._on_player_state)
+        # 全文试听状态：'idle' / 'generating' / 'playing' / 'paused'
+        self._preview_state = "idle"
+        self._preview_should_stop = False
+
         self._build_ui()
 
         # 订阅下载进度事件（模型/依赖下载时触发）
         add_download_listener(self._on_download_progress)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    def _init_sash_position(self, paned: "ttk.PanedWindow"):
+        """让右侧面板初始约占 30% 宽度（最少 320px、最多 520px）"""
+        try:
+            paned.update_idletasks()
+            total = paned.winfo_width()
+            if total <= 0:
+                return
+            right_width = max(320, min(int(total * 0.3), 520))
+            sash_x = total - right_width
+            paned.sashpos(0, sash_x)
+        except Exception as e:
+            logger.debug(f"初始化分隔条位置失败: {e}")
+
     def _on_close(self):
         try:
             remove_download_listener(self._on_download_progress)
+        except Exception:
+            pass
+        try:
+            self.player.stop()
         except Exception:
             pass
         self.root.destroy()
@@ -112,12 +136,13 @@ class AudiobookConverterApp:
 
         ttk.Label(main, text=f"文字转有声读物 v{VERSION}", font=("Helvetica", 16, "bold")).pack(pady=(0, 8))
 
-        body = ttk.Frame(main)
+        # 左右两栏放进 PanedWindow，用户可以拖动中间分隔条调整比例
+        body = ttk.PanedWindow(main, orient=tk.HORIZONTAL)
         body.pack(fill=tk.BOTH, expand=True)
 
         # ===== 左侧：章节列表 + 文本 =====
         left = ttk.Frame(body)
-        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        body.add(left, weight=3)
 
         # 章节选择区
         ch_frame = ttk.LabelFrame(left, text="章节列表（勾选要生成的章节）", padding=5)
@@ -145,10 +170,11 @@ class AudiobookConverterApp:
         self.text_area = scrolledtext.ScrolledText(text_frame, wrap=tk.WORD, font=("Helvetica", 12))
         self.text_area.pack(fill=tk.BOTH, expand=True)
 
-        # ===== 右侧：可滚动控制面板 =====
-        right_outer = ttk.LabelFrame(body, text="设置", padding=4, width=340)
-        right_outer.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 0))
-        right_outer.pack_propagate(False)
+        # ===== 右侧：可滚动 + 可拖动调整宽度的控制面板 =====
+        right_outer = ttk.LabelFrame(body, text="设置（拖动左侧分隔条调整宽度）", padding=4)
+        body.add(right_outer, weight=1)
+        # 初始建议宽度：让 PanedWindow 给一个合适的初始 sash 位置
+        self.root.after(50, lambda: self._init_sash_position(body))
         self._right_scroller = ScrollableFrame(right_outer, width=320)
         self._right_scroller.pack(fill=tk.BOTH, expand=True)
         right = self._right_scroller.interior
@@ -243,7 +269,10 @@ class AudiobookConverterApp:
         ttk.Separator(right, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=8)
 
         # 操作按钮
-        ttk.Button(right, text="试听（前200字）", command=self._preview).pack(fill=tk.X, pady=2)
+        self.btn_preview_full = ttk.Button(
+            right, text="试听全文（可暂停）", command=self._toggle_preview_full
+        )
+        self.btn_preview_full.pack(fill=tk.X, pady=2)
         self.btn_convert = ttk.Button(right, text="生成MP3", command=self._start_convert)
         self.btn_convert.pack(fill=tk.X, pady=2)
         self.btn_pause = ttk.Button(right, text="暂停", command=self._pause_convert, state="disabled")
@@ -406,7 +435,7 @@ class AudiobookConverterApp:
                 voice = get_voice_id(voice_display, engine)
                 rate = self._get_rate_string()
                 path = generate_preview(self.SAMPLE_PREVIEW_TEXT, voice, rate, engine=engine)
-                self.root.after(0, lambda: self._play_audio(path))
+                self.root.after(0, lambda: self.player.play(path))
                 self.root.after(0, lambda: self.status_label.config(text="语音试听播放中..."))
             except Exception as e:
                 logger.error(f"语音试听失败: {e}")
@@ -636,46 +665,110 @@ class AudiobookConverterApp:
         val = self.rate_var.get()
         return f"+{val}%" if val >= 0 else f"{val}%"
 
-    def _preview(self):
+    # ----- 全文试听（无长度限制 + 可暂停 + 内置播放） -----
+
+    def _toggle_preview_full(self):
+        """单按钮控制：空闲→开始；生成中→中止生成；播放中→暂停；暂停中→继续。"""
+        state = self._preview_state
+        if state == "idle":
+            self._start_preview_full()
+        elif state == "generating":
+            # 中止 TTS 生成
+            self._preview_should_stop = True
+            self._set_preview_state("idle")
+            self.status_label.config(text="已中止试听生成")
+        elif state == "playing":
+            if self.player.pause():
+                self._set_preview_state("paused")
+            else:
+                # 后端不支持暂停（外部播放器），只能停止
+                self.player.stop()
+                self._set_preview_state("idle")
+        elif state == "paused":
+            if self.player.resume():
+                self._set_preview_state("playing")
+
+    def _start_preview_full(self):
         text = self.text_area.get("1.0", tk.END).strip()
         if not text:
             messagebox.showwarning("提示", "请先输入或导入文字内容")
             return
-
         engine = self.engine_var.get()
         ready, msg = check_engine_ready(engine)
         if not ready:
             messagebox.showerror("引擎不可用", msg)
             return
 
-        self.status_label.config(text="正在生成预览...")
-        self.progress["value"] = 0
+        # 大文本时给个友好提示
+        if len(text) > 5000:
+            ok = messagebox.askyesno(
+                "全文试听",
+                f"将试听全部 {len(text)} 字，生成可能需要数分钟。\n"
+                "生成期间可点击同一按钮中止；播放时可暂停 / 继续。\n\n是否继续？",
+            )
+            if not ok:
+                return
+
+        self._preview_should_stop = False
+        self._set_preview_state("generating")
+        self.status_label.config(text="正在生成全文试听...")
 
         def run():
             try:
                 voice = get_voice_id(self.voice_var.get(), engine)
                 rate = self._get_rate_string()
-                path = generate_preview(text, voice, rate, engine=engine)
-                self.root.after(0, lambda: self._play_audio(path))
-                self.root.after(0, lambda: self.status_label.config(text="预览生成完成，正在播放..."))
+                path = generate_preview(
+                    text, voice, rate, engine=engine,
+                    should_stop=lambda: self._preview_should_stop,
+                    max_chars=0,
+                )
+                if self._preview_should_stop:
+                    return
+                self.root.after(0, lambda: self._play_preview_file(path))
             except Exception as e:
-                logger.error(f"预览失败: {e}")
-                self.root.after(0, lambda: messagebox.showerror("错误", f"预览失败: {e}"))
-                self.root.after(0, lambda: self.status_label.config(text="预览失败"))
+                logger.error(f"全文试听失败: {e}", exc_info=True)
+                self.root.after(0, lambda: messagebox.showerror("错误", f"试听失败: {e}"))
+                self.root.after(0, lambda: self._set_preview_state("idle"))
+                self.root.after(0, lambda: self.status_label.config(text="试听失败"))
 
         threading.Thread(target=run, daemon=True).start()
 
-    def _play_audio(self, path: str):
+    def _play_preview_file(self, path: str):
         try:
-            system = platform.system()
-            if system == "Darwin":
-                subprocess.Popen(["afplay", path])
-            elif system == "Windows":
-                os.startfile(path)
+            self.player.play(path)
+            if self.player.supports_pause:
+                self._set_preview_state("playing")
+                self.status_label.config(text="试听播放中（点按钮可暂停）")
             else:
-                subprocess.Popen(["xdg-open", path])
-        except Exception:
-            pass
+                # 兜底：外部播放器无法暂停
+                self._set_preview_state("idle")
+                self.status_label.config(text="试听已交给系统播放器（pygame 不可用，无法在程序内暂停）")
+        except Exception as e:
+            logger.error(f"播放失败: {e}")
+            messagebox.showerror("错误", f"播放失败: {e}")
+            self._set_preview_state("idle")
+
+    def _on_player_state(self, state: str):
+        """来自 AudioPlayer 的状态回调（任意线程）"""
+        def apply():
+            if state == "ended":
+                self._set_preview_state("idle")
+                self.status_label.config(text="试听播放结束")
+            elif state == "stopped" and self._preview_state in ("playing", "paused"):
+                self._set_preview_state("idle")
+        self.root.after(0, apply)
+
+    def _set_preview_state(self, state: str):
+        self._preview_state = state
+        if not hasattr(self, "btn_preview_full"):
+            return
+        labels = {
+            "idle": "试听全文（可暂停）",
+            "generating": "中止生成",
+            "playing": "暂停播放",
+            "paused": "继续播放",
+        }
+        self.btn_preview_full.config(text=labels.get(state, "试听全文"))
 
     # ===== 生成控制 =====
 
