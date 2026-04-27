@@ -6,6 +6,7 @@ import sys
 import tkinter as tk
 
 from gui import AudiobookConverterApp
+from tts_engine import _load_config, _save_config
 
 
 def _enable_hidpi() -> None:
@@ -61,10 +62,23 @@ def _apply_tk_scaling(root: tk.Tk) -> None:
         pass
 
 
+def _try_init_theme(root: tk.Tk) -> bool:
+    """尝试加载 sv-ttk 主题（深色/浅色），返回是否成功"""
+    try:
+        import sv_ttk
+        cfg = _load_config()
+        theme = cfg.get("theme", "light")
+        sv_ttk.set_theme(theme)
+        return True
+    except ImportError:
+        return False
+
+
 def main():
     _enable_hidpi()
     root = tk.Tk()
     _apply_tk_scaling(root)
+    _try_init_theme(root)
     app = AudiobookConverterApp(root)
     root.mainloop()
 

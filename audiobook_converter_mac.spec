@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# macOS .app bundle spec - v2.6.0: 内置播放器 + 全文试听 + 可拖拽分隔条
+# macOS .app bundle spec - v2.6.0: ASR + CosyVoice + 深色主题 + 多文件 + 内置播放器
 
 import os
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs
@@ -14,6 +14,16 @@ piper_hidden = collect_submodules('piper')
 onnx_bins = collect_dynamic_libs('onnxruntime')
 onnx_datas = collect_data_files('onnxruntime')
 onnx_hidden = collect_submodules('onnxruntime')
+
+# --- pygame 内置播放器（含 SDL 原生库）---
+pygame_datas, pygame_hidden, pygame_bins = [], [], []
+try:
+    import pygame  # noqa: F401
+    pygame_datas = collect_data_files('pygame')
+    pygame_hidden = collect_submodules('pygame')
+    pygame_bins = collect_dynamic_libs('pygame')
+except Exception:
+    pass
 
 # --- Manual binary files ---
 import piper
@@ -40,16 +50,6 @@ all_datas = base_datas + piper_datas + onnx_datas + pygame_datas
 
 all_bins = manual_bins + onnx_bins + pygame_bins
 
-# pygame 内置播放器（含 SDL 原生库）
-pygame_datas, pygame_hidden, pygame_bins = [], [], []
-try:
-    import pygame  # noqa: F401
-    pygame_datas = collect_data_files('pygame')
-    pygame_hidden = collect_submodules('pygame')
-    pygame_bins = collect_dynamic_libs('pygame')
-except Exception:
-    pass
-
 base_hidden = [
     # 在线引擎
     'edge_tts', 'aiohttp', 'aiosignal', 'frozenlist', 'multidict', 'yarl',
@@ -63,7 +63,18 @@ base_hidden = [
     # 内置播放器
     'pygame',
 ]
-all_hidden = base_hidden + piper_hidden + onnx_hidden + pygame_hidden
+all_hidden = base_hidden + piper_hidden + onnx_hidden + pygame_hidden + [
+    # ASR 语音转文字
+    'faster_whisper', 'ctranslate2',
+    # 深色主题
+    'sv_ttk',
+    # 电子书读取
+    'ebooklib', 'fitz', 'pdfplumber',
+    # GPU 检测
+    'torch',
+    # CosyVoice（可选）
+    'cosyvoice', 'soundfile', 'librosa',
+]
 
 # --- Build Analysis ---
 a = Analysis(

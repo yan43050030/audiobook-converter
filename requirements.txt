@@ -12,6 +12,24 @@ audioop-lts>=0.2.0; python_version>="3.13"
 # 可选：读取 Word .docx 更可靠（未安装时回退到内建 zip/xml 解析，仍可读文本）
 # python-docx>=1.1.0
 
+# 可选：ASR 语音转文字引擎（需约 800MB 磁盘空间）
+# faster-whisper>=1.0.0
+
+# 可选：深色/浅色主题
+# sv-ttk>=2.5.0
+
+# 可选：EPUB 电子书读取
+# ebooklib>=0.18
+
+# 可选：PDF 读取（PyMuPDF 或 pdfplumber 二选一）
+# PyMuPDF>=1.23.0
+# pdfplumber>=0.10.0
+
+# 可选：CosyVoice 离线神经网络语音合成（需约 2-5GB 模型）
+# cosyvoice>=1.0.0
+# soundfile>=0.12.0
+# librosa>=0.10.0
+
 # 备注：本地系统语音无需额外依赖：
 #   macOS   - 内置 say 命令
 #   Windows - 内置 PowerShell + SAPI

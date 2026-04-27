@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# Windows exe spec - v2.6.0: 内置播放器 + 全文试听 + 可拖拽分隔条
+# Windows exe spec - v2.6.0: ASR + CosyVoice + 深色主题 + 多文件 + 内置播放器
 
 import os
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs
@@ -57,7 +57,18 @@ base_hidden = [
     # 内置播放器
     'pygame',
 ]
-all_hidden = base_hidden + piper_hidden + onnx_hidden + pygame_hidden
+all_hidden = base_hidden + piper_hidden + onnx_hidden + pygame_hidden + [
+    # ASR 语音转文字
+    'faster_whisper', 'ctranslate2',
+    # 深色主题
+    'sv_ttk',
+    # 电子书读取
+    'ebooklib', 'fitz', 'pdfplumber',
+    # GPU 检测
+    'torch',
+    # CosyVoice（可选）
+    'cosyvoice', 'soundfile', 'librosa',
+]
 
 # audioop-lts（Python 3.13+ 兼容）
 try:

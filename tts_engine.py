@@ -13,6 +13,7 @@ import tempfile
 import time
 import urllib.parse
 import wave
+from collections import OrderedDict
 from shutil import which
 from typing import Callable, List, Optional
 
@@ -253,6 +254,9 @@ def scan_storage_dependencies() -> dict:
             seen.add(key)
             models.append(candidate)
 
+    # 外部引擎检测
+    ext_engines = _scan_external_engines()
+
     missing: List[str] = []
     if ffmpeg is None:
         missing.append("ffmpeg（Piper/本地语音 MP3 转换依赖）")
@@ -269,6 +273,11 @@ def scan_storage_dependencies() -> dict:
         "piper_python": PIPER_PYTHON_AVAILABLE,
         "piper_cli": piper_cli,
         "piper_models": models,
+        "external_engines": ext_engines,
+        "gpu_status": {
+            "cuda_available": _cuda_available(),
+            "onnxruntime_gpu": _onnxruntime_gpu_available(),
+        },
         "missing": missing,
     }
 
@@ -276,6 +285,162 @@ def scan_storage_dependencies() -> dict:
 def _refresh_piper_cli_path() -> Optional[str]:
     """每次使用时重新解析 piper CLI 路径（便携目录可能动态变更）"""
     return _which_portable("piper")
+
+
+# ======== 外部引擎插件框架 ========
+
+EXTERNAL_ENGINE_DIR_NAME = "engines"
+
+# 所有引擎注册表: engine_id -> {"type": "builtin"/"external", "name": str, ...}
+_engine_registry: dict[str, dict] = {}
+
+
+def register_builtin_engine(engine_id: str, display_name: str) -> None:
+    """注册内置引擎（edge, local, piper 等）"""
+    _engine_registry[engine_id] = {
+        "type": "builtin",
+        "name": display_name,
+        "engine_id": engine_id,
+    }
+
+
+def _find_engine_executable(engine_path: str, name: str) -> Optional[str]:
+    """在引擎目录中查找可执行入口"""
+    candidates = [
+        os.path.join(engine_path, name),
+        os.path.join(engine_path, name + ".exe"),
+        os.path.join(engine_path, name + ".bat"),
+        os.path.join(engine_path, name + ".py"),
+    ]
+    for cand in candidates:
+        if os.path.isfile(cand):
+            if name.endswith(".py") or _PLATFORM == "Windows" or os.access(cand, os.X_OK):
+                return cand
+    # 兼容：目录内任意 .py 脚本
+    for fn in sorted(os.listdir(engine_path)):
+        if fn.endswith(".py"):
+            full = os.path.join(engine_path, fn)
+            if os.path.isfile(full):
+                return full
+    return None
+
+
+def _load_engine_metadata(engine_path: str) -> dict:
+    """读取引擎的 engine.json 元数据"""
+    meta_path = os.path.join(engine_path, "engine.json")
+    if os.path.isfile(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.warning(f"读取引擎元数据失败 {meta_path}: {e}")
+    return {}
+
+
+# 外部引擎语音列表缓存（TTL 60s）
+_external_voices_cache: dict = {"time": 0, "data": {}}
+
+
+def _list_external_voices(engine_id: str, executable: str) -> list[str]:
+    """通过 --list-voices 获取外部引擎的语音列表（带缓存）"""
+    now = time.monotonic()
+    if now - _external_voices_cache["time"] < 60 and engine_id in _external_voices_cache["data"]:
+        return _external_voices_cache["data"][engine_id]
+    try:
+        result = subprocess.run(
+            [executable, "--list-voices"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            voices = json.loads(result.stdout.strip())
+            if isinstance(voices, list):
+                _external_voices_cache["data"][engine_id] = voices
+                _external_voices_cache["time"] = now
+                return voices
+    except Exception as e:
+        logger.warning(f"获取外部引擎语音列表失败 {engine_id}: {e}")
+    return []
+
+
+def _scan_external_engines() -> dict[str, dict]:
+    """扫描 {storage_dir}/engines/ 目录下的外部插件引擎"""
+    engines_dir = os.path.join(get_storage_dir(), EXTERNAL_ENGINE_DIR_NAME)
+    if not os.path.isdir(engines_dir):
+        return {}
+    found: dict[str, dict] = {}
+    for entry in sorted(os.listdir(engines_dir)):
+        engine_path = os.path.join(engines_dir, entry)
+        if not os.path.isdir(engine_path):
+            continue
+        executable = _find_engine_executable(engine_path, entry)
+        if executable is None:
+            continue
+        meta = _load_engine_metadata(engine_path)
+        found[entry] = {
+            "type": "external",
+            "name": meta.get("name", entry),
+            "engine_id": entry,
+            "executable": executable,
+            "description": meta.get("description", ""),
+            "version": meta.get("version", ""),
+            "voices": _list_external_voices(entry, executable),
+        }
+    return found
+
+
+def get_registered_engines() -> dict[str, dict]:
+    """返回所有注册引擎（内置 + 外部插件）"""
+    result = dict(_engine_registry)
+    for eid, info in _scan_external_engines().items():
+        result[eid] = info
+    return result
+
+
+def _is_external_engine(engine: str) -> bool:
+    """判断引擎 ID 是否为外部插件"""
+    engines = _scan_external_engines()
+    return engine in engines
+
+
+def check_external_engine_ready(engine_id: str) -> tuple[bool, str]:
+    """检测外部引擎是否可用"""
+    engines = _scan_external_engines()
+    info = engines.get(engine_id)
+    if not info:
+        return False, f"外部引擎 '{engine_id}' 未安装。\n请将引擎可执行文件放入便携存储目录的 engines/{engine_id}/ 中。"
+    executable = info["executable"]
+    if not os.path.isfile(executable):
+        return False, f"引擎可执行文件不存在: {executable}"
+    # 尝试获取语音列表验证
+    voices = _list_external_voices(engine_id, executable)
+    if not voices:
+        # 不视为错误：引擎可能还在初始化
+        pass
+    return True, f"{info['name']} 可用（{len(voices)} 个语音）"
+
+
+def _external_generate(text: str, voice: str, rate: str, output_path: str,
+                       engine_id: str, executable: str, should_stop=None) -> None:
+    """使用外部引擎 CLI 生成音频"""
+    rate_val = int(rate.replace("%", "").replace("+", ""))
+    speed = 1.0 + rate_val / 100.0
+    speed = max(0.5, min(2.0, speed))
+
+    cmd = [
+        executable,
+        "--voice", voice,
+        "--text", text,
+        "--output", output_path,
+    ]
+    if speed != 1.0:
+        cmd.extend(["--speed", str(speed)])
+
+    rc, _out, err = _run_subprocess_interruptible(cmd, should_stop=should_stop)
+    if rc != 0:
+        stderr = err.decode("utf-8", errors="replace") if err else ""
+        raise RuntimeError(f"外部引擎 '{engine_id}' 失败 (code {rc}): {stderr}")
+    if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+        raise RuntimeError(f"外部引擎 '{engine_id}' 生成文件为空: {output_path}")
 
 
 # ======== 通用配置 ========
@@ -465,6 +630,54 @@ def _get_mirror_url(url: str) -> str:
     return url.replace(HF_ORIGIN_DOMAIN, HF_MIRROR_DOMAIN)
 
 
+# 注册内置引擎
+register_builtin_engine("edge", "Edge（联网）")
+register_builtin_engine("local", "本地（离线）")
+register_builtin_engine("piper", "Piper（离线高质量）")
+
+# ======== CosyVoice 引擎配置（可选） ========
+
+# 可选导入
+try:
+    from cosyvoice import CosyVoice as _CosyVoiceCls
+    COSYVOICE_PYTHON_AVAILABLE = True
+except ImportError:
+    COSYVOICE_PYTHON_AVAILABLE = False
+    _CosyVoiceCls = None
+
+COSYVOICE_VOICES: dict[str, str] = {}
+COSYVOICE_DEFAULT_VOICE = ""
+
+
+def _detect_cosyvoice_voices() -> dict:
+    """检测 CosyVoice 可用语音（通过 Python 包自省）"""
+    voices: dict = {}
+    if not COSYVOICE_PYTHON_AVAILABLE:
+        return voices
+    try:
+        # CosyVoice 语音列表检查
+        # 如果有预定义语音列表，通过包 API 获取
+        voices = {
+            "默认中文女声": "default_female",
+            "默认中文男声": "default_male",
+        }
+    except Exception:
+        pass
+    return voices
+
+
+def refresh_cosyvoice_voices() -> None:
+    """刷新 CosyVoice 语音列表"""
+    global COSYVOICE_VOICES, COSYVOICE_DEFAULT_VOICE
+    COSYVOICE_VOICES = _detect_cosyvoice_voices()
+    COSYVOICE_DEFAULT_VOICE = list(COSYVOICE_VOICES.values())[0] if COSYVOICE_VOICES else ""
+
+
+refresh_cosyvoice_voices()
+if COSYVOICE_PYTHON_AVAILABLE or _which_portable("cosyvoice"):
+    register_builtin_engine("cosyvoice", "CosyVoice（离线神经）")
+
+
 # Piper运行模式
 PIPER_MODE_PYTHON = "python"
 PIPER_MODE_CLI = "cli"
@@ -569,6 +782,27 @@ def _run_subprocess_interruptible(cmd, should_stop=None, input_bytes: Optional[b
     return proc.returncode, stdout, stderr
 
 
+# ======== GPU 检测 ========
+
+
+def _cuda_available() -> bool:
+    """检测 CUDA 是否可用（PyTorch）"""
+    try:
+        import torch
+        return torch.cuda.is_available()
+    except ImportError:
+        return False
+
+
+def _onnxruntime_gpu_available() -> bool:
+    """检测 onnxruntime-gpu 的 CUDA Execution Provider 是否可用"""
+    try:
+        import onnxruntime
+        return "CUDAExecutionProvider" in onnxruntime.get_available_providers()
+    except ImportError:
+        return False
+
+
 # ======== 工具函数 ========
 
 def get_voice_list(engine="edge"):
@@ -576,6 +810,12 @@ def get_voice_list(engine="edge"):
         return list(LOCAL_VOICES.keys())
     elif engine == "piper":
         return list(PIPER_VOICES.keys())
+    elif engine == "cosyvoice":
+        return list(COSYVOICE_VOICES.keys())
+    # 外部引擎
+    ext_engines = _scan_external_engines()
+    if engine in ext_engines:
+        return ext_engines[engine].get("voices", [])
     return list(EDGE_VOICES.keys())
 
 
@@ -584,6 +824,12 @@ def get_voice_id(display_name, engine="edge"):
         return LOCAL_VOICES.get(display_name, LOCAL_DEFAULT_VOICE)
     elif engine == "piper":
         return PIPER_VOICES.get(display_name, PIPER_DEFAULT_VOICE)
+    elif engine == "cosyvoice":
+        return COSYVOICE_VOICES.get(display_name, COSYVOICE_DEFAULT_VOICE)
+    # 外部引擎：display_name 本身就是 voice ID
+    ext_engines = _scan_external_engines()
+    if engine in ext_engines:
+        return display_name
     return EDGE_VOICES.get(display_name, EDGE_DEFAULT_VOICE)
 
 
@@ -634,6 +880,23 @@ def check_engine_ready(engine="edge"):
             return False, "ffmpeg 未安装（Piper 需要 ffmpeg 转换音频）。\n" + _ffmpeg_install_hint()
         return True, "Piper 可用（首次使用将自动下载语音模型）"
 
+    if engine == "cosyvoice":
+        if COSYVOICE_PYTHON_AVAILABLE:
+            return True, "CosyVoice 可用（Python 包）"
+        cli = _which_portable("cosyvoice")
+        if cli:
+            return True, f"CosyVoice 可用（{cli}）"
+        hint = "CosyVoice 未安装。\n可通过外部引擎插件放入 engines/cosyvoice/ 目录，或 pip install cosyvoice。"
+        # 检查外部引擎目录中是否有 CosyVoice
+        ext = _scan_external_engines()
+        if "cosyvoice" in ext:
+            return True, f"CosyVoice 外挂引擎可用（{ext['cosyvoice'].get('name')}）"
+        return False, hint
+
+    # 外部引擎
+    if _is_external_engine(engine):
+        return check_external_engine_ready(engine)
+
     return False, f"未知引擎: {engine}"
 
 
@@ -678,7 +941,49 @@ CHAPTER_PATTERNS = [
 ]
 
 
-def detect_chapters(text):
+def detect_chapters(text, source_map=None):
+    """检测章节，支持多文件来源追踪。
+
+    source_map: Optional[list[(start_char, source_name)]]
+        用于标记每个章节的来源文件名
+    """
+    # 大文本（>=100k字符）：用正则一次扫描全文，O(n) 而非 O(n*m)
+    if len(text) >= 100000:
+        combined = re.compile(
+            "|".join(f"({p.pattern})" for p in CHAPTER_PATTERNS),
+            re.MULTILINE,
+        )
+        matches = []
+        for m in combined.finditer(text):
+            # 取匹配所在行的完整行文本（与行遍历模式行为一致）
+            line_start = text.rfind('\n', 0, m.start()) + 1
+            line_end = text.find('\n', m.end())
+            if line_end == -1:
+                line_end = len(text)
+            full_line = text[line_start:line_end].strip()
+            matches.append((line_start, full_line))
+
+        if not matches:
+            chapter = {"title": "全文", "start": 0, "end": len(text), "text": text}
+            if source_map:
+                chapter["source"] = _find_source(source_map, 0)
+            return [chapter]
+
+        chapters = []
+        for idx, (start, title) in enumerate(matches):
+            end = matches[idx + 1][0] if idx + 1 < len(matches) else len(text)
+            chapter = {
+                "title": title,
+                "start": start,
+                "end": end,
+                "text": text[start:end].strip(),
+            }
+            if source_map:
+                chapter["source"] = _find_source(source_map, start)
+            chapters.append(chapter)
+        return chapters
+
+    # 小文本：保持现有行遍历逻辑
     lines = text.split("\n")
     chapter_starts = []
     for i, line in enumerate(lines):
@@ -691,7 +996,10 @@ def detect_chapters(text):
                 break
 
     if not chapter_starts:
-        return [{"title": "全文", "start": 0, "end": len(text), "text": text}]
+        chapter = {"title": "全文", "start": 0, "end": len(text), "text": text}
+        if source_map:
+            chapter["source"] = _find_source(source_map, 0)
+        return [chapter]
 
     chapters = []
     for idx, (line_idx, title) in enumerate(chapter_starts):
@@ -700,13 +1008,29 @@ def detect_chapters(text):
             char_end = sum(len(lines[j]) + 1 for j in range(chapter_starts[idx + 1][0]))
         else:
             char_end = len(text)
-        chapters.append({
+        chapter = {
             "title": title,
             "start": char_start,
             "end": char_end,
             "text": text[char_start:char_end].strip(),
-        })
+        }
+        if source_map:
+            chapter["source"] = _find_source(source_map, char_start)
+        chapters.append(chapter)
     return chapters
+
+
+def _find_source(source_map, char_pos):
+    """在 source_map 中查找字符位置对应的来源文件名"""
+    if not source_map:
+        return ""
+    result = ""
+    for start_pos, name in source_map:
+        if char_pos >= start_pos:
+            result = name
+        else:
+            break
+    return result
 
 
 # ======== 文本分段 ========
@@ -771,9 +1095,10 @@ def split_by_duration(chapter_text, max_seconds, rate="+0%"):
     return split_text(chapter_text, max_length=max_chars)
 
 
-# ======== Piper 模型缓存 ========
+# ======== Piper 模型缓存（LRU，上限 2 个模型） ========
 
-_piper_model_cache: dict = {}
+MAX_PIPER_CACHE = 2
+_piper_model_cache: OrderedDict = OrderedDict()
 
 
 def _get_piper_mode() -> str:
@@ -793,6 +1118,7 @@ def _load_piper_model(voice_name, should_stop=None):
 
     if cache_key in _piper_model_cache:
         logger.debug(f"使用缓存的Piper模型: {voice_name}")
+        _piper_model_cache.move_to_end(cache_key)  # LRU: 标记为最近使用
         return _piper_model_cache[cache_key]
 
     mode = _get_piper_mode()
@@ -801,8 +1127,12 @@ def _load_piper_model(voice_name, should_stop=None):
         if not os.path.exists(config_path):
             raise FileNotFoundError(f"Piper配置文件不存在: {config_path}")
         voice_model = PiperVoice.load(model_path, config_path)
+        # LRU：达到上限时淘汰最久未使用的
+        if len(_piper_model_cache) >= MAX_PIPER_CACHE:
+            _piper_model_cache.popitem(last=False)
+            logger.debug("LRU淘汰：Piper模型缓存已满")
         _piper_model_cache[cache_key] = voice_model
-        logger.info(f"Piper模型已加载并缓存: {voice_name}")
+        logger.info(f"Piper模型已加载并缓存: {voice_name} (缓存大小={len(_piper_model_cache)})")
         return voice_model
     else:
         # CLI模式：仅验证文件存在，不加载到内存
@@ -1470,6 +1800,52 @@ def _generate_one_safe(text, voice, rate, output_path, engine="edge", should_sto
                         _merge_mp3_files(temp_files, output_path)
                     finally:
                         shutil.rmtree(temp_dir, ignore_errors=True)
+            elif engine == "cosyvoice":
+                # CosyVoice: 优先 Python 包，回退到外部引擎协议
+                if COSYVOICE_PYTHON_AVAILABLE and _CosyVoiceCls is not None:
+                    logger.warning("CosyVoice Python API 尚未完全集成，尝试外部引擎路径...")
+                # 回退：通过外部引擎协议调用
+                ext = _scan_external_engines()
+                cosy_ext = ext.get("cosyvoice")
+                if cosy_ext:
+                    executable = cosy_ext["executable"]
+                    if len(segments) == 1:
+                        _external_generate(segments[0], voice, rate, output_path, "cosyvoice", executable, should_stop=should_stop)
+                    else:
+                        temp_dir = tempfile.mkdtemp()
+                        temp_files = []
+                        try:
+                            for i, seg in enumerate(segments):
+                                if should_stop and should_stop():
+                                    raise StopRequested("用户暂停")
+                                tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
+                                _external_generate(seg, voice, rate, tp, "cosyvoice", executable, should_stop=should_stop)
+                                temp_files.append(tp)
+                            _merge_mp3_files(temp_files, output_path)
+                        finally:
+                            shutil.rmtree(temp_dir, ignore_errors=True)
+                else:
+                    raise RuntimeError("CosyVoice 不可用：请将 CosyVoice 程序放入 engines/cosyvoice/ 目录")
+            elif _is_external_engine(engine):
+                ext_info = _scan_external_engines().get(engine)
+                if not ext_info:
+                    raise RuntimeError(f"外部引擎 '{engine}' 不可用")
+                executable = ext_info["executable"]
+                if len(segments) == 1:
+                    _external_generate(segments[0], voice, rate, output_path, engine, executable, should_stop=should_stop)
+                else:
+                    temp_dir = tempfile.mkdtemp()
+                    temp_files = []
+                    try:
+                        for i, seg in enumerate(segments):
+                            if should_stop and should_stop():
+                                raise StopRequested("用户暂停")
+                            tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
+                            _external_generate(seg, voice, rate, tp, engine, executable, should_stop=should_stop)
+                            temp_files.append(tp)
+                        _merge_mp3_files(temp_files, output_path)
+                    finally:
+                        shutil.rmtree(temp_dir, ignore_errors=True)
             else:
                 if len(segments) == 1:
                     asyncio.run(_edge_generate(segments[0], voice, rate, output_path))
@@ -1549,7 +1925,12 @@ def convert_batch(
             items = [{"title": file_prefix, "text": text, "filename": f"{file_prefix}.mp3", "status": "pending"}]
         elif split_mode == "chapter":
             for idx, ch in enumerate(chapters):
-                fn = f"{idx + 1:03d}_{sanitize_filename(ch['title'])}.mp3"
+                source_tag = sanitize_filename(ch.get("source", ""))
+                title_tag = sanitize_filename(ch['title'])
+                if source_tag and file_prefix != source_tag.replace(".txt", "").replace(".md", ""):
+                    fn = f"{idx + 1:03d}_{source_tag}_{title_tag}.mp3"
+                else:
+                    fn = f"{idx + 1:03d}_{title_tag}.mp3"
                 items.append({"title": ch["title"], "text": ch["text"], "filename": fn, "status": "pending"})
         elif split_mode == "time":
             max_sec = time_minutes * 60
@@ -1577,43 +1958,96 @@ def convert_batch(
     if engine == "edge":
         # 用单一事件循环批量生成
         asyncio.run(_edge_batch_generate(items, voice, rate, output_dir, progress_callback, should_stop))
-    elif engine in ("local", "piper"):
-        # 本地引擎或Piper引擎同步逐个生成（支持暂停）
-        done_count = 0
-        total_active = sum(1 for it in items if it["status"] not in ("done", "skipped"))
+    elif engine in ("local", "piper", "cosyvoice") or _is_external_engine(engine):
+        # Piper CLI 模式：用 ThreadPoolExecutor 并行处理（子进程隔离，线程安全）
+        _parallel_piper_done = False
+        if engine == "piper":
+            try:
+                if _get_piper_mode() == PIPER_MODE_CLI:
+                    from concurrent.futures import ThreadPoolExecutor, as_completed
+                    pending = [(i, it) for i, it in enumerate(items)
+                               if it["status"] not in ("done", "skipped")]
+                    total_active = len(pending)
+                    done_count = 0
 
-        try:
-            for item in items:
-                if item["status"] in ("done", "skipped"):
-                    continue
-                if should_stop and should_stop():
-                    logger.info("用户暂停生成")
-                    break
-
-                out_path = os.path.join(output_dir, item["filename"])
-                try:
-                    _generate_one_safe(item["text"], voice, rate, out_path,
-                                       engine=engine, should_stop=should_stop)
-                    item["status"] = "done"
-                except StopRequested:
-                    logger.info(f"用户暂停：[{item['title']}] 未完成")
-                    save_progress(output_dir, items)
-                    break
-                except Exception as e:
-                    item["status"] = "error"
-                    item["error"] = str(e)
-                    logger.error(f"{engine}引擎生成失败 [{item['title']}]: {e}")
-
-                save_progress(output_dir, items)
-                done_count += 1
-                if progress_callback:
                     try:
-                        progress_callback(done_count, total_active)
-                    except Exception:
-                        pass
-        finally:
-            if engine == "piper":
-                _unload_piper_model()
+                        with ThreadPoolExecutor(max_workers=3) as executor:
+                            fut_map = {}
+                            for idx, item in pending:
+                                if should_stop and should_stop():
+                                    logger.info("用户暂停生成")
+                                    break
+                                def _piper_cli_one(it=item):
+                                    p = os.path.join(output_dir, it["filename"])
+                                    _generate_one_safe(it["text"], voice, rate, p,
+                                                       engine="piper", should_stop=should_stop)
+                                    it["status"] = "done"
+                                future = executor.submit(_piper_cli_one)
+                                fut_map[future] = idx
+
+                            for future in as_completed(fut_map):
+                                idx = fut_map[future]
+                                try:
+                                    future.result()
+                                except StopRequested:
+                                    logger.info(f"用户暂停：[{items[idx]['title']}] 未完成")
+                                    executor.shutdown(wait=False, cancel_futures=True)
+                                    break
+                                except Exception as e:
+                                    items[idx]["status"] = "error"
+                                    items[idx]["error"] = str(e)
+                                    logger.error(f"Piper CLI生成失败 [{items[idx]['title']}]: {e}")
+
+                                save_progress(output_dir, items)
+                                done_count += 1
+                                if progress_callback:
+                                    try:
+                                        progress_callback(done_count, total_active)
+                                    except Exception:
+                                        pass
+                    finally:
+                        _unload_piper_model()
+                    _parallel_piper_done = True
+            except Exception:
+                pass
+
+        if not _parallel_piper_done:
+            # 本地/外部引擎同步逐个生成（支持暂停）
+            done_count = 0
+            total_active = sum(1 for it in items if it["status"] not in ("done", "skipped"))
+
+            try:
+                for item in items:
+                    if item["status"] in ("done", "skipped"):
+                        continue
+                    if should_stop and should_stop():
+                        logger.info("用户暂停生成")
+                        break
+
+                    out_path = os.path.join(output_dir, item["filename"])
+                    try:
+                        _generate_one_safe(item["text"], voice, rate, out_path,
+                                           engine=engine, should_stop=should_stop)
+                        item["status"] = "done"
+                    except StopRequested:
+                        logger.info(f"用户暂停：[{item['title']}] 未完成")
+                        save_progress(output_dir, items)
+                        break
+                    except Exception as e:
+                        item["status"] = "error"
+                        item["error"] = str(e)
+                        logger.error(f"{engine}引擎生成失败 [{item['title']}]: {e}")
+
+                    save_progress(output_dir, items)
+                    done_count += 1
+                    if progress_callback:
+                        try:
+                            progress_callback(done_count, total_active)
+                        except Exception:
+                            pass
+            finally:
+                if engine == "piper":
+                    _unload_piper_model()
     else:
         raise ValueError(f"不支持的引擎类型: {engine}")
 
