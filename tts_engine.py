@@ -1,4 +1,4 @@
-"""TTS引擎封装 - 支持 edge-tts（联网）、系统语音（跨平台离线）、Piper（离线高质量） v2.5.0"""
+"""TTS引擎封装 - 支持 edge-tts（联网）、系统语音（跨平台离线）、Piper（离线高质量） v3.0.0"""
 
 import asyncio
 import json
@@ -40,7 +40,7 @@ except ImportError:
     PYDUB_AVAILABLE = False
     AudioSegment = None
 
-VERSION = "2.6.0"
+VERSION = "3.0.0"
 
 # 当前平台
 _PLATFORM = platform.system()  # "Darwin" / "Windows" / "Linux"

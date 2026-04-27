@@ -1,4 +1,4 @@
-"""GUI界面 - 文字转有声读物 v2.5"""
+"""GUI界面 - 文字转有声读物 v3.0.0"""
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
@@ -110,6 +110,7 @@ class AudiobookConverterApp:
         self._preview_should_stop = False
 
         self._build_ui()
+        self._configure_styles()
         self._bind_shortcuts()
         self._restore_window_geometry()
 
@@ -180,7 +181,7 @@ class AudiobookConverterApp:
 
     def _refresh_chapters_list(self, filter_text: str = ""):
         """刷新章节列表显示，支持过滤"""
-        self.chapter_listbox.delete(0, tk.END)
+        self.chapter_tree.delete(*self.chapter_tree.get_children())
         for idx, ch in enumerate(self.chapters):
             if filter_text and filter_text not in ch["title"].lower():
                 continue
@@ -188,14 +189,15 @@ class AudiobookConverterApp:
             source = ch.get("source", "")
             if source and len(self.file_paths) > 1:
                 display = f"[{source}] {display}"
-            self.chapter_listbox.insert(tk.END, display)
-            self.chapter_listbox.selection_set(tk.END)
+            self.chapter_tree.insert("", tk.END, text=display)
+        for item in self.chapter_tree.get_children():
+            self.chapter_tree.selection_add(item)
 
     def _build_ui(self):
         main = ttk.Frame(self.root, padding=10)
         main.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(main, text=f"文字转有声读物 v{VERSION}", font=("Helvetica", 16, "bold")).pack(pady=(0, 8))
+        ttk.Label(main, text=f"文字转有声读物 v{VERSION}", style="Title.TLabel").pack(pady=(0, 8))
 
         notebook = ttk.Notebook(main)
         notebook.pack(fill=tk.BOTH, expand=True)
@@ -219,7 +221,7 @@ class AudiobookConverterApp:
 
         ch_btns = ttk.Frame(ch_frame)
         ch_btns.pack(fill=tk.X, pady=(0, 3))
-        ttk.Button(ch_btns, text="全选", command=self._select_all_chapters).pack(side=tk.LEFT, padx=(0, 3))
+        ttk.Button(ch_btns, text="全选", command=self._select_all_chapters).pack(side=tk.LEFT, padx=(0, 4))
         ttk.Button(ch_btns, text="全不选", command=self._deselect_all_chapters).pack(side=tk.LEFT)
         self.chapter_count_label = ttk.Label(ch_btns, text="", foreground="gray")
         self.chapter_count_label.pack(side=tk.RIGHT)
@@ -230,15 +232,15 @@ class AudiobookConverterApp:
         self.chapter_search_var = tk.StringVar()
         self.chapter_search_var.trace("w", lambda *a: self._filter_chapters())
         ttk.Entry(search_frame, textvariable=self.chapter_search_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Label(search_frame, text="🔍 过滤", font=("Helvetica", 9), foreground="gray").pack(side=tk.RIGHT, padx=(3, 0))
+        ttk.Label(search_frame, text="🔍 过滤", font=("Helvetica", 9), foreground="gray").pack(side=tk.RIGHT, padx=(4, 0))
 
         list_frame = ttk.Frame(ch_frame)
         list_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.chapter_listbox = tk.Listbox(list_frame, selectmode=tk.EXTENDED, height=6, font=("Helvetica", 11))
-        ch_scroll = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.chapter_listbox.yview)
-        self.chapter_listbox.config(yscrollcommand=ch_scroll.set)
-        self.chapter_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.chapter_tree = ttk.Treeview(list_frame, columns=(), show="tree", selectmode="extended", height=6)
+        ch_scroll = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.chapter_tree.yview)
+        self.chapter_tree.configure(yscrollcommand=ch_scroll.set)
+        self.chapter_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         ch_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
         # 文本区
@@ -255,148 +257,136 @@ class AudiobookConverterApp:
         self._right_scroller = ScrollableFrame(right_outer, width=320)
         self._right_scroller.pack(fill=tk.BOTH, expand=True)
         right = self._right_scroller.interior
+        pad = 4  # 标准化内边距单位
 
-        # 文件
-        # 主题切换
-        self._theme_btn = ttk.Button(right, text="🔄 切换深色/浅色主题",
+        # ===== 外观 =====
+        appearance = ttk.LabelFrame(right, text="外观", padding=pad)
+        appearance.pack(fill=tk.X, pady=(0, pad))
+        self._theme_btn = ttk.Button(appearance, text="🔄 切换深色/浅色主题",
                                      command=self._toggle_theme)
-        self._theme_btn.pack(fill=tk.X, pady=(0, 6))
+        self._theme_btn.pack(fill=tk.X)
 
-        # 文件导入（支持多文件）
-        file_import_frame = ttk.Frame(right)
-        file_import_frame.pack(fill=tk.X, pady=(0, 3))
-        ttk.Button(file_import_frame, text="📂 添加文件（可多选）", command=self._add_files).pack(side=tk.LEFT, padx=(0, 3))
-        ttk.Button(file_import_frame, text="移除选中", command=self._remove_selected_file).pack(side=tk.LEFT)
-
-        self.file_tree = ttk.Treeview(right, columns=("name",), show="tree", height=4)
-        self.file_tree.pack(fill=tk.X, pady=(0, 2))
+        # ===== 文件 =====
+        files_group = ttk.LabelFrame(right, text="文件", padding=pad)
+        files_group.pack(fill=tk.X, pady=(0, pad))
+        file_import_frame = ttk.Frame(files_group)
+        file_import_frame.pack(fill=tk.X, pady=(0, pad))
+        ttk.Button(file_import_frame, text="📂 添加文件（可多选）", command=self._add_files).pack(side=tk.LEFT, padx=(0, pad))
+        ttk.Button(file_import_frame, text="🗑 移除选中", command=self._remove_selected_file).pack(side=tk.LEFT)
+        self.file_tree = ttk.Treeview(files_group, columns=("name",), show="tree", height=4)
+        self.file_tree.pack(fill=tk.X, pady=(0, pad))
         self.file_tree.bind("<Delete>", lambda e: self._remove_selected_file())
-        self.file_count_label = ttk.Label(right, text="未加载文件", foreground="gray")
-        self.file_count_label.pack(fill=tk.X, pady=(0, 6))
+        self.file_count_label = ttk.Label(files_group, text="未加载文件", foreground="gray")
+        self.file_count_label.pack(fill=tk.X)
 
-        # TTS 引擎
-        ttk.Label(right, text="语音引擎:").pack(anchor=tk.W)
+        # ===== 引擎与语音 =====
+        engine_group = ttk.LabelFrame(right, text="引擎与语音", padding=pad)
+        engine_group.pack(fill=tk.X, pady=(0, pad))
+        ttk.Label(engine_group, text="语音引擎:", style="Section.TLabel").pack(anchor=tk.W, pady=(0, pad))
         self.engine_var = tk.StringVar(value="edge")
-        eng_frame = ttk.Frame(right)
-        eng_frame.pack(fill=tk.X, pady=(2, 2))
-        ttk.Radiobutton(eng_frame, text="Edge（联网）", variable=self.engine_var,
+        ttk.Radiobutton(engine_group, text="Edge（联网）", variable=self.engine_var,
                         value="edge", command=self._on_engine_change).pack(anchor=tk.W)
-        ttk.Radiobutton(eng_frame, text="本地（离线）", variable=self.engine_var,
+        ttk.Radiobutton(engine_group, text="本地（离线）", variable=self.engine_var,
                         value="local", command=self._on_engine_change).pack(anchor=tk.W)
-        ttk.Radiobutton(eng_frame, text="Piper（离线高质量）", variable=self.engine_var,
+        ttk.Radiobutton(engine_group, text="Piper（离线高质量）", variable=self.engine_var,
                         value="piper", command=self._on_engine_change).pack(anchor=tk.W)
-        # 外部引擎容器（动态添加）
-        self._ext_engine_frame = ttk.Frame(right)
+        self._ext_engine_frame = ttk.Frame(engine_group)
         self._ext_engine_frame.pack(fill=tk.X)
-
         # 引擎状态
-        self.engine_status_label = ttk.Label(right, text="", wraplength=280, foreground="gray")
-        self.engine_status_label.pack(fill=tk.X, pady=(0, 4))
-
-        # 语音
-        voice_row = ttk.Frame(right)
-        voice_row.pack(fill=tk.X, pady=(6, 0))
+        self.engine_status_label = ttk.Label(engine_group, text="", wraplength=280, foreground="gray")
+        self.engine_status_label.pack(fill=tk.X, pady=(pad, 0))
+        # 语音选择
+        voice_row = ttk.Frame(engine_group)
+        voice_row.pack(fill=tk.X, pady=(pad, 0))
         ttk.Label(voice_row, text="语音:").pack(side=tk.LEFT)
+        ttk.Button(voice_row, text="试听", width=5, command=self._preview_voice_sample).pack(side=tk.RIGHT, padx=(0, pad))
         ttk.Button(voice_row, text="刷新", width=5, command=self._refresh_voices).pack(side=tk.RIGHT)
-        ttk.Button(voice_row, text="试听", width=5, command=self._preview_voice_sample).pack(side=tk.RIGHT, padx=(0, 3))
         self.voice_var = tk.StringVar()
-        self.voice_combo = ttk.Combobox(right, textvariable=self.voice_var, state="readonly")
-        self.voice_combo.pack(fill=tk.X, pady=(2, 8))
+        self.voice_combo = ttk.Combobox(engine_group, textvariable=self.voice_var, state="readonly")
+        self.voice_combo.pack(fill=tk.X, pady=(pad, 0))
         self._on_engine_change()
 
-        ttk.Separator(right, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=4)
-
-        # 便携存储目录（Piper 模型、外置 ffmpeg/piper 可执行文件）
-        ttk.Label(right, text="便携存储目录（可选）:").pack(anchor=tk.W)
+        # ===== 存储与依赖 =====
+        storage_group = ttk.LabelFrame(right, text="存储与依赖", padding=pad)
+        storage_group.pack(fill=tk.X, pady=(0, pad))
+        ttk.Label(storage_group, text="便携存储目录:", style="Section.TLabel").pack(anchor=tk.W, pady=(0, pad))
         self.storage_var = tk.StringVar(value=get_storage_dir())
-        ttk.Entry(right, textvariable=self.storage_var, state="readonly").pack(fill=tk.X, pady=(2, 2))
-        storage_btns = ttk.Frame(right)
-        storage_btns.pack(fill=tk.X, pady=(0, 2))
-        ttk.Button(storage_btns, text="选择文件夹", command=self._choose_storage).pack(side=tk.LEFT, padx=(0, 3))
-        ttk.Button(storage_btns, text="打开", command=self._open_storage).pack(side=tk.LEFT, padx=(0, 3))
+        ttk.Entry(storage_group, textvariable=self.storage_var, state="readonly").pack(fill=tk.X, pady=(0, pad))
+        storage_btns = ttk.Frame(storage_group)
+        storage_btns.pack(fill=tk.X, pady=(0, pad))
+        ttk.Button(storage_btns, text="选择文件夹", command=self._choose_storage).pack(side=tk.LEFT, padx=(0, pad))
+        ttk.Button(storage_btns, text="打开", command=self._open_storage).pack(side=tk.LEFT, padx=(0, pad))
         ttk.Button(storage_btns, text="恢复默认", command=self._reset_storage).pack(side=tk.LEFT)
         ttk.Label(
-            right,
-            text="提示：放入 bin/ 可携带 ffmpeg、piper 可执行文件；piper-models/ 存放语音包。\n"
-                 "也可直接拷贝整个便携包到该目录，程序会自动在子目录里递归搜索。",
+            storage_group,
+            text="bin/ 存放可执行文件；piper-models/ 存放语音包。程序自动在子目录搜索。",
             wraplength=280, foreground="gray",
-        ).pack(fill=tk.X, pady=(0, 4))
-
+        ).pack(fill=tk.X, pady=(0, pad))
         # 依赖检测面板
-        deps_frame = ttk.LabelFrame(right, text="依赖检测", padding=4)
-        deps_frame.pack(fill=tk.X, pady=(2, 4))
+        deps_frame = ttk.LabelFrame(storage_group, text="依赖检测", padding=pad)
+        deps_frame.pack(fill=tk.X)
         self.deps_text = tk.Text(deps_frame, height=6, wrap=tk.WORD, relief=tk.FLAT,
-                                 font=("Helvetica", 10), bg=right.winfo_toplevel().cget("bg"))
+                                 font=("Helvetica", 10), bg="#ffffff")
         self.deps_text.pack(fill=tk.X)
         self.deps_text.configure(state="disabled")
-        ttk.Button(deps_frame, text="重新扫描依赖",
-                   command=self._refresh_deps).pack(fill=tk.X, pady=(3, 0))
+        ttk.Button(deps_frame, text="⚙ 重新扫描依赖",
+                   command=self._refresh_deps).pack(fill=tk.X, pady=(pad, 0))
         self._refresh_deps()
 
-        # 语速
-        ttk.Label(right, text="语速:").pack(anchor=tk.W)
-        rate_row = ttk.Frame(right)
-        rate_row.pack(fill=tk.X, pady=(2, 2))
+        # ===== 语速与输出 =====
+        output_group = ttk.LabelFrame(right, text="语速与输出", padding=pad)
+        output_group.pack(fill=tk.X, pady=(0, pad))
+        ttk.Label(output_group, text="语速:").pack(anchor=tk.W)
+        rate_row = ttk.Frame(output_group)
+        rate_row.pack(fill=tk.X)
         self.rate_var = tk.IntVar(value=0)
         self.rate_label = ttk.Label(rate_row, text="正常")
         self.rate_label.pack(side=tk.RIGHT)
-        ttk.Scale(right, from_=-50, to=50, variable=self.rate_var,
-                  command=self._update_rate_label).pack(fill=tk.X, pady=(0, 8))
-
-        ttk.Separator(right, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=4)
-
-        # 输出模式
-        ttk.Label(right, text="输出模式:").pack(anchor=tk.W)
+        ttk.Scale(output_group, from_=-50, to=50, variable=self.rate_var,
+                  command=self._update_rate_label).pack(fill=tk.X, pady=(0, pad))
+        ttk.Label(output_group, text="输出模式:").pack(anchor=tk.W)
         self.mode_var = tk.StringVar(value="chapter")
         for label, val in [("按章节拆分", "chapter"), ("按时间拆分", "time"), ("合并为一个文件", "single")]:
-            ttk.Radiobutton(right, text=label, variable=self.mode_var,
+            ttk.Radiobutton(output_group, text=label, variable=self.mode_var,
                             value=val, command=self._on_mode_change).pack(anchor=tk.W)
-
-        self.time_frame = ttk.Frame(right)
+        self.time_frame = ttk.Frame(output_group)
         ttk.Label(self.time_frame, text="每段:").pack(side=tk.LEFT)
         self.time_var = tk.IntVar(value=30)
         ttk.Spinbox(self.time_frame, from_=5, to=180, textvariable=self.time_var,
-                    width=5, increment=5).pack(side=tk.LEFT, padx=3)
+                    width=5, increment=5).pack(side=tk.LEFT, padx=pad)
         ttk.Label(self.time_frame, text="分钟").pack(side=tk.LEFT)
 
-        ttk.Separator(right, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=8)
-
-        # 操作按钮
+        # ===== 操作 =====
+        actions_group = ttk.LabelFrame(right, text="操作", padding=pad)
+        actions_group.pack(fill=tk.X)
         self.btn_preview_full = ttk.Button(
-            right, text="试听全文（可暂停）", command=self._toggle_preview_full
+            actions_group, text="🔊 试听全文（可暂停）", command=self._toggle_preview_full
         )
-        self.btn_preview_full.pack(fill=tk.X, pady=2)
-        self.btn_convert = ttk.Button(right, text="生成MP3", command=self._start_convert)
-        self.btn_convert.pack(fill=tk.X, pady=2)
-        self.btn_pause = ttk.Button(right, text="暂停", command=self._pause_convert, state="disabled")
-        self.btn_pause.pack(fill=tk.X, pady=2)
-        self.btn_resume = ttk.Button(right, text="继续生成", command=self._resume_convert)
-        self.btn_resume.pack(fill=tk.X, pady=2)
+        self.btn_preview_full.pack(fill=tk.X, pady=(0, pad))
+        self.btn_convert = ttk.Button(actions_group, text="▶ 生成MP3", command=self._start_convert,
+                                       style="Accent.TButton")
+        self.btn_convert.pack(fill=tk.X, pady=(0, pad))
+        self.btn_pause = ttk.Button(actions_group, text="⏹ 暂停", command=self._pause_convert, state="disabled")
+        self.btn_pause.pack(fill=tk.X, pady=(0, pad))
+        self.btn_resume = ttk.Button(actions_group, text="▶ 继续生成", command=self._resume_convert)
+        self.btn_resume.pack(fill=tk.X, pady=(0, pad))
+        ttk.Button(actions_group, text="🔀 合并MP3文件", command=self._merge_mp3).pack(fill=tk.X, pady=(0, pad))
+        ttk.Button(actions_group, text="📋 查看日志", command=self._show_log).pack(fill=tk.X)
 
-        ttk.Separator(right, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=8)
-
-        # 合并MP3
-        ttk.Button(right, text="合并MP3文件", command=self._merge_mp3).pack(fill=tk.X, pady=2)
-
-        ttk.Separator(right, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=8)
-
-        # 查看日志
-        ttk.Button(right, text="查看日志", command=self._show_log).pack(fill=tk.X, pady=2)
-
-        # 底部进度
-        bottom = ttk.Frame(main)
-        bottom.pack(fill=tk.X, pady=(8, 0))
-        self.progress = ttk.Progressbar(bottom, mode="determinate")
-        self.progress.pack(fill=tk.X)
-        self.status_label = ttk.Label(bottom, text="就绪", foreground="gray")
-        self.status_label.pack(anchor=tk.W, pady=(4, 0))
+        # 底部进度和状态
+        bottom_frame = ttk.LabelFrame(main, text="状态", padding=pad)
+        bottom_frame.pack(fill=tk.X, pady=(pad, 0))
+        self.progress = ttk.Progressbar(bottom_frame, mode="determinate", style="Vertical.TProgressbar")
+        self.progress.pack(fill=tk.X, pady=(0, pad))
+        self.status_label = ttk.Label(bottom_frame, text="就绪", style="Status.TLabel")
+        self.status_label.pack(anchor=tk.W)
 
         # 下载进度（仅在下载模型/依赖时显示）
-        self.download_frame = ttk.Frame(main)
+        self.download_frame = ttk.Frame(bottom_frame)
         self.download_label = ttk.Label(self.download_frame, text="", foreground="#0066cc")
         self.download_label.pack(anchor=tk.W)
         self.download_progress = ttk.Progressbar(self.download_frame, mode="determinate")
-        self.download_progress.pack(fill=tk.X, pady=(2, 0))
+        self.download_progress.pack(fill=tk.X, pady=(pad, 0))
         # 默认隐藏
 
         # 扫描并添加外部引擎插件
@@ -663,23 +653,46 @@ class AudiobookConverterApp:
         if hasattr(self, "status_label"):
             self.status_label.config(text="就绪", foreground="gray")
 
-    def _toggle_theme(self):
-        """切换深色/浅色主题"""
-        try:
-            import sv_ttk
-            current = sv_ttk.get_theme()
-            new = "dark" if current == "light" else "light"
-            sv_ttk.set_theme(new)
-            # 持久化
+    def _apply_dark_mode_to_tk_widgets(self, is_dark: bool):
+        """手动更新非 ttk 控件（Text/ScrolledText）的配色以适配深色/浅色主题"""
+        if is_dark:
+            bg, fg, ins = "#1e1e1e", "#e0e0e0", "#e0e0e0"
+        else:
+            bg, fg, ins = "#ffffff", "#000000", "#000000"
+        for widget in (self.text_area, self.asr_result_text):
             try:
-                from tts_engine import _load_config as _lc, _save_config as _sc
-                cfg = _lc()
-                cfg["theme"] = new
-                _sc(cfg)
+                widget.configure(bg=bg, fg=fg, insertbackground=ins)
             except Exception:
                 pass
-        except ImportError:
-            messagebox.showinfo("提示", "sv-ttk 未安装，无法切换主题。\n请运行: pip install sv-ttk")
+        try:
+            self.deps_text.configure(bg=bg, fg=fg)
+        except Exception:
+            pass
+
+    def _configure_styles(self):
+        """配置 ttk 自定义样式"""
+        style = ttk.Style()
+        style.configure("Title.TLabel", font=("Helvetica", 16, "bold"))
+        style.configure("Section.TLabel", font=("Helvetica", 11, "bold"))
+        style.configure("Accent.TButton", font=("Helvetica", 10, "bold"))
+        style.configure("Status.TLabel", foreground="gray", font=("Helvetica", 10))
+        style.configure("Vertical.TProgressbar", thickness=12)
+
+    def _toggle_theme(self):
+        """切换深色/浅色主题"""
+        import sv_ttk
+        current = sv_ttk.get_theme()
+        new = "dark" if current == "light" else "light"
+        sv_ttk.set_theme(new)
+        self._apply_dark_mode_to_tk_widgets(new == "dark")
+        # 持久化
+        try:
+            from tts_engine import _load_config as _lc, _save_config as _sc
+            cfg = _lc()
+            cfg["theme"] = new
+            _sc(cfg)
+        except Exception:
+            pass
 
     # ===== UI 回调 =====
 
@@ -694,7 +707,7 @@ class AudiobookConverterApp:
 
     def _on_mode_change(self):
         if self.mode_var.get() == "time":
-            self.time_frame.pack(fill=tk.X, pady=(2, 0))
+            self.time_frame.pack(fill=tk.X, pady=(4, 0))
         else:
             self.time_frame.pack_forget()
 
@@ -978,10 +991,11 @@ class AudiobookConverterApp:
         logger.info(f"检测到 {count} 个章节/段落")
 
     def _select_all_chapters(self):
-        self.chapter_listbox.selection_set(0, tk.END)
+        for item in self.chapter_tree.get_children():
+            self.chapter_tree.selection_add(item)
 
     def _deselect_all_chapters(self):
-        self.chapter_listbox.selection_clear(0, tk.END)
+        self.chapter_tree.selection_remove(self.chapter_tree.selection())
 
     # ===== 预览 =====
 
@@ -1097,10 +1111,7 @@ class AudiobookConverterApp:
     # ===== 生成控制 =====
 
     def _get_selected_indices(self) -> list:
-        selection = self.chapter_listbox.curselection()
-        if not selection:
-            return []
-        return list(selection)
+        return [int(self.chapter_tree.index(item)) for item in self.chapter_tree.selection()]
 
     def _start_convert(self):
         selected = self._get_selected_indices()
@@ -1296,62 +1307,61 @@ class AudiobookConverterApp:
 
     def _build_asr_tab(self):
         """构建 ASR（语音转文字）标签页"""
-        # 左侧控制面板
-        asr_left = ttk.Frame(self.asr_tab)
-        asr_left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        pad = 4
+        paned = ttk.PanedWindow(self.asr_tab, orient=tk.VERTICAL)
+        paned.pack(fill=tk.BOTH, expand=True)
 
-        # 右侧结果预览
-        asr_right = ttk.Frame(self.asr_tab)
-        asr_right.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(5, 0))
+        # 上方：ASR 设置
+        asr_top = ttk.Frame(paned)
+        paned.add(asr_top, weight=1)
 
-        # --- 左侧控制 ---
         # 音频文件选择
-        audio_frame = ttk.LabelFrame(asr_left, text="音频文件", padding=5)
-        audio_frame.pack(fill=tk.X, pady=(0, 5))
-        ttk.Button(audio_frame, text="选择音频文件", command=self._select_audio_file).pack(anchor=tk.W)
+        audio_frame = ttk.LabelFrame(asr_top, text="音频文件", padding=pad)
+        audio_frame.pack(fill=tk.X, pady=(0, pad))
+        ttk.Button(audio_frame, text="📂 选择音频文件", command=self._select_audio_file).pack(anchor=tk.W)
         self.audio_file_label = ttk.Label(audio_frame, text="未选择文件", foreground="gray")
-        self.audio_file_label.pack(anchor=tk.W, pady=(2, 0))
+        self.audio_file_label.pack(anchor=tk.W, pady=(pad, 0))
 
         # 模型选择
-        ttk.Label(asr_left, text="Whisper 模型:").pack(anchor=tk.W, pady=(5, 0))
+        ttk.Label(asr_top, text="Whisper 模型:").pack(anchor=tk.W, pady=(pad, 0))
         self.asr_model_var = tk.StringVar(value="base")
-        self.asr_model_combo = ttk.Combobox(asr_left, textvariable=self.asr_model_var, state="readonly")
+        self.asr_model_combo = ttk.Combobox(asr_top, textvariable=self.asr_model_var, state="readonly")
         self.asr_model_combo["values"] = list(WHISPER_MODELS.keys())
-        self.asr_model_combo.pack(fill=tk.X, pady=(2, 5))
-
-        # 模型说明
+        self.asr_model_combo.pack(fill=tk.X, pady=(pad, 0))
         model_desc = "、".join(f"{k}={v}" for k, v in WHISPER_MODELS.items())
-        ttk.Label(asr_left, text=model_desc, wraplength=300, foreground="gray",
-                  font=("Helvetica", 9)).pack(fill=tk.X, pady=(0, 5))
+        ttk.Label(asr_top, text=model_desc, wraplength=400, foreground="gray",
+                  font=("Helvetica", 9)).pack(fill=tk.X, pady=(0, pad))
 
         # 语言选择
-        ttk.Label(asr_left, text="语言:").pack(anchor=tk.W)
+        ttk.Label(asr_top, text="语言:").pack(anchor=tk.W)
         self.asr_lang_var = tk.StringVar(value="auto（自动检测）")
-        self.asr_lang_combo = ttk.Combobox(asr_left, textvariable=self.asr_lang_var, state="readonly")
+        self.asr_lang_combo = ttk.Combobox(asr_top, textvariable=self.asr_lang_var, state="readonly")
         self.asr_lang_combo["values"] = [
             "auto（自动检测）", "zh（中文）", "en（英文）", "ja（日文）",
             "ko（韩文）", "fr（法文）", "de（德文）", "es（西班牙文）",
             "ru（俄文）",
         ]
-        self.asr_lang_combo.pack(fill=tk.X, pady=(2, 5))
+        self.asr_lang_combo.pack(fill=tk.X, pady=(pad, 0))
 
         # 输出格式
-        ttk.Label(asr_left, text="输出格式:").pack(anchor=tk.W)
+        ttk.Label(asr_top, text="输出格式:").pack(anchor=tk.W, pady=(pad, 0))
         self.asr_format_var = tk.StringVar(value="txt")
+        fmt_row = ttk.Frame(asr_top)
+        fmt_row.pack(fill=tk.X, pady=(0, pad))
         for label, val in [("纯文本 (txt)", "txt"), ("字幕 (srt)", "srt"), ("JSON", "json")]:
-            ttk.Radiobutton(asr_left, text=label, variable=self.asr_format_var, value=val).pack(anchor=tk.W)
+            ttk.Radiobutton(fmt_row, text=label, variable=self.asr_format_var, value=val).pack(side=tk.LEFT, padx=(0, pad))
 
         # 操作按钮
-        ttk.Separator(asr_left, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=8)
-        self.btn_asr_start = ttk.Button(asr_left, text="开始识别", command=self._start_asr)
-        self.btn_asr_start.pack(fill=tk.X, pady=2)
+        self.btn_asr_start = ttk.Button(asr_top, text="▶ 开始识别", command=self._start_asr, style="Accent.TButton")
+        self.btn_asr_start.pack(fill=tk.X)
+        self.asr_status_label = ttk.Label(asr_top, text="", foreground="gray")
+        self.asr_status_label.pack(fill=tk.X, pady=(pad, 0))
 
-        # ASR 状态
-        self.asr_status_label = ttk.Label(asr_left, text="", foreground="gray")
-        self.asr_status_label.pack(fill=tk.X, pady=(4, 0))
+        # 下方：识别结果（可滚动）
+        asr_bottom = ttk.Frame(paned)
+        paned.add(asr_bottom, weight=2)
 
-        # --- 右侧结果 ---
-        result_frame = ttk.LabelFrame(asr_right, text="识别结果", padding=5)
+        result_frame = ttk.LabelFrame(asr_bottom, text="识别结果", padding=pad)
         result_frame.pack(fill=tk.BOTH, expand=True)
 
         self.asr_result_text = scrolledtext.ScrolledText(
@@ -1360,11 +1370,10 @@ class AudiobookConverterApp:
         )
         self.asr_result_text.pack(fill=tk.BOTH, expand=True)
 
-        # 操作按钮
         btn_frame = ttk.Frame(result_frame)
-        btn_frame.pack(fill=tk.X, pady=(4, 0))
-        ttk.Button(btn_frame, text="复制结果", command=self._copy_asr_result).pack(side=tk.LEFT, padx=(0, 3))
-        ttk.Button(btn_frame, text="保存到文件", command=self._save_asr_result).pack(side=tk.LEFT)
+        btn_frame.pack(fill=tk.X, pady=(pad, 0))
+        ttk.Button(btn_frame, text="📋 复制结果", command=self._copy_asr_result).pack(side=tk.LEFT, padx=(0, pad))
+        ttk.Button(btn_frame, text="💾 保存到文件", command=self._save_asr_result).pack(side=tk.LEFT)
 
     # ===== ASR 操作回调 =====
 

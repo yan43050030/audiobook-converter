@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# Windows exe spec - v2.6.0: ASR + CosyVoice + 深色主题 + 多文件 + 内置播放器
+# Windows exe spec - v3.0.0: 美化UI + 深色主题完善 + 稳定版
 
 import os
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs

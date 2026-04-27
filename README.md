@@ -1,6 +1,6 @@
 # 文字转有声读物 (Text-to-Audiobook Converter)
 
-**v2.6.0** — 将文字转换为自然语音的有声读物制作工具，支持多引擎 TTS 生成与 ASR 语音转文字。
+**v3.0.0** — 将文字转换为自然语音的有声读物制作工具，支持多引擎 TTS 生成与 ASR 语音转文字。
 
 ## 功能特点
 
@@ -31,7 +31,7 @@
 
 ```
 ┌─────────────────────────────────────────────────┐
-│  文字转有声读物 v2.6.0                          │
+│  文字转有声读物 v3.0.0                          │
 ├─────────────────────────────────────────────────┤
 │  ┌──────────┬──────┐  ┌─── 文字转语音 ─┬─────┤ │
 │  │ 章节列表  │ 文本  │  │ [文字转语音] │[ASR]│ │
@@ -59,7 +59,6 @@ cd audiobook-converter
 pip install -r requirements.txt
 
 # 3. (可选) 安装增强功能
-pip install sv-ttk            # 深色/浅色主题
 pip install faster-whisper    # ASR 语音转文字
 pip install ebooklib          # EPUB 电子书读取
 pip install PyMuPDF           # PDF 文档读取
@@ -143,6 +142,7 @@ audiobook_converter/
 
 ## 版本历史
 
+- **v3.0.0** (2026-04) — UI 美化、sv-ttk 默认主题、章节列表 Treeview、LabelFrame 分组布局、内边距规范化、按钮图标统一
 - **v2.6.0** (2026-04) — 新增 ASR 语音转文字、CosyVoice 外挂引擎、深色主题、多种格式支持、Piper CLI 并行加速、多文件导入
 - **v2.5.0** (2026-02) — Piper TTS 新 API 兼容、docx/md 读取、滚动面板、macOS 深色适配
 - **v2.4.0** — Piper TTS 本地引擎、便携存储目录、断点续传
