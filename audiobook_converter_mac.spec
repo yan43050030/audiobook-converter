@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# macOS .app bundle spec - v3.0.1: 流式试听 + 时间拆分修复 + 外挂引擎对话框 + 标题去重
+# macOS .app bundle spec - v3.1.0: 章节复选/计数 + 选区试听 + 段级进度 + 响度归一化
 
 import os
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs
@@ -125,8 +125,8 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'AudiobookConverter',
         'CFBundleDisplayName': '文字转有声读物',
-        'CFBundleVersion': '3.0.1',
-        'CFBundleShortVersionString': '3.0.1',
+        'CFBundleVersion': '3.1.0',
+        'CFBundleShortVersionString': '3.1.0',
         'NSHumanReadableCopyright': 'AudiobookConverter',
         'NSHighResolutionCapable': True,
     },

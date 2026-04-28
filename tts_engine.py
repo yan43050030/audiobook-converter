@@ -40,7 +40,7 @@ except ImportError:
     PYDUB_AVAILABLE = False
     AudioSegment = None
 
-VERSION = "3.0.1"
+VERSION = "3.1.0"
 
 # 当前平台
 _PLATFORM = platform.system()  # "Darwin" / "Windows" / "Linux"
@@ -1514,6 +1514,38 @@ def merge_mp3_files(file_paths, output_path):
     _merge_mp3_files(file_paths, output_path)
 
 
+def normalize_loudness(input_path: str, output_path: Optional[str] = None,
+                       target_lufs: float = -16.0, target_tp: float = -1.5,
+                       target_lra: float = 11.0) -> str:
+    """对单个 MP3 做 EBU R128 响度归一化（通过 ffmpeg loudnorm 滤镜）。
+
+    target_lufs/tp/lra 参数与 ffmpeg loudnorm 一致。
+    返回归一化后的输出路径。原地处理时会用临时文件再原子替换。
+    """
+    ff = _ffmpeg_path()
+    if not ff:
+        raise RuntimeError("ffmpeg 未安装，无法做响度归一化。\n" + _ffmpeg_install_hint())
+    if output_path is None:
+        output_path = input_path
+
+    in_place = os.path.abspath(output_path) == os.path.abspath(input_path)
+    work_path = output_path + ".tmp.mp3" if in_place else output_path
+
+    cmd = [
+        ff, "-y", "-i", input_path,
+        "-af", f"loudnorm=I={target_lufs}:TP={target_tp}:LRA={target_lra}",
+        "-codec:a", "libmp3lame", "-b:a", "128k",
+        work_path,
+    ]
+    logger.info(f"响度归一化: {input_path} -> {work_path}")
+    rc = subprocess.run(cmd, capture_output=True).returncode
+    if rc != 0 or not os.path.exists(work_path):
+        raise RuntimeError(f"loudnorm 失败 (rc={rc})")
+    if in_place:
+        os.replace(work_path, output_path)
+    return output_path
+
+
 # ======== 并发数配置 ========
 
 
@@ -1758,18 +1790,30 @@ def _local_generate(text: str, voice: str, rate: str, output_path: str, should_s
 
 # ======== 统一生成接口 ========
 
-def _generate_one_safe(text, voice, rate, output_path, engine="edge", should_stop=None):
-    """生成单个MP3，带重试和验证（可中断）"""
+def _generate_one_safe(text, voice, rate, output_path, engine="edge", should_stop=None,
+                       seg_progress=None):
+    """生成单个MP3，带重试和验证（可中断）。
+
+    seg_progress(current, total): 当文本被切成多段时，每段生成完毕调用一次。
+    """
     segments = split_text(text)
+    total_segs = len(segments)
+
+    def _notify(i):
+        if seg_progress and total_segs > 1:
+            try:
+                seg_progress(i + 1, total_segs)
+            except Exception:
+                pass
 
     for attempt in range(MAX_RETRIES + 1):
         if should_stop and should_stop():
             raise StopRequested("用户暂停")
         try:
-            logger.info(f"生成单文件 → {output_path} (尝试 {attempt + 1})")
+            logger.info(f"生成单文件 → {output_path} (尝试 {attempt + 1}, {total_segs} 段)")
 
             if engine == "local":
-                if len(segments) == 1:
+                if total_segs == 1:
                     _local_generate(segments[0], voice, rate, output_path, should_stop=should_stop)
                 else:
                     temp_dir = tempfile.mkdtemp()
@@ -1781,11 +1825,12 @@ def _generate_one_safe(text, voice, rate, output_path, engine="edge", should_sto
                             tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
                             _local_generate(seg, voice, rate, tp, should_stop=should_stop)
                             temp_files.append(tp)
+                            _notify(i)
                         _merge_mp3_files(temp_files, output_path)
                     finally:
                         shutil.rmtree(temp_dir, ignore_errors=True)
             elif engine == "piper":
-                if len(segments) == 1:
+                if total_segs == 1:
                     _piper_generate_safe(segments[0], voice, rate, output_path, should_stop=should_stop)
                 else:
                     temp_dir = tempfile.mkdtemp()
@@ -1797,6 +1842,7 @@ def _generate_one_safe(text, voice, rate, output_path, engine="edge", should_sto
                             tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
                             _piper_generate_safe(seg, voice, rate, tp, should_stop=should_stop)
                             temp_files.append(tp)
+                            _notify(i)
                         _merge_mp3_files(temp_files, output_path)
                     finally:
                         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -1880,11 +1926,33 @@ def save_progress(output_dir, items):
 
 
 def load_progress(output_dir):
+    """读取进度文件。给老版本（无 chapter_idx）的 items 做兼容补全，避免续传逻辑错乱。"""
     path = os.path.join(output_dir, PROGRESS_FILENAME)
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return None
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        items = json.load(f)
+    if not isinstance(items, list):
+        return items
+    migrated = False
+    for idx, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        if "chapter_idx" not in item:
+            # 老格式：每个 item 是一个独立章节（chapter 模式 / single 模式）
+            # 给一个能与新逻辑相容的下标值
+            item["chapter_idx"] = idx
+            migrated = True
+        # 兼容：状态字段缺失时按 pending 处理
+        item.setdefault("status", "pending")
+    if migrated:
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(items, f, ensure_ascii=False, indent=2)
+            logger.info(f"已迁移老进度文件: {path}（补充 chapter_idx 字段）")
+        except Exception as e:
+            logger.warning(f"迁移进度文件写回失败: {e}")
+    return items
 
 
 def clear_progress(output_dir):
@@ -1908,6 +1976,7 @@ def convert_batch(
     progress_callback=None,
     should_stop=None,
     resume=False,
+    normalize_audio: bool = False,
 ):
     os.makedirs(output_dir, exist_ok=True)
 
@@ -2045,8 +2114,24 @@ def convert_batch(
 
                     out_path = os.path.join(output_dir, item["filename"])
                     try:
+                        # 把段级进度并入主进度回调（携带章节标题）
+                        def _seg_cb(cur, total, _t=item.get("title", "")):
+                            if progress_callback:
+                                try:
+                                    progress_callback(done_count, total_active,
+                                                      seg_current=cur, seg_total=total,
+                                                      seg_title=_t)
+                                except TypeError:
+                                    # 老回调签名不接受关键字参数
+                                    try:
+                                        progress_callback(done_count, total_active)
+                                    except Exception:
+                                        pass
+                                except Exception:
+                                    pass
                         _generate_one_safe(item["text"], voice, rate, out_path,
-                                           engine=engine, should_stop=should_stop)
+                                           engine=engine, should_stop=should_stop,
+                                           seg_progress=_seg_cb)
                         item["status"] = "done"
                     except StopRequested:
                         logger.info(f"用户暂停：[{item['title']}] 未完成")
@@ -2073,6 +2158,31 @@ def convert_batch(
     # 收集结果
     output_files = [os.path.join(output_dir, it["filename"])
                     for it in items if it["status"] == "done"]
+
+    # 可选：响度归一化（loudnorm）
+    if normalize_audio and output_files:
+        if _ffmpeg_path() is None:
+            logger.warning("响度归一化已勾选但未找到 ffmpeg，跳过")
+        else:
+            logger.info(f"开始响度归一化 {len(output_files)} 个文件")
+            for i, p in enumerate(output_files):
+                if should_stop and should_stop():
+                    logger.info("用户暂停归一化")
+                    break
+                try:
+                    normalize_loudness(p)
+                    if progress_callback:
+                        try:
+                            progress_callback(i + 1, len(output_files),
+                                              seg_current=i + 1, seg_total=len(output_files),
+                                              seg_title="响度归一化")
+                        except TypeError:
+                            try:
+                                progress_callback(i + 1, len(output_files))
+                            except Exception:
+                                pass
+                except Exception as e:
+                    logger.error(f"响度归一化失败 {p}: {e}")
 
     # 全部完成则清理进度
     all_done = all(it["status"] in ("done", "skipped") for it in items)

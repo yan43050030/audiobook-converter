@@ -208,19 +208,61 @@ class AudiobookConverterApp:
         query = self.chapter_search_var.get().lower()
         self._refresh_chapters_list(filter_text=query)
 
+    CHECK_ON = "☑ "
+    CHECK_OFF = "☐ "
+
     def _refresh_chapters_list(self, filter_text: str = ""):
-        """刷新章节列表显示，支持过滤"""
+        """刷新章节列表显示，支持过滤；附加 ☑/☐ 复选标记"""
         self.chapter_tree.delete(*self.chapter_tree.get_children())
+        # iid 与原始章节下标绑定，过滤后仍能正确取回 chapter_idx
         for idx, ch in enumerate(self.chapters):
             if filter_text and filter_text not in ch["title"].lower():
                 continue
-            display = ch["title"]
+            title = ch["title"]
             source = ch.get("source", "")
             if source and len(self.file_paths) > 1:
-                display = f"[{source}] {display}"
-            self.chapter_tree.insert("", tk.END, text=display)
+                title = f"[{source}] {title}"
+            self.chapter_tree.insert(
+                "", tk.END, iid=str(idx), text=self.CHECK_ON + title,
+            )
+        # 默认全选
         for item in self.chapter_tree.get_children():
             self.chapter_tree.selection_add(item)
+        self._update_chapter_checkmarks()
+        self._update_chapter_count_label()
+
+    def _update_chapter_checkmarks(self):
+        """根据 selection 同步每行的 ☑/☐ 前缀"""
+        if not hasattr(self, "chapter_tree"):
+            return
+        sel = set(self.chapter_tree.selection())
+        for item in self.chapter_tree.get_children():
+            cur = self.chapter_tree.item(item, "text")
+            # 去掉旧前缀
+            if cur.startswith(self.CHECK_ON):
+                base = cur[len(self.CHECK_ON):]
+            elif cur.startswith(self.CHECK_OFF):
+                base = cur[len(self.CHECK_OFF):]
+            else:
+                base = cur
+            new_prefix = self.CHECK_ON if item in sel else self.CHECK_OFF
+            new_text = new_prefix + base
+            if new_text != cur:
+                self.chapter_tree.item(item, text=new_text)
+
+    def _update_chapter_count_label(self):
+        if not hasattr(self, "chapter_count_label") or not hasattr(self, "chapter_tree"):
+            return
+        total = len(self.chapter_tree.get_children())
+        sel = len(self.chapter_tree.selection())
+        if total == 0:
+            text = "未检测到章节"
+        else:
+            text = f"已选 {sel}/{total} 章"
+        try:
+            self.chapter_count_label.config(text=text)
+        except Exception:
+            pass
 
     def _build_ui(self):
         main = ttk.Frame(self.root, padding=10)
@@ -270,6 +312,7 @@ class AudiobookConverterApp:
         self.chapter_tree.configure(yscrollcommand=ch_scroll.set)
         self.chapter_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         ch_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.chapter_tree.bind("<<TreeviewSelect>>", self._on_chapter_select)
 
         # 文本区
         text_frame = ttk.LabelFrame(left, text="文本内容", padding=5)
@@ -367,8 +410,10 @@ class AudiobookConverterApp:
         self.deps_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         deps_sb.pack(side=tk.RIGHT, fill=tk.Y)
         self.deps_text.configure(state="disabled")
-        ttk.Button(deps_frame, text="⚙ 重新扫描依赖",
-                   command=self._refresh_deps).pack(fill=tk.X, pady=(pad, 0))
+        deps_btns = ttk.Frame(deps_frame)
+        deps_btns.pack(fill=tk.X, pady=(pad, 0))
+        ttk.Button(deps_btns, text="⚙ 重新扫描", command=self._refresh_deps).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 2))
+        ttk.Button(deps_btns, text="⬇ 下载 Piper 模型", command=self._download_piper_models).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 0))
         self._refresh_deps()
 
         # ===== 语速与输出 =====
@@ -390,9 +435,25 @@ class AudiobookConverterApp:
         self.time_frame = ttk.Frame(output_group)
         ttk.Label(self.time_frame, text="每段:").pack(side=tk.LEFT)
         self.time_var = tk.IntVar(value=30)
-        ttk.Spinbox(self.time_frame, from_=5, to=180, textvariable=self.time_var,
-                    width=5, increment=5).pack(side=tk.LEFT, padx=pad)
+        spin = ttk.Spinbox(self.time_frame, from_=5, to=180, textvariable=self.time_var,
+                           width=5, increment=5)
+        spin.pack(side=tk.LEFT, padx=pad)
         ttk.Label(self.time_frame, text="分钟").pack(side=tk.LEFT)
+        # 时长改变时重算预估
+        spin.configure(command=self._update_split_estimate)
+        self.time_var.trace_add("write", lambda *a: self._update_split_estimate())
+
+        # 拆分预估提示行（任何模式都用同一行展示"将生成 N 个文件"）
+        self.split_estimate_label = ttk.Label(output_group, text="", foreground="gray", wraplength=280)
+        self.split_estimate_label.pack(fill=tk.X, pady=(2, 0))
+
+        # 响度归一化（ffmpeg loudnorm）
+        self.normalize_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            output_group,
+            text="响度归一化（统一各文件音量，需 ffmpeg）",
+            variable=self.normalize_var,
+        ).pack(fill=tk.X, anchor=tk.W, pady=(4, 0))
 
         # ===== 操作 =====
         actions_group = ttk.LabelFrame(right, text="操作", padding=pad)
@@ -482,6 +543,35 @@ class AudiobookConverterApp:
         if self.engine_var.get() == "local":
             refresh_local_voices()
         self._on_engine_change()
+
+    def _download_piper_models(self):
+        """主动触发 Piper 中文语音模型下载（断点续传，进度走 download_listener）"""
+        from tts_engine import PIPER_VOICES, _ensure_piper_model
+        voices = list(PIPER_VOICES.values())
+        if not voices:
+            messagebox.showinfo("提示", "未配置 Piper 语音清单")
+            return
+        if not messagebox.askyesno(
+            "下载 Piper 模型",
+            f"将下载 {len(voices)} 个中文语音模型到便携存储目录。\n"
+            "断点续传 + 镜像回退，进度会显示在底部进度条。继续？",
+        ):
+            return
+
+        self.status_label.config(text="开始下载 Piper 模型...")
+
+        def run():
+            try:
+                for v in voices:
+                    _ensure_piper_model(v, should_stop=lambda: False)
+                self.root.after(0, lambda: self.status_label.config(text="Piper 模型下载完成"))
+                self.root.after(0, self._refresh_deps)
+            except Exception as e:
+                logger.error(f"下载失败: {e}", exc_info=True)
+                self.root.after(0, lambda: messagebox.showerror("下载失败", str(e)))
+                self.root.after(0, lambda: self.status_label.config(text="下载失败"))
+
+        threading.Thread(target=run, daemon=True).start()
 
     # ===== 依赖检测（递归扫描便携目录） =====
 
@@ -915,6 +1005,7 @@ class AudiobookConverterApp:
             self.time_frame.pack(fill=tk.X, pady=(4, 0))
         else:
             self.time_frame.pack_forget()
+        self._update_split_estimate()
 
     def _add_files(self):
         """添加一个或多个文件（多选）"""
@@ -1187,13 +1278,10 @@ class AudiobookConverterApp:
             char_offset += len(fi["content"]) + 2  # +2 for "\n\n" separator
         self.chapters = detect_chapters(text, source_map=source_map)
         self._refresh_chapters_list(filter_text=self.chapter_search_var.get().lower() if hasattr(self, "chapter_search_var") else "")
-        count = len(self.chapters)
-        has_titles = count > 1 or (count == 1 and self.chapters[0]["title"] != "全文")
-        if has_titles:
-            self.chapter_count_label.config(text=f"共 {count} 章/段")
-        else:
-            self.chapter_count_label.config(text="未检测到章节")
-        logger.info(f"检测到 {count} 个章节/段落")
+        # 计数 / 时间拆分预估
+        self._update_chapter_count_label()
+        self._update_split_estimate()
+        logger.info(f"检测到 {len(self.chapters)} 个章节/段落")
 
     def _select_all_chapters(self):
         for item in self.chapter_tree.get_children():
@@ -1239,8 +1327,31 @@ class AudiobookConverterApp:
     # 流式试听片段长度（字）
     STREAM_PREVIEW_SEG_CHARS = 400
 
+    def _get_preview_text(self) -> tuple[str, str]:
+        """返回 (文本, 来源描述)。
+        - 若已识别多章节且仅勾选了部分章节：返回所选章节的拼接文本
+        - 否则返回文本框全部内容
+        """
+        chapters = getattr(self, "chapters", None) or []
+        if hasattr(self, "chapter_tree") and chapters:
+            sel = self._get_selected_indices()
+            multi_chapter = len(chapters) > 1 or chapters[0].get("title") != "全文"
+            if multi_chapter and sel and len(sel) < len(chapters):
+                texts = []
+                for idx in sel:
+                    if 0 <= idx < len(chapters):
+                        t = chapters[idx].get("text", "").strip()
+                        if t:
+                            texts.append(t)
+                if texts:
+                    joined = "\n\n".join(texts)
+                    return joined, f"已选 {len(sel)} 章 / 共 {len(chapters)} 章"
+        # 兜底：用整个文本框内容
+        full = self.text_area.get("1.0", tk.END).strip()
+        return full, "全文"
+
     def _start_preview_full(self):
-        text = self.text_area.get("1.0", tk.END).strip()
+        text, src_desc = self._get_preview_text()
         if not text:
             messagebox.showwarning("提示", "请先输入或导入文字内容")
             return
@@ -1252,7 +1363,7 @@ class AudiobookConverterApp:
 
         self._preview_should_stop = False
         self._set_preview_state("generating")
-        self.status_label.config(text="正在生成首段试听...")
+        self.status_label.config(text=f"正在生成首段试听...（{src_desc}, {len(text)}字）")
 
         # 拆分为短段：首段 ~400 字快速起播，其余段 ~800 字
         first = text[: self.STREAM_PREVIEW_SEG_CHARS]
@@ -1339,7 +1450,61 @@ class AudiobookConverterApp:
     # ===== 生成控制 =====
 
     def _get_selected_indices(self) -> list:
-        return [int(self.chapter_tree.index(item)) for item in self.chapter_tree.selection()]
+        # iid 在 _refresh_chapters_list 时设为原始章节下标的字符串，过滤后下标仍正确
+        result = []
+        for item in self.chapter_tree.selection():
+            try:
+                result.append(int(item))
+            except ValueError:
+                # 兼容旧 iid（无显式设置时 Tk 自动生成）
+                result.append(int(self.chapter_tree.index(item)))
+        return sorted(result)
+
+    def _on_chapter_select(self, _event=None):
+        """章节列表选择变化时刷新 ☑/☐ 标记和计数"""
+        self._update_chapter_checkmarks()
+        self._update_chapter_count_label()
+        self._update_split_estimate()
+
+    def _update_split_estimate(self, *_args):
+        """根据当前模式 + 选中章节估计将生成的文件数"""
+        if not hasattr(self, "split_estimate_label"):
+            return
+        mode = self.mode_var.get() if hasattr(self, "mode_var") else "chapter"
+        chapters = getattr(self, "chapters", None) or []
+        sel = set(self._get_selected_indices()) if hasattr(self, "chapter_tree") else set(range(len(chapters)))
+        sel_chs = [c for i, c in enumerate(chapters) if i in sel]
+        try:
+            from tts_engine import split_by_duration
+            rate_str = self._get_rate_string()
+        except Exception:
+            split_by_duration, rate_str = None, "+0%"
+
+        if not chapters:
+            text = ""
+        elif mode == "single":
+            text = "将生成 1 个合并文件"
+        elif mode == "chapter":
+            text = f"将生成 {len(sel_chs)} 个文件（每章一个）"
+        elif mode == "time" and split_by_duration is not None:
+            mins = self.time_var.get() if hasattr(self, "time_var") else 30
+            file_count = 0
+            for ch in sel_chs:
+                t = ch.get("text", "")
+                if not t:
+                    continue
+                try:
+                    parts = split_by_duration(t, mins * 60, rate_str)
+                except Exception:
+                    parts = [t]
+                file_count += max(len(parts), 1)
+            text = f"将生成约 {file_count} 个文件（每段 ≤ {mins} 分钟）"
+        else:
+            text = ""
+        try:
+            self.split_estimate_label.config(text=text)
+        except Exception:
+            pass
 
     def _start_convert(self):
         selected = self._get_selected_indices()
@@ -1404,11 +1569,15 @@ class AudiobookConverterApp:
         mode = self.mode_var.get()
         time_minutes = self.time_var.get()
 
-        def progress_cb(current, total):
-            pct = int(current / total * 100)
+        def progress_cb(current, total, seg_current=None, seg_total=None, seg_title=None):
+            pct = int(current / total * 100) if total else 0
             self.root.after(0, lambda: self.progress.configure(value=pct))
-            self.root.after(0, lambda: self.status_label.configure(
-                text=f"正在处理: {current}/{total} ({pct}%)"))
+            if seg_current is not None and seg_total and seg_total > 1:
+                title_str = f"[{seg_title}] " if seg_title else ""
+                msg = f"正在处理: {current}/{total} ({pct}%)  {title_str}段 {seg_current}/{seg_total}"
+            else:
+                msg = f"正在处理: {current}/{total} ({pct}%)"
+            self.root.after(0, lambda: self.status_label.configure(text=msg))
 
         def should_stop_cb():
             return self.should_stop
@@ -1428,6 +1597,7 @@ class AudiobookConverterApp:
                     progress_callback=progress_cb,
                     should_stop=should_stop_cb,
                     resume=resume,
+                    normalize_audio=self.normalize_var.get() if hasattr(self, "normalize_var") else False,
                 )
                 if self.should_stop:
                     self.root.after(0, lambda: self._on_pause(output_dir))
