@@ -40,7 +40,7 @@ except ImportError:
     PYDUB_AVAILABLE = False
     AudioSegment = None
 
-VERSION = "3.0.0"
+VERSION = "3.0.1"
 
 # 当前平台
 _PLATFORM = platform.system()  # "Darwin" / "Windows" / "Linux"
@@ -1920,9 +1920,13 @@ def convert_batch(
     if not resume:
         chapters = detect_chapters(text)
         items = []
+        sel_set = set(selected_indices) if selected_indices is not None else None
 
         if split_mode == "single":
-            items = [{"title": file_prefix, "text": text, "filename": f"{file_prefix}.mp3", "status": "pending"}]
+            items = [{
+                "title": file_prefix, "text": text, "filename": f"{file_prefix}.mp3",
+                "status": "pending", "chapter_idx": 0,
+            }]
         elif split_mode == "chapter":
             for idx, ch in enumerate(chapters):
                 source_tag = sanitize_filename(ch.get("source", ""))
@@ -1931,24 +1935,39 @@ def convert_batch(
                     fn = f"{idx + 1:03d}_{source_tag}_{title_tag}.mp3"
                 else:
                     fn = f"{idx + 1:03d}_{title_tag}.mp3"
-                items.append({"title": ch["title"], "text": ch["text"], "filename": fn, "status": "pending"})
+                items.append({
+                    "title": ch["title"], "text": ch["text"], "filename": fn,
+                    "status": "pending", "chapter_idx": idx,
+                })
         elif split_mode == "time":
             max_sec = time_minutes * 60
             file_idx = 0
-            for ch in chapters:
+            # 修复：按章节下标过滤；时间拆分后的所有片段都属于同一章节
+            for ch_idx, ch in enumerate(chapters):
+                if sel_set is not None and ch_idx not in sel_set:
+                    continue
                 parts = split_by_duration(ch["text"], max_sec, rate)
+                if not parts:
+                    logger.warning(f"章节 [{ch['title']}] 文本为空，跳过")
+                    continue
                 for pi, part in enumerate(parts):
+                    if not part or not part.strip():
+                        continue
                     file_idx += 1
                     label = ch["title"] if ch["title"] != "全文" else ""
                     if len(parts) > 1:
                         suffix = f"_第{pi + 1}部分"
                         label = f"{label}{suffix}" if label else f"第{pi + 1}部分"
                     fn = f"{file_idx:03d}_{sanitize_filename(label or file_prefix)}.mp3"
-                    items.append({"title": label or file_prefix, "text": part, "filename": fn, "status": "pending"})
+                    items.append({
+                        "title": label or file_prefix, "text": part, "filename": fn,
+                        "status": "pending", "chapter_idx": ch_idx, "part_idx": pi,
+                    })
 
-        if selected_indices is not None:
-            for i, item in enumerate(items):
-                if i not in selected_indices:
+        # 选择过滤（time 模式上面已按章节过滤；此处覆盖 chapter / single 模式）
+        if sel_set is not None and split_mode != "time":
+            for item in items:
+                if item.get("chapter_idx", 0) not in sel_set:
                     item["status"] = "skipped"
 
         save_progress(output_dir, items)

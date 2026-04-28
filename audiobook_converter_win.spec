@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# Windows exe spec - v3.0.0: 美化UI + 深色主题完善 + 稳定版
+# Windows exe spec - v3.0.1: 流式试听 + 时间拆分修复 + 外挂引擎对话框 + 标题去重
 
 import os
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs

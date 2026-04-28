@@ -28,6 +28,10 @@ class AudioPlayer:
         self._on_state_change = on_state_change
         self._monitor_thread: Optional[threading.Thread] = None
         self._monitor_stop = threading.Event()
+        # 流式队列
+        self._stream_queue: list = []
+        self._stream_lock = threading.Lock()
+        self._streaming = False
 
     # ---------- 状态广播 ----------
 
@@ -111,6 +115,82 @@ class AudioPlayer:
                 return False
         return False
 
+    def enqueue(self, path: str) -> None:
+        """流式追加一段。第一段会立即起播，后续段在前一段播完后自动接上。"""
+        if not self._ensure_pygame():
+            self._fallback_play(path)
+            return
+        with self._stream_lock:
+            self._stream_queue.append(path)
+            if not self._streaming:
+                first = self._stream_queue.pop(0)
+                self._streaming = True
+                try:
+                    self._pg.mixer.music.load(first)
+                    self._pg.mixer.music.play()
+                    self._current_path = first
+                    self._paused = False
+                    self._emit("playing")
+                except Exception as e:
+                    logger.error(f"流式起播失败: {e}")
+                    self._streaming = False
+                    return
+                self._start_stream_monitor()
+
+    def _start_stream_monitor(self):
+        self._stop_monitor()
+        self._monitor_stop.clear()
+
+        def loop():
+            queued: Optional[str] = None
+            while not self._monitor_stop.is_set():
+                try:
+                    busy = self._pg.mixer.music.get_busy() or self._paused
+                except Exception:
+                    busy = False
+                if not busy:
+                    with self._stream_lock:
+                        nxt = self._stream_queue.pop(0) if self._stream_queue else None
+                    if nxt is not None:
+                        try:
+                            self._pg.mixer.music.load(nxt)
+                            self._pg.mixer.music.play()
+                            self._current_path = nxt
+                            self._paused = False
+                            queued = None
+                        except Exception as e:
+                            logger.error(f"流式接龙失败: {e}")
+                            time.sleep(0.2)
+                            continue
+                    else:
+                        time.sleep(0.25)
+                        with self._stream_lock:
+                            still_busy = bool(self._pg.mixer.music.get_busy())
+                            if not still_busy and not self._stream_queue:
+                                self._streaming = False
+                                self._emit("ended")
+                                return
+                        continue
+                else:
+                    # 提前预排下一首
+                    if queued is None:
+                        with self._stream_lock:
+                            if self._stream_queue:
+                                queued = self._stream_queue.pop(0)
+                        if queued is not None:
+                            try:
+                                self._pg.mixer.music.queue(queued)
+                            except Exception as e:
+                                logger.warning(f"queue 失败: {e}")
+                                with self._stream_lock:
+                                    self._stream_queue.insert(0, queued)
+                                queued = None
+                time.sleep(0.15)
+
+        t = threading.Thread(target=loop, daemon=True)
+        self._monitor_thread = t
+        t.start()
+
     def stop(self) -> None:
         # pygame 后端
         if self._pg is not None:
@@ -118,6 +198,9 @@ class AudioPlayer:
                 self._pg.mixer.music.stop()
             except Exception:
                 pass
+        with self._stream_lock:
+            self._stream_queue.clear()
+            self._streaming = False
         self._stop_monitor()
         # 外部播放器后端
         if self._fallback_proc is not None:

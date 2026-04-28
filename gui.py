@@ -71,21 +71,50 @@ class ScrollableFrame(ttk.Frame):
         # Windows / macOS
         self._canvas.bind_all("<MouseWheel>", self._on_wheel)
         # Linux (X11)
-        self._canvas.bind_all("<Button-4>", lambda e: self._canvas.yview_scroll(-3, "units"))
-        self._canvas.bind_all("<Button-5>", lambda e: self._canvas.yview_scroll(3, "units"))
+        self._canvas.bind_all("<Button-4>", lambda e: self._on_wheel_button(e, -3))
+        self._canvas.bind_all("<Button-5>", lambda e: self._on_wheel_button(e, 3))
 
     def _unbind_wheel(self, _event):
         self._canvas.unbind_all("<MouseWheel>")
         self._canvas.unbind_all("<Button-4>")
         self._canvas.unbind_all("<Button-5>")
 
+    def _is_inner_scrollable(self, x_root: int, y_root: int) -> bool:
+        """指针下若是 Text / Listbox / Treeview 等可滚动控件，则让它自己处理"""
+        try:
+            w = self.winfo_containing(x_root, y_root)
+            cur = w
+            while cur is not None and cur != self:
+                cls = ""
+                try:
+                    cls = cur.winfo_class()
+                except Exception:
+                    pass
+                if cls in ("Text", "Listbox", "Treeview"):
+                    return True
+                try:
+                    cur = cur.master
+                except Exception:
+                    break
+        except Exception:
+            pass
+        return False
+
     def _on_wheel(self, event):
+        if self._is_inner_scrollable(event.x_root, event.y_root):
+            return
         delta = event.delta
         # macOS delta 很小，Windows 一般是 120 的倍数
         if platform.system() == "Darwin":
             self._canvas.yview_scroll(int(-delta), "units")
         else:
             self._canvas.yview_scroll(int(-delta / 120), "units")
+
+    def _on_wheel_button(self, event, direction: int):
+        """X11 Button-4/5：与 _on_wheel 同样让位 Text/Listbox/Treeview"""
+        if self._is_inner_scrollable(event.x_root, event.y_root):
+            return
+        self._canvas.yview_scroll(direction, "units")
 
 
 class AudiobookConverterApp:
@@ -197,8 +226,7 @@ class AudiobookConverterApp:
         main = ttk.Frame(self.root, padding=10)
         main.pack(fill=tk.BOTH, expand=True)
 
-        ttk.Label(main, text=f"文字转有声读物 v{VERSION}", style="Title.TLabel").pack(pady=(0, 8))
-
+        # 主标题已在窗口标题栏显示，避免界面顶部重复占用纵向空间
         notebook = ttk.Notebook(main)
         notebook.pack(fill=tk.BOTH, expand=True)
 
@@ -292,6 +320,11 @@ class AudiobookConverterApp:
                         value="piper", command=self._on_engine_change).pack(anchor=tk.W)
         self._ext_engine_frame = ttk.Frame(engine_group)
         self._ext_engine_frame.pack(fill=tk.X)
+        # 没有外挂引擎时，给一个引导按钮，让用户能配置 CosyVoice 等
+        ext_btn_row = ttk.Frame(engine_group)
+        ext_btn_row.pack(fill=tk.X, pady=(2, 0))
+        ttk.Button(ext_btn_row, text="+ 添加 / 配置外挂引擎",
+                   command=self._open_external_dialog).pack(fill=tk.X)
         # 引擎状态
         self.engine_status_label = ttk.Label(engine_group, text="", wraplength=280, foreground="gray")
         self.engine_status_label.pack(fill=tk.X, pady=(pad, 0))
@@ -322,12 +355,17 @@ class AudiobookConverterApp:
             text="bin/ 存放可执行文件；piper-models/ 存放语音包。程序自动在子目录搜索。",
             wraplength=280, foreground="gray",
         ).pack(fill=tk.X, pady=(0, pad))
-        # 依赖检测面板
+        # 依赖检测面板（内置滚动条，内容多时可单独滚动）
         deps_frame = ttk.LabelFrame(storage_group, text="依赖检测", padding=pad)
         deps_frame.pack(fill=tk.X)
-        self.deps_text = tk.Text(deps_frame, height=6, wrap=tk.WORD, relief=tk.FLAT,
+        deps_inner = ttk.Frame(deps_frame)
+        deps_inner.pack(fill=tk.BOTH, expand=True)
+        self.deps_text = tk.Text(deps_inner, height=8, wrap=tk.WORD, relief=tk.FLAT,
                                  font=("Helvetica", 10), bg="#ffffff")
-        self.deps_text.pack(fill=tk.X)
+        deps_sb = ttk.Scrollbar(deps_inner, orient=tk.VERTICAL, command=self.deps_text.yview)
+        self.deps_text.configure(yscrollcommand=deps_sb.set)
+        self.deps_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        deps_sb.pack(side=tk.RIGHT, fill=tk.Y)
         self.deps_text.configure(state="disabled")
         ttk.Button(deps_frame, text="⚙ 重新扫描依赖",
                    command=self._refresh_deps).pack(fill=tk.X, pady=(pad, 0))
@@ -605,6 +643,173 @@ class AudiobookConverterApp:
                 self.root.geometry(geom)
         except Exception:
             pass
+
+    # ===== 外挂引擎设置对话框 =====
+
+    EXTERNAL_PRESETS = {
+        "Custom（自定义）": {
+            "engine_id": "my_engine",
+            "name": "我的外挂引擎",
+            "description": "自定义命令行 TTS",
+            "args_template": "--text {text} --voice {voice} --output {output}",
+            "voices": "默认音色",
+            "output_format": "wav",
+            "text_via_stdin": False,
+        },
+        "CosyVoice（推荐）": {
+            "engine_id": "cosyvoice",
+            "name": "CosyVoice",
+            "description": "阿里通义实验室 CosyVoice",
+            "args_template": "--text {text} --voice {voice} --output {output}",
+            "voices": "中文女声-默认\n中文男声-默认\n克隆音色-自定义1",
+            "output_format": "wav",
+            "text_via_stdin": False,
+        },
+        "GPT-SoVITS": {
+            "engine_id": "gpt_sovits",
+            "name": "GPT-SoVITS",
+            "description": "GPT-SoVITS 推理 CLI",
+            "args_template": "--text {text} --voice {voice} --output {output}",
+            "voices": "默认音色",
+            "output_format": "wav",
+            "text_via_stdin": False,
+        },
+    }
+
+    def _open_external_dialog(self):
+        """添加 / 配置外挂引擎。保存为 {storage_dir}/engines/<id>/engine.json + 包装脚本。"""
+        win = tk.Toplevel(self.root)
+        win.title("添加外挂引擎")
+        win.geometry("560x600")
+        win.transient(self.root)
+        win.grab_set()
+
+        pad = {"padx": 10, "pady": 4}
+
+        # 预设
+        ttk.Label(win, text="预设模板：").pack(anchor=tk.W, **pad)
+        preset_var = tk.StringVar(value="CosyVoice（推荐）")
+        preset_combo = ttk.Combobox(win, textvariable=preset_var, state="readonly",
+                                    values=list(self.EXTERNAL_PRESETS.keys()))
+        preset_combo.pack(fill=tk.X, **pad)
+
+        # 引擎 ID
+        ttk.Label(win, text="引擎 ID（小写英文/数字，将作为 engines/<ID>/ 目录名）：").pack(anchor=tk.W, **pad)
+        id_var = tk.StringVar()
+        ttk.Entry(win, textvariable=id_var).pack(fill=tk.X, **pad)
+
+        # 显示名
+        ttk.Label(win, text="显示名称：").pack(anchor=tk.W, **pad)
+        name_var = tk.StringVar()
+        ttk.Entry(win, textvariable=name_var).pack(fill=tk.X, **pad)
+
+        # 可执行文件
+        ttk.Label(win, text="可执行文件（绝对路径，将复制到 engines/<id>/）：").pack(anchor=tk.W, **pad)
+        exe_row = ttk.Frame(win)
+        exe_row.pack(fill=tk.X, **pad)
+        exe_var = tk.StringVar()
+        ttk.Entry(exe_row, textvariable=exe_var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        def browse_exe():
+            p = filedialog.askopenfilename(title="选择外挂引擎可执行文件 / 包装脚本")
+            if p:
+                exe_var.set(p)
+        ttk.Button(exe_row, text="浏览…", command=browse_exe).pack(side=tk.LEFT, padx=(4, 0))
+
+        # 参数模板
+        ttk.Label(win, text="参数模板（占位符：{text} {voice} {output} {rate}）：").pack(anchor=tk.W, **pad)
+        args_var = tk.StringVar()
+        ttk.Entry(win, textvariable=args_var).pack(fill=tk.X, **pad)
+
+        # 语音列表
+        ttk.Label(win, text="语音列表（每行一个）：").pack(anchor=tk.W, **pad)
+        voices_text = tk.Text(win, height=5)
+        voices_text.pack(fill=tk.BOTH, expand=True, **pad)
+
+        # 输出格式 + stdin
+        opts = ttk.Frame(win)
+        opts.pack(fill=tk.X, **pad)
+        ttk.Label(opts, text="输出格式：").pack(side=tk.LEFT)
+        fmt_var = tk.StringVar(value="wav")
+        ttk.Combobox(opts, textvariable=fmt_var, state="readonly",
+                     values=["wav", "mp3"], width=6).pack(side=tk.LEFT, padx=(4, 12))
+        stdin_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(opts, text="文本走标准输入（{text} 占位符置空）",
+                        variable=stdin_var).pack(side=tk.LEFT)
+
+        def apply_preset(_event=None):
+            tpl = self.EXTERNAL_PRESETS.get(preset_var.get())
+            if not tpl:
+                return
+            id_var.set(tpl["engine_id"])
+            name_var.set(tpl["name"])
+            args_var.set(tpl["args_template"])
+            voices_text.delete("1.0", tk.END)
+            voices_text.insert("1.0", tpl["voices"])
+            fmt_var.set(tpl["output_format"])
+            stdin_var.set(tpl["text_via_stdin"])
+        preset_combo.bind("<<ComboboxSelected>>", apply_preset)
+        apply_preset()  # 初始化
+
+        # 按钮
+        btns = ttk.Frame(win)
+        btns.pack(fill=tk.X, pady=(8, 8), padx=10)
+
+        def save_and_close():
+            import re as _re
+            eid = (id_var.get() or "").strip().lower()
+            if not _re.match(r"^[a-z0-9_-]+$", eid):
+                messagebox.showerror("错误", "引擎 ID 只能用小写英文、数字、下划线/连字符")
+                return
+            exe = (exe_var.get() or "").strip()
+            if not exe or not os.path.isfile(exe):
+                messagebox.showerror("错误", "请选择有效的可执行文件")
+                return
+
+            engines_dir = os.path.join(get_storage_dir(), "engines", eid)
+            os.makedirs(engines_dir, exist_ok=True)
+            # 复制可执行文件（保持原名，便于自动检测）
+            import shutil as _sh
+            target_exe = os.path.join(engines_dir, os.path.basename(exe))
+            try:
+                _sh.copy2(exe, target_exe)
+                # 设置可执行位（非 Windows）
+                if platform.system() != "Windows":
+                    os.chmod(target_exe, 0o755)
+            except Exception as e:
+                messagebox.showerror("复制失败", str(e))
+                return
+
+            # 写 engine.json + 自定义参数模板（自定义字段，便于后续读取）
+            voices_list = [v.strip() for v in voices_text.get("1.0", tk.END).splitlines() if v.strip()]
+            meta = {
+                "name": name_var.get().strip() or eid,
+                "description": "用户配置的外挂引擎",
+                "version": "1.0.0",
+                "args_template": args_var.get().strip(),
+                "voices": voices_list,
+                "output_format": fmt_var.get(),
+                "text_via_stdin": bool(stdin_var.get()),
+            }
+            try:
+                with open(os.path.join(engines_dir, "engine.json"), "w", encoding="utf-8") as f:
+                    import json as _j
+                    _j.dump(meta, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                messagebox.showerror("写元数据失败", str(e))
+                return
+
+            win.destroy()
+            messagebox.showinfo(
+                "已添加",
+                f"外挂引擎已写入：\n{engines_dir}\n\n"
+                "现在可以在「语音引擎」分组中看到对应单选按钮。",
+            )
+            self._rebuild_external_engines()
+            self._refresh_deps()
+
+        ttk.Button(btns, text="保存", command=save_and_close).pack(side=tk.RIGHT)
+        ttk.Button(btns, text="取消", command=win.destroy).pack(side=tk.RIGHT, padx=(0, 6))
 
     def _rebuild_external_engines(self):
         """扫描并动态添加外部引擎单选按钮"""
@@ -1011,20 +1216,28 @@ class AudiobookConverterApp:
         if state == "idle":
             self._start_preview_full()
         elif state == "generating":
-            # 中止 TTS 生成
             self._preview_should_stop = True
+            try:
+                self.player.stop()
+            except Exception:
+                pass
+            self._cleanup_preview_tmp()
             self._set_preview_state("idle")
-            self.status_label.config(text="已中止试听生成")
+            self.status_label.config(text="已中止试听")
         elif state == "playing":
             if self.player.pause():
                 self._set_preview_state("paused")
             else:
-                # 后端不支持暂停（外部播放器），只能停止
                 self.player.stop()
+                self._preview_should_stop = True
+                self._cleanup_preview_tmp()
                 self._set_preview_state("idle")
         elif state == "paused":
             if self.player.resume():
                 self._set_preview_state("playing")
+
+    # 流式试听片段长度（字）
+    STREAM_PREVIEW_SEG_CHARS = 400
 
     def _start_preview_full(self):
         text = self.text_area.get("1.0", tk.END).strip()
@@ -1037,62 +1250,77 @@ class AudiobookConverterApp:
             messagebox.showerror("引擎不可用", msg)
             return
 
-        # 大文本时给个友好提示
-        if len(text) > 5000:
-            ok = messagebox.askyesno(
-                "全文试听",
-                f"将试听全部 {len(text)} 字，生成可能需要数分钟。\n"
-                "生成期间可点击同一按钮中止；播放时可暂停 / 继续。\n\n是否继续？",
-            )
-            if not ok:
-                return
-
         self._preview_should_stop = False
         self._set_preview_state("generating")
-        self.status_label.config(text="正在生成全文试听...")
+        self.status_label.config(text="正在生成首段试听...")
+
+        # 拆分为短段：首段 ~400 字快速起播，其余段 ~800 字
+        first = text[: self.STREAM_PREVIEW_SEG_CHARS]
+        rest = text[self.STREAM_PREVIEW_SEG_CHARS:]
+        from tts_engine import split_text, _generate_one_safe
+        rest_segs = split_text(rest, max_length=self.STREAM_PREVIEW_SEG_CHARS * 2) if rest else []
+        segments = [first] + rest_segs
+        total = len(segments)
+        logger.info(f"流式试听：拆分为 {total} 段，首段 {len(first)} 字")
+
+        import tempfile
+        tmp_dir = tempfile.mkdtemp(prefix="audiobook_preview_")
+        self._preview_tmp_dir = tmp_dir
 
         def run():
             try:
                 voice = get_voice_id(self.voice_var.get(), engine)
                 rate = self._get_rate_string()
-                path = generate_preview(
-                    text, voice, rate, engine=engine,
-                    should_stop=lambda: self._preview_should_stop,
-                    max_chars=0,
-                )
-                if self._preview_should_stop:
-                    return
-                self.root.after(0, lambda: self._play_preview_file(path))
+                playing_started = False
+                for i, seg in enumerate(segments):
+                    if self._preview_should_stop:
+                        return
+                    out = os.path.join(tmp_dir, f"seg_{i:04d}.mp3")
+                    _generate_one_safe(seg, voice, rate, out, engine=engine,
+                                       should_stop=lambda: self._preview_should_stop)
+                    if self._preview_should_stop:
+                        return
+                    self.root.after(0, lambda p=out: self.player.enqueue(p))
+                    if not playing_started:
+                        playing_started = True
+                        self.root.after(0, lambda i=i, t=total: (
+                            self._set_preview_state("playing"),
+                            self.status_label.config(
+                                text=f"试听播放中（边生成边播放，{i + 1}/{t} 段就绪）"
+                            ),
+                        ))
+                    else:
+                        self.root.after(0, lambda i=i, t=total: self.status_label.config(
+                            text=f"试听播放中（{i + 1}/{t} 段就绪）"
+                        ))
+                self.root.after(0, lambda: self.status_label.config(text="全部段已生成，等待播放完毕"))
             except Exception as e:
-                logger.error(f"全文试听失败: {e}", exc_info=True)
+                logger.error(f"流式试听失败: {e}", exc_info=True)
                 self.root.after(0, lambda: messagebox.showerror("错误", f"试听失败: {e}"))
                 self.root.after(0, lambda: self._set_preview_state("idle"))
                 self.root.after(0, lambda: self.status_label.config(text="试听失败"))
 
         threading.Thread(target=run, daemon=True).start()
 
-    def _play_preview_file(self, path: str):
-        try:
-            self.player.play(path)
-            if self.player.supports_pause:
-                self._set_preview_state("playing")
-                self.status_label.config(text="试听播放中（点按钮可暂停）")
-            else:
-                # 兜底：外部播放器无法暂停
-                self._set_preview_state("idle")
-                self.status_label.config(text="试听已交给系统播放器（pygame 不可用，无法在程序内暂停）")
-        except Exception as e:
-            logger.error(f"播放失败: {e}")
-            messagebox.showerror("错误", f"播放失败: {e}")
-            self._set_preview_state("idle")
+    def _cleanup_preview_tmp(self):
+        d = getattr(self, "_preview_tmp_dir", None)
+        if d and os.path.isdir(d):
+            try:
+                import shutil as _sh
+                _sh.rmtree(d, ignore_errors=True)
+            except Exception:
+                pass
+        self._preview_tmp_dir = None
 
     def _on_player_state(self, state: str):
         """来自 AudioPlayer 的状态回调（任意线程）"""
         def apply():
             if state == "ended":
+                self._cleanup_preview_tmp()
                 self._set_preview_state("idle")
                 self.status_label.config(text="试听播放结束")
             elif state == "stopped" and self._preview_state in ("playing", "paused"):
+                self._cleanup_preview_tmp()
                 self._set_preview_state("idle")
         self.root.after(0, apply)
 
