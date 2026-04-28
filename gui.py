@@ -1,4 +1,4 @@
-"""GUI界面 - 文字转有声读物 v3.0.0"""
+"""GUI界面 - 文字转有声读物（版本以 tts_engine.VERSION 为准）"""
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
@@ -175,6 +175,12 @@ class AudiobookConverterApp:
             pass
         try:
             self.player.stop()
+        except Exception:
+            pass
+        # 主动释放 Whisper / GPU 显存
+        try:
+            from asr_engine import unload_whisper_model
+            unload_whisper_model()
         except Exception:
             pass
         self.root.destroy()
@@ -1605,21 +1611,43 @@ class AudiobookConverterApp:
                     self.root.after(0, lambda: self._on_convert_done(output_dir, files))
             except Exception as e:
                 logger.error(f"转换异常: {e}", exc_info=True)
-                self.root.after(0, lambda: messagebox.showerror("错误", f"转换失败: {e}"))
-                self.root.after(0, lambda: self.status_label.config(text="转换失败"))
+                friendly = self._friendly_error(e)
+                self.root.after(0, lambda: messagebox.showerror("生成失败", friendly))
+                self.root.after(0, lambda: self.status_label.config(text="生成失败，详情见日志"))
             finally:
                 self.is_converting = False
                 self.root.after(0, lambda: self.btn_convert.config(state="normal"))
-                self.root.after(0, lambda: self.btn_pause.config(state="disabled"))
+                self.root.after(0, lambda: self.btn_pause.config(state="disabled", text="⏹ 暂停"))
                 self.root.after(0, lambda: self.btn_resume.config(state="normal"))
 
         threading.Thread(target=run, daemon=True).start()
 
     def _pause_convert(self):
         self.should_stop = True
-        self.btn_pause.config(state="disabled")
+        self.btn_pause.config(state="disabled", text="⏸ 暂停中...")
         self.status_label.config(text="正在暂停（等待当前片段结束）...")
         logger.info("用户点击暂停")
+
+    def _friendly_error(self, exc: Exception) -> str:
+        """把底层异常翻译成对用户友好的提示，原始 traceback 已写日志。"""
+        msg = str(exc)
+        kind = type(exc).__name__
+        # 网络问题（Edge TTS）
+        net_keywords = ("Timeout", "ConnectionError", "ResolutionError", "RemoteDisconnected",
+                        "TLS", "ssl", "Network", "ENOTFOUND", "EOF")
+        if any(k.lower() in msg.lower() or k.lower() in kind.lower() for k in net_keywords):
+            return f"网络访问失败：{msg}\n\n建议：检查网络连接；若使用 Edge TTS，可切换到本地或 Piper 引擎离线生成。"
+        # 子进程返回非零（外部 / 系统语音 / piper / ffmpeg）
+        if "returned non-zero" in msg.lower() or "code " in msg.lower():
+            return f"外部命令执行失败：\n{msg}\n\n建议：查看日志（菜单：查看日志），确认所选引擎可执行文件可用、参数模板正确。"
+        # ffmpeg 缺失
+        if "ffmpeg" in msg.lower():
+            return f"{msg}\n\n请将 ffmpeg 放入便携存储目录 bin/，或安装到系统 PATH。"
+        # Piper 模型缺失
+        if "Piper" in msg or "piper" in msg:
+            return f"{msg}\n\n建议：在依赖检测面板点「下载 Piper 模型」获取语音包。"
+        # 默认
+        return f"{kind}: {msg}\n\n详细堆栈已写入日志（菜单：查看日志）。"
 
     def _on_pause(self, output_dir: str):
         self.status_label.config(text=f"已暂停，进度已保存到: {output_dir}")

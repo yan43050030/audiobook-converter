@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# Windows exe spec - v3.1.0: 章节复选/计数 + 选区试听 + 段级进度 + 响度归一化
+# Windows exe spec - v3.1.1: 体检稳定版（ID3 修正 + 子进程隐藏 + ASR atexit + 友好错误）
 
 import os
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs
@@ -42,8 +42,25 @@ try:
 except Exception:
     pass
 
+# 文档读取扩展（按存在性收集）
+def _collect_optional_module(mod_name: str):
+    try:
+        __import__(mod_name)
+    except Exception:
+        return [], []
+    try:
+        return collect_data_files(mod_name), collect_submodules(mod_name)
+    except Exception:
+        return [], []
+
+_doc_datas, _doc_hidden = [], []
+for _mn in ("docx", "ebooklib", "fitz", "pdfplumber"):
+    d, h = _collect_optional_module(_mn)
+    _doc_datas += d
+    _doc_hidden += h
+
 base_datas = [('icon.png', '.'), ('icon.ico', '.')]
-all_datas = base_datas + piper_datas + onnx_datas + pygame_datas
+all_datas = base_datas + piper_datas + onnx_datas + pygame_datas + _doc_datas
 all_bins = piper_manual_bins + onnx_bins + pygame_bins
 
 base_hidden = [
@@ -57,13 +74,13 @@ base_hidden = [
     # 内置播放器
     'pygame',
 ]
-all_hidden = base_hidden + piper_hidden + onnx_hidden + pygame_hidden + [
+all_hidden = base_hidden + piper_hidden + onnx_hidden + pygame_hidden + _doc_hidden + [
     # ASR 语音转文字
     'faster_whisper', 'ctranslate2',
     # 深色主题
     'sv_ttk',
     # 电子书读取
-    'ebooklib', 'fitz', 'pdfplumber',
+    'docx', 'ebooklib', 'fitz', 'pdfplumber',
     # GPU 检测
     'torch',
     # CosyVoice（可选）

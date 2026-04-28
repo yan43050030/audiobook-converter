@@ -1,5 +1,6 @@
 """ASR（语音转文字）引擎 - 基于 faster-whisper"""
 
+import atexit
 import json
 import logging
 import os
@@ -268,3 +269,7 @@ def transcribe(
 
 class StopRequested(Exception):
     """用户请求暂停"""
+
+
+# 程序退出时确保释放 Whisper 模型，避免 GPU 显存残留
+atexit.register(unload_whisper_model)

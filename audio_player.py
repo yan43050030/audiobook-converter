@@ -10,6 +10,20 @@ from typing import Callable, Optional
 
 logger = logging.getLogger("audiobook_converter")
 
+# Windows 子进程隐藏控制台
+if platform.system() == "Windows":
+    _HIDDEN_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+else:
+    _HIDDEN_FLAGS = 0
+
+
+def _popen(cmd):
+    """统一的隐藏控制台 Popen 包装"""
+    if _HIDDEN_FLAGS:
+        return subprocess.Popen(cmd, creationflags=_HIDDEN_FLAGS,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
 
 class AudioPlayer:
     """跨平台音频播放器，支持 MP3 / WAV，能 pause / resume / stop。
@@ -262,14 +276,14 @@ class AudioPlayer:
         try:
             system = platform.system()
             if system == "Darwin":
-                self._fallback_proc = subprocess.Popen(["afplay", path])
+                self._fallback_proc = _popen(["afplay", path])
             elif system == "Windows":
                 # os.startfile 会启动外部程序但不返回句柄，无法停止；
                 # 优先尝试用 ffplay，找不到再退回 startfile。
                 from shutil import which
                 ffplay = which("ffplay")
                 if ffplay:
-                    self._fallback_proc = subprocess.Popen(
+                    self._fallback_proc = _popen(
                         [ffplay, "-nodisp", "-autoexit", "-loglevel", "quiet", path]
                     )
                 else:
@@ -279,17 +293,17 @@ class AudioPlayer:
                 from shutil import which
                 player = which("ffplay") or which("mpv") or which("mplayer") or which("aplay")
                 if player and "ffplay" in player:
-                    self._fallback_proc = subprocess.Popen(
+                    self._fallback_proc = _popen(
                         [player, "-nodisp", "-autoexit", "-loglevel", "quiet", path]
                     )
                 elif player and "mpv" in player:
-                    self._fallback_proc = subprocess.Popen([player, "--no-video", path])
+                    self._fallback_proc = _popen([player, "--no-video", path])
                 elif player and "mplayer" in player:
-                    self._fallback_proc = subprocess.Popen([player, "-really-quiet", path])
+                    self._fallback_proc = _popen([player, "-really-quiet", path])
                 elif player and "aplay" in player and path.lower().endswith(".wav"):
-                    self._fallback_proc = subprocess.Popen([player, path])
+                    self._fallback_proc = _popen([player, path])
                 else:
-                    subprocess.Popen(["xdg-open", path])
+                    _popen(["xdg-open", path])
                     self._fallback_proc = None
             self._emit("playing")
         except Exception as e:

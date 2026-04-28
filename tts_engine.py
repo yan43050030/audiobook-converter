@@ -40,7 +40,7 @@ except ImportError:
     PYDUB_AVAILABLE = False
     AudioSegment = None
 
-VERSION = "3.1.0"
+VERSION = "3.1.1"
 
 # 当前平台
 _PLATFORM = platform.system()  # "Darwin" / "Windows" / "Linux"
@@ -350,6 +350,7 @@ def _list_external_voices(engine_id: str, executable: str) -> list[str]:
         result = subprocess.run(
             [executable, "--list-voices"],
             capture_output=True, text=True, timeout=30,
+            **_quiet_popen_kwargs(),
         )
         if result.returncode == 0:
             voices = json.loads(result.stdout.strip())
@@ -469,7 +470,8 @@ def _detect_local_voices_macos() -> dict:
     if not say_path:
         return voices
     try:
-        result = subprocess.run([say_path, "-v", "?"], capture_output=True, text=True, timeout=10)
+        result = subprocess.run([say_path, "-v", "?"], capture_output=True, text=True, timeout=10,
+                                **_quiet_popen_kwargs())
         for line in result.stdout.splitlines():
             match = re.match(r'^(\S+)\s+\([^)]*\)\s+(zh_CN|zh_TW|zh_HK)', line)
             if match:
@@ -502,6 +504,7 @@ def _detect_local_voices_windows() -> dict:
         result = subprocess.run(
             [ps, "-NoProfile", "-NonInteractive", "-Command", _POWERSHELL_LIST_VOICES],
             capture_output=True, text=True, timeout=15,
+            **_quiet_popen_kwargs(),
         )
         if result.returncode != 0:
             logger.warning(f"PowerShell 枚举语音失败: {result.stderr.strip()}")
@@ -531,7 +534,8 @@ def _detect_local_voices_linux() -> dict:
         return voices
     try:
         result = subprocess.run(
-            [espeak, "--voices=zh"], capture_output=True, text=True, timeout=10
+            [espeak, "--voices=zh"], capture_output=True, text=True, timeout=10,
+            **_quiet_popen_kwargs(),
         )
         for line in result.stdout.splitlines()[1:]:  # 跳过标题
             cols = line.split()
@@ -734,6 +738,21 @@ def _interruptible_sleep(total_seconds: float, should_stop=None, step: float = 0
     return False
 
 
+# Windows 上避免子进程弹出黑色控制台窗口（PyInstaller --windowed 模式下尤为重要）
+if _PLATFORM == "Windows":
+    _SUBPROCESS_HIDDEN_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+else:
+    _SUBPROCESS_HIDDEN_FLAGS = 0
+
+
+def _quiet_popen_kwargs(extra: Optional[dict] = None) -> dict:
+    """所有 subprocess 调用统一附加 Windows 隐藏窗口标志。"""
+    kw = dict(extra) if extra else {}
+    if _SUBPROCESS_HIDDEN_FLAGS:
+        kw.setdefault("creationflags", _SUBPROCESS_HIDDEN_FLAGS)
+    return kw
+
+
 def _run_subprocess_interruptible(cmd, should_stop=None, input_bytes: Optional[bytes] = None,
                                   timeout: Optional[float] = None, poll_interval: float = 0.2,
                                   **popen_kwargs):
@@ -742,6 +761,9 @@ def _run_subprocess_interruptible(cmd, should_stop=None, input_bytes: Optional[b
     popen_kwargs.setdefault("stderr", subprocess.PIPE)
     if input_bytes is not None:
         popen_kwargs.setdefault("stdin", subprocess.PIPE)
+    # Windows 隐藏控制台窗口
+    if _SUBPROCESS_HIDDEN_FLAGS and "creationflags" not in popen_kwargs:
+        popen_kwargs["creationflags"] = _SUBPROCESS_HIDDEN_FLAGS
 
     proc = subprocess.Popen(cmd, **popen_kwargs)
 
@@ -1497,14 +1519,21 @@ def _merge_mp3_files(file_paths, output_path):
             if idx == 0:
                 outfile.write(data)
             else:
-                # 跳过 ID3v2 标签
+                # 跳过 ID3v2 标签：synchsafe 整数（每字节最高位忽略，按 7 位拼接）
                 if len(data) > 10 and data[:3] == b'ID3':
-                    size = (data[6] << 21) | (data[7] << 14) | (data[8] << 7) | data[9]
+                    size = (
+                        ((data[6] & 0x7f) << 21)
+                        | ((data[7] & 0x7f) << 14)
+                        | ((data[8] & 0x7f) << 7)
+                        | (data[9] & 0x7f)
+                    )
                     header_end = 10 + size
-                    if header_end < len(data):
+                    if 10 < header_end < len(data):
                         outfile.write(data[header_end:])
                     else:
-                        logger.warning(f"ID3标签异常大，跳过: {path}")
+                        # 尺寸异常，整段保留以避免静默丢数据
+                        logger.warning(f"ID3 标签尺寸异常({size})，按原样写入: {path}")
+                        outfile.write(data)
                 else:
                     outfile.write(data)
 
@@ -1538,7 +1567,7 @@ def normalize_loudness(input_path: str, output_path: Optional[str] = None,
         work_path,
     ]
     logger.info(f"响度归一化: {input_path} -> {work_path}")
-    rc = subprocess.run(cmd, capture_output=True).returncode
+    rc = subprocess.run(cmd, capture_output=True, **_quiet_popen_kwargs()).returncode
     if rc != 0 or not os.path.exists(work_path):
         raise RuntimeError(f"loudnorm 失败 (rc={rc})")
     if in_place:
@@ -1679,6 +1708,7 @@ def _wav_to_mp3(wav_path: str, mp3_path: str) -> None:
     subprocess.run(
         [ff, "-y", "-i", wav_path, "-codec:a", "libmp3lame", "-b:a", "128k", mp3_path],
         check=True, capture_output=True,
+        **_quiet_popen_kwargs(),
     )
 
 
