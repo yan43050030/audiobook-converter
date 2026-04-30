@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# Windows exe spec - v3.1.1: 体检稳定版（ID3 修正 + 子进程隐藏 + ASR atexit + 友好错误）
+# Windows exe spec - v5.0.0: 体检稳定版（ID3 修正 + 子进程隐藏 + ASR atexit + 友好错误）
 
 import os
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs
@@ -77,7 +77,10 @@ base_hidden = [
 all_hidden = base_hidden + piper_hidden + onnx_hidden + pygame_hidden + _doc_hidden + [
     # ASR 语音转文字
     'faster_whisper', 'ctranslate2',
-    # 深色主题
+    # Qt6 GUI（PySide6 推荐）
+    'PySide6', 'PySide6.QtWidgets', 'PySide6.QtCore', 'PySide6.QtGui',
+    'shiboken6',
+    # 深色主题（Tkinter 回退用）
     'sv_ttk',
     # 电子书读取
     'docx', 'ebooklib', 'fitz', 'pdfplumber',
@@ -109,7 +112,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['PyQt6', 'PyQt6.QtWidgets', 'PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.sip'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

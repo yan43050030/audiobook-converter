@@ -1,4 +1,4 @@
-"""TTS引擎封装 - 支持 edge-tts（联网）、系统语音（跨平台离线）、Piper（离线高质量）、CosyVoice（离线神经） v4.0.0"""
+"""TTS引擎封装 - 支持 edge-tts（联网）、系统语音（跨平台离线）、Piper（离线高质量）、CosyVoice（离线神经） v5.0.0"""
 
 import asyncio
 import json
@@ -40,7 +40,7 @@ except ImportError:
     PYDUB_AVAILABLE = False
     AudioSegment = None
 
-VERSION = "4.0.0"
+VERSION = "5.0.0"
 
 # 当前平台
 _PLATFORM = platform.system()  # "Darwin" / "Windows" / "Linux"
@@ -126,6 +126,27 @@ def set_storage_dir(path: str) -> None:
     _save_config(cfg)
     _invalidate_scan_cache()
     logger.info(f"存储目录已更新: {get_storage_dir()}")
+
+
+def add_model_search_path(path: str) -> bool:
+    """将用户选择的文件夹加入模型/程序搜索路径。返回 True 表示新增，False 表示已存在。"""
+    cfg = _load_config()
+    paths = cfg.get("extra_search_paths", [])
+    path = os.path.abspath(path)
+    if path in paths:
+        return False
+    paths.append(path)
+    cfg["extra_search_paths"] = paths
+    _save_config(cfg)
+    _invalidate_scan_cache()
+    logger.info(f"添加搜索路径: {path}")
+    return True
+
+
+def get_model_search_paths() -> list[str]:
+    """获取用户添加的额外搜索路径列表"""
+    cfg = _load_config()
+    return cfg.get("extra_search_paths", [])
 
 
 def get_piper_model_dir() -> str:
@@ -225,6 +246,23 @@ def _which_portable(name: str) -> Optional[str]:
     if result is None:
         result = _search_in_tree(storage, candidates, max_depth=4)
 
+    # 2.5) 用户添加的额外搜索路径
+    if result is None:
+        for extra in get_model_search_paths():
+            if os.path.isdir(extra):
+                for cand in candidates:
+                    p = os.path.join(extra, cand)
+                    if os.path.isfile(p):
+                        if _PLATFORM == "Windows" or os.access(p, os.X_OK):
+                            result = p
+                            break
+                if result:
+                    break
+                # 也递归搜索
+                result = _search_in_tree(extra, candidates, max_depth=4)
+                if result:
+                    break
+
     # 3) 系统 PATH
     if result is None:
         for cand in candidates:
@@ -244,15 +282,17 @@ def scan_storage_dependencies() -> dict:
     ffprobe = _which_portable("ffprobe")
     piper_cli = _which_portable("piper")
 
-    # 先找已预置的 Piper 模型目录（piper-models/），再递归全目录
+    # 先找已预置的 Piper 模型目录（piper-models/），再递归全目录，再额外搜索路径
     piper_model_dir = get_piper_model_dir()
     models: List[str] = []
     seen = set()
-    for candidate in _search_models_in_tree(piper_model_dir) + _search_models_in_tree(storage):
-        key = os.path.abspath(candidate)
-        if key not in seen:
-            seen.add(key)
-            models.append(candidate)
+    search_roots = [piper_model_dir, storage] + get_model_search_paths()
+    for root in search_roots:
+        for candidate in _search_models_in_tree(root):
+            key = os.path.abspath(candidate)
+            if key not in seen:
+                seen.add(key)
+                models.append(candidate)
 
     # 外部引擎检测
     ext_engines = _scan_external_engines()
@@ -683,8 +723,8 @@ def refresh_cosyvoice_voices() -> None:
 
 
 refresh_cosyvoice_voices()
-if COSYVOICE_PYTHON_AVAILABLE or _which_portable("cosyvoice"):
-    register_builtin_engine("cosyvoice", "CosyVoice（离线神经）")
+# CosyVoice 始终注册为 builtin（未安装时 UI 显示"需安装"）
+register_builtin_engine("cosyvoice", "CosyVoice（离线神经）")
 
 
 # CosyVoice 模型下载 URL（HuggingFace，hf-mirror 自动回退）

@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# macOS .app bundle spec - v3.1.1: 体检稳定版（ID3 修正 + 子进程隐藏 + ASR atexit + 友好错误）
+# macOS .app bundle spec - v5.0.0: 体检稳定版（ID3 修正 + 子进程隐藏 + ASR atexit + 友好错误）
 
 import os
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs
@@ -64,11 +64,27 @@ try:
 except ImportError:
     pass
 
+# --- Collect PySide6 data ---
+pyside6_datas = collect_data_files('PySide6')
+pyside6_hidden = collect_submodules('PySide6')
+pyside6_bins = collect_dynamic_libs('PySide6')
+
+# --- Qt6 平台插件（PySide6/PyQt6 共享，从 PyQt6 安装路径收集）---
+_qt6_plugins_src = '/opt/homebrew/lib/python3.14/site-packages/PyQt6/Qt6/plugins'
+_qt_plugin_datas = []
+if os.path.isdir(_qt6_plugins_src):
+    for _root, _dirs, _files in os.walk(_qt6_plugins_src):
+        for _fn in _files:
+            _src = os.path.join(_root, _fn)
+            _dst = os.path.join('PySide6', 'Qt', 'plugins',
+                                os.path.relpath(_root, _qt6_plugins_src))
+            _qt_plugin_datas.append((_src, _dst))
+
 # --- Combine all resources ---
 base_datas = [('icon.png', '.'), ('icon.ico', '.'), ('icon.icns', '.')]
-all_datas = base_datas + piper_datas + onnx_datas + pygame_datas + _doc_datas
+all_datas = base_datas + piper_datas + onnx_datas + pygame_datas + _doc_datas + pyside6_datas + _qt_plugin_datas
 
-all_bins = manual_bins + onnx_bins + pygame_bins
+all_bins = manual_bins + onnx_bins + pygame_bins + pyside6_bins
 
 base_hidden = [
     # 在线引擎
@@ -83,10 +99,13 @@ base_hidden = [
     # 内置播放器
     'pygame',
 ]
-all_hidden = base_hidden + piper_hidden + onnx_hidden + pygame_hidden + _doc_hidden + [
+all_hidden = base_hidden + piper_hidden + onnx_hidden + pygame_hidden + _doc_hidden + pyside6_hidden + [
     # ASR 语音转文字
     'faster_whisper', 'ctranslate2',
-    # 深色主题
+    # Qt6 GUI（PySide6 推荐 / PyQt6 回退）
+    'PySide6', 'PySide6.QtWidgets', 'PySide6.QtCore', 'PySide6.QtGui',
+    'shiboken6',
+    # 深色主题（Tkinter 回退用）
     'sv_ttk',
     # 电子书读取
     'docx', 'ebooklib', 'fitz', 'pdfplumber',
@@ -105,8 +124,8 @@ a = Analysis(
     hiddenimports=all_hidden,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
-    excludes=[],
+    runtime_hooks=[os.path.join(SPECPATH, 'runtime_hook.py')],
+    excludes=['PyQt6', 'PyQt6.QtWidgets', 'PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.sip'],
     noarchive=False,
 )
 
@@ -142,8 +161,8 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'AudiobookConverter',
         'CFBundleDisplayName': '文字转有声读物',
-        'CFBundleVersion': '3.1.1',
-        'CFBundleShortVersionString': '3.1.1',
+        'CFBundleVersion': '5.0.0',
+        'CFBundleShortVersionString': '5.0.0',
         'NSHumanReadableCopyright': 'AudiobookConverter',
         'NSHighResolutionCapable': True,
     },

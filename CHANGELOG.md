@@ -1,10 +1,10 @@
 # 项目情况日志 — 文字转有声读物 (Audiobook Converter)
 
-## 当前版本：v4.0.0 (2026-04-30)
+## 当前版本：v5.0.0 (2026-05-01)
 
 ## 项目概览
 
-一个桌面端文字转语音/语音转文字工具（Tkinter GUI），将电子书文本转换为自然语音的 MP3 有声读物。支持 5 种 TTS 引擎和 ASR 引擎，运行于 macOS / Windows / Linux。
+一个桌面端文字转语音/语音转文字工具（PySide6/Qt6 GUI），将电子书文本转换为自然语音的 MP3 有声读物。支持 5 种 TTS 引擎和 ASR 引擎，运行于 macOS / Windows / Linux。
 
 - **仓库**: https://github.com/yan43050030/audiobook-converter
 - **Python**: 3.12+（打包用 3.12，开发使用 3.14）
@@ -89,7 +89,25 @@ audiobook_converter/
 - item 结构：`{title, text, filename, status, chapter_idx, part_idx?, segments?, voice_map?}`
 - 暂停 → save_progress() → 下次选择同目录 → 自动检测进度文件 → 继续
 
-## v4.0.0 本次升级内容
+## v5.0.0 本次升级内容
+
+### Qt6 全新界面
+- 从 Tkinter 迁移到 PySide6/PyQt6（Qt6），保留 Tkinter 回退
+- 侧栏导航 + QStackedWidget 面板切换，7 个设置面板互不干扰
+- 底部 QuickBar（引擎/语音/语速/开始停止始终可见）+ StatusBar
+- 引擎选择改为卡片网格，所有注册引擎（含 CosyVoice + 外部引擎）动态显示
+- 暖色浅色主题 / 深色主题 QSS 样式表，圆角卡片、蓝色强调色
+- QThread + Signal/Slot 替代 threading.Thread + root.after 线程模式
+- 文件读取方法抽离为独立的 `file_reader.py` 模块
+
+### 界面优化
+- 引擎与语音：所有引擎始终可见，未安装显示"需安装"
+- 依赖面板：高度 8→14 行，缺失项显示下载地址
+- 字体统一：9pt→10pt，deps_text 10pt→11pt
+- 新增"添加模型文件夹"和"添加程序文件夹"按钮，递归搜索
+- 合并依赖显示：移除 engine_status_label，状态整合到依赖面板
+
+## v4.0.0 升级内容
 
 ### B2：生成中引擎/语音锁定
 - `_on_engine_change()` 在 `self.is_converting` 时被阻止
@@ -143,10 +161,10 @@ python3 -m unittest discover -s tests -v
 
 # 3. 提交并打 tag
 git add -A
-git commit -m "v4.0.0: <描述>"
+git commit -m "v5.0.0: <描述>"
 git push origin main
-git tag v4.0.0
-git push origin v4.0.0
+git tag v5.0.0
+git push origin v5.0.0
 
 # 4. CI 自动触发 macOS + Windows 构建，产物上传到 GitHub Release
 ```

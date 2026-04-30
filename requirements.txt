@@ -15,8 +15,11 @@ audioop-lts>=0.2.0; python_version>="3.13"
 # 可选：ASR 语音转文字引擎（需约 800MB 磁盘空间）
 # faster-whisper>=1.0.0
 
-# 深色/浅色主题（必需）
+# 深色/浅色主题（必需，Tkinter 版本使用。PySide6 版本使用内置 QSS）
 sv-ttk>=2.5.0
+
+# PySide6 GUI（推荐，LGPL 许可）
+PySide6>=6.5.0
 
 # 可选：EPUB 电子书读取
 # ebooklib>=0.18
