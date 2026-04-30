@@ -357,34 +357,41 @@ class AudiobookConverterApp:
         self.file_count_label.pack(fill=tk.X)
 
         # ===== 引擎与语音 =====
-        engine_group = ttk.LabelFrame(right, text="引擎与语音", padding=pad)
-        engine_group.pack(fill=tk.X, pady=(0, pad))
-        ttk.Label(engine_group, text="语音引擎:", style="Section.TLabel").pack(anchor=tk.W, pady=(0, pad))
+        self.engine_group = ttk.LabelFrame(right, text="引擎与语音", padding=pad)
+        self.engine_group.pack(fill=tk.X, pady=(0, pad))
+        ttk.Label(self.engine_group, text="语音引擎:", style="Section.TLabel").pack(anchor=tk.W, pady=(0, pad))
         self.engine_var = tk.StringVar(value="edge")
-        ttk.Radiobutton(engine_group, text="Edge（联网）", variable=self.engine_var,
-                        value="edge", command=self._on_engine_change).pack(anchor=tk.W)
-        ttk.Radiobutton(engine_group, text="本地（离线）", variable=self.engine_var,
-                        value="local", command=self._on_engine_change).pack(anchor=tk.W)
-        ttk.Radiobutton(engine_group, text="Piper（离线高质量）", variable=self.engine_var,
-                        value="piper", command=self._on_engine_change).pack(anchor=tk.W)
-        self._ext_engine_frame = ttk.Frame(engine_group)
+        self._engine_radio_buttons = []
+        rb = ttk.Radiobutton(self.engine_group, text="Edge（联网）", variable=self.engine_var,
+                        value="edge", command=self._on_engine_change)
+        rb.pack(anchor=tk.W); self._engine_radio_buttons.append(rb)
+        rb = ttk.Radiobutton(self.engine_group, text="本地（离线）", variable=self.engine_var,
+                        value="local", command=self._on_engine_change)
+        rb.pack(anchor=tk.W); self._engine_radio_buttons.append(rb)
+        rb = ttk.Radiobutton(self.engine_group, text="Piper（离线高质量）", variable=self.engine_var,
+                        value="piper", command=self._on_engine_change)
+        rb.pack(anchor=tk.W); self._engine_radio_buttons.append(rb)
+        self._ext_engine_frame = ttk.Frame(self.engine_group)
         self._ext_engine_frame.pack(fill=tk.X)
         # 没有外挂引擎时，给一个引导按钮，让用户能配置 CosyVoice 等
-        ext_btn_row = ttk.Frame(engine_group)
+        ext_btn_row = ttk.Frame(self.engine_group)
         ext_btn_row.pack(fill=tk.X, pady=(2, 0))
-        ttk.Button(ext_btn_row, text="+ 添加 / 配置外挂引擎",
-                   command=self._open_external_dialog).pack(fill=tk.X)
+        self._ext_btn = ttk.Button(ext_btn_row, text="+ 添加 / 配置外挂引擎",
+                   command=self._open_external_dialog)
+        self._ext_btn.pack(fill=tk.X)
         # 引擎状态
-        self.engine_status_label = ttk.Label(engine_group, text="", wraplength=280, foreground="gray")
+        self.engine_status_label = ttk.Label(self.engine_group, text="", wraplength=280, foreground="gray")
         self.engine_status_label.pack(fill=tk.X, pady=(pad, 0))
         # 语音选择
-        voice_row = ttk.Frame(engine_group)
+        voice_row = ttk.Frame(self.engine_group)
         voice_row.pack(fill=tk.X, pady=(pad, 0))
         ttk.Label(voice_row, text="语音:").pack(side=tk.LEFT)
-        ttk.Button(voice_row, text="试听", width=5, command=self._preview_voice_sample).pack(side=tk.RIGHT, padx=(0, pad))
-        ttk.Button(voice_row, text="刷新", width=5, command=self._refresh_voices).pack(side=tk.RIGHT)
+        self._preview_btn = ttk.Button(voice_row, text="试听", width=5, command=self._preview_voice_sample)
+        self._preview_btn.pack(side=tk.RIGHT, padx=(0, pad))
+        self._refresh_btn = ttk.Button(voice_row, text="刷新", width=5, command=self._refresh_voices)
+        self._refresh_btn.pack(side=tk.RIGHT)
         self.voice_var = tk.StringVar()
-        self.voice_combo = ttk.Combobox(engine_group, textvariable=self.voice_var, state="readonly")
+        self.voice_combo = ttk.Combobox(self.engine_group, textvariable=self.voice_var, state="readonly")
         self.voice_combo.pack(fill=tk.X, pady=(pad, 0))
         self._on_engine_change()
 
@@ -420,6 +427,10 @@ class AudiobookConverterApp:
         deps_btns.pack(fill=tk.X, pady=(pad, 0))
         ttk.Button(deps_btns, text="⚙ 重新扫描", command=self._refresh_deps).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 2))
         ttk.Button(deps_btns, text="⬇ 下载 Piper 模型", command=self._download_piper_models).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(2, 0))
+        # CosyVoice 下载按钮（单独一行，避免太挤）
+        cv_btns = ttk.Frame(deps_frame)
+        cv_btns.pack(fill=tk.X, pady=(2, 0))
+        ttk.Button(cv_btns, text="⬇ 下载 CosyVoice 模型", command=self._download_cosyvoice_models).pack(fill=tk.X)
         self._refresh_deps()
 
         # ===== 语速与输出 =====
@@ -460,6 +471,38 @@ class AudiobookConverterApp:
             text="响度归一化（统一各文件音量，需 ffmpeg）",
             variable=self.normalize_var,
         ).pack(fill=tk.X, anchor=tk.W, pady=(4, 0))
+
+        # ===== 对话识别（多语音） =====
+        self.dialogue_group = ttk.LabelFrame(right, text="对话识别（多语音）", padding=pad)
+        self.dialogue_group.pack(fill=tk.X, pady=(pad, 0))
+        self.dialogue_enabled_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            self.dialogue_group,
+            text="启用对话检测（为旁白/对话分配不同语音）",
+            variable=self.dialogue_enabled_var,
+            command=self._on_dialogue_toggle,
+        ).pack(fill=tk.X, anchor=tk.W, pady=(0, pad))
+
+        self.dialogue_narration_frame = ttk.Frame(self.dialogue_group)
+        self.dialogue_narration_frame.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(self.dialogue_narration_frame, text="旁白语音:").pack(side=tk.LEFT)
+        self.dialogue_narration_var = tk.StringVar()
+        self.dialogue_narration_combo = ttk.Combobox(
+            self.dialogue_narration_frame, textvariable=self.dialogue_narration_var,
+            state="readonly", width=22,
+        )
+        self.dialogue_narration_combo.pack(side=tk.RIGHT)
+
+        self.dialogue_voice_frame = ttk.Frame(self.dialogue_group)
+        self.dialogue_voice_frame.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(self.dialogue_voice_frame, text="对话语音:").pack(side=tk.LEFT)
+        self.dialogue_voice_var = tk.StringVar()
+        self.dialogue_voice_combo = ttk.Combobox(
+            self.dialogue_voice_frame, textvariable=self.dialogue_voice_var,
+            state="readonly", width=22,
+        )
+        self.dialogue_voice_combo.pack(side=tk.RIGHT)
+        self._on_dialogue_toggle()
 
         # ===== 操作 =====
         actions_group = ttk.LabelFrame(right, text="操作", padding=pad)
@@ -579,6 +622,42 @@ class AudiobookConverterApp:
 
         threading.Thread(target=run, daemon=True).start()
 
+    def _download_cosyvoice_models(self):
+        """主动触发 CosyVoice 模型下载"""
+        from tts_engine import COSYVOICE_MODEL_URLS, _ensure_cosyvoice_model, COSYVOICE_PYTHON_AVAILABLE
+        if not COSYVOICE_PYTHON_AVAILABLE:
+            messagebox.showerror(
+                "未安装 CosyVoice",
+                "请先安装 CosyVoice Python 包:\n"
+                "pip install cosyvoice soundfile librosa",
+            )
+            return
+        models = list(COSYVOICE_MODEL_URLS.keys())
+        if not models:
+            messagebox.showinfo("提示", "未配置 CosyVoice 模型清单")
+            return
+        if not messagebox.askyesno(
+            "下载 CosyVoice 模型",
+            f"将下载 {len(models)} 个 CosyVoice 模型到便携存储目录。\n"
+            "每个模型约 600MB，下载可能需要较长时间。继续？",
+        ):
+            return
+        self.status_label.config(text="开始下载 CosyVoice 模型...")
+
+        def run():
+            try:
+                for model_key in models:
+                    _ensure_cosyvoice_model(model_key, should_stop=lambda: False)
+                self.root.after(0, lambda: self.status_label.config(text="CosyVoice 模型下载完成"))
+                self.root.after(0, self._refresh_deps)
+                self.root.after(0, self._on_engine_change)
+            except Exception as e:
+                logger.error(f"下载失败: {e}", exc_info=True)
+                self.root.after(0, lambda: messagebox.showerror("下载失败", str(e)))
+                self.root.after(0, lambda: self.status_label.config(text="下载失败"))
+
+        threading.Thread(target=run, daemon=True).start()
+
     # ===== 依赖检测（递归扫描便携目录） =====
 
     def _refresh_deps(self):
@@ -623,6 +702,26 @@ class AudiobookConverterApp:
             lines.append("○ CUDA: 未检测到（仅 CPU）")
         if gpu.get("onnxruntime_gpu"):
             lines.append("✓ onnxruntime GPU 可用")
+
+        # CosyVoice 状态
+        try:
+            from tts_engine import COSYVOICE_PYTHON_AVAILABLE, get_cosyvoice_model_dir
+            if COSYVOICE_PYTHON_AVAILABLE:
+                lines.append("✓ CosyVoice Python 包：已安装")
+                model_dir = get_cosyvoice_model_dir()
+                if os.path.isdir(model_dir):
+                    cv_models = [d for d in os.listdir(model_dir)
+                                 if os.path.isdir(os.path.join(model_dir, d))]
+                    if cv_models:
+                        lines.append(f"CosyVoice 模型：{len(cv_models)} 个")
+                        for m in cv_models[:4]:
+                            lines.append(f"   * {m}")
+                    else:
+                        lines.append("○ CosyVoice 模型：未下载")
+            else:
+                lines.append("○ CosyVoice Python 包：未安装")
+        except Exception:
+            lines.append("○ CosyVoice：检测失败")
 
         # 外部插件引擎
         ext = info.get("external_engines", {})
@@ -931,7 +1030,70 @@ class AudiobookConverterApp:
             rb.pack(anchor=tk.W)
             self._ext_engine_widgets.append(rb)
 
+    def _set_engine_controls_state(self, state: str):
+        """启用/禁用引擎选择区所有控件"""
+        for w in getattr(self, "_engine_radio_buttons", []):
+            try:
+                w.configure(state=state)
+            except Exception:
+                pass
+        for w in getattr(self, "_ext_engine_widgets", []):
+            try:
+                w.configure(state=state)
+            except Exception:
+                pass
+        try:
+            self.voice_combo.configure(state="readonly" if state == "normal" else state)
+        except Exception:
+            pass
+        try:
+            self._preview_btn.configure(state=state)
+        except Exception:
+            pass
+        try:
+            self._refresh_btn.configure(state=state)
+        except Exception:
+            pass
+        try:
+            self._ext_btn.configure(state=state)
+        except Exception:
+            pass
+        try:
+            self.dialogue_narration_combo.configure(
+                state="readonly" if state == "normal" else state)
+        except Exception:
+            pass
+        try:
+            self.dialogue_voice_combo.configure(
+                state="readonly" if state == "normal" else state)
+        except Exception:
+            pass
+
+    def _on_dialogue_toggle(self):
+        """对话检测开关变化时更新 UI 状态"""
+        enabled = self.dialogue_enabled_var.get()
+        state = "readonly" if enabled else "disabled"
+        self.dialogue_narration_combo.configure(state=state)
+        self.dialogue_voice_combo.configure(state=state)
+        if enabled:
+            engine = self.engine_var.get()
+            voices = get_voice_list(engine)
+            self.dialogue_narration_combo["values"] = voices
+            self.dialogue_voice_combo["values"] = voices
+            if voices:
+                if not self.dialogue_narration_var.get():
+                    self.dialogue_narration_combo.current(0)
+                if not self.dialogue_voice_var.get():
+                    self.dialogue_voice_combo.current(min(1, len(voices) - 1))
+
     def _on_engine_change(self):
+        if self.is_converting:
+            if hasattr(self, "status_label"):
+                self.status_label.config(
+                    text="正在生成中，引擎/语音切换将在下次生成时生效",
+                    foreground="#cc6600",
+                )
+            return
         engine = self.engine_var.get()
         voices = get_voice_list(engine)
         self.voice_combo["values"] = voices
@@ -953,6 +1115,12 @@ class AudiobookConverterApp:
 
         if hasattr(self, "status_label"):
             self.status_label.config(text="就绪", foreground="gray")
+
+        # 同步对话检测的语音列表
+        if hasattr(self, "dialogue_enabled_var") and self.dialogue_enabled_var.get():
+            voices = get_voice_list(engine)
+            self.dialogue_narration_combo["values"] = voices
+            self.dialogue_voice_combo["values"] = voices
 
     def _apply_dark_mode_to_tk_widgets(self, is_dark: bool):
         """手动更新非 ttk 控件（Text/ScrolledText）的配色以适配深色/浅色主题"""
@@ -1568,12 +1736,29 @@ class AudiobookConverterApp:
         self.btn_pause.config(state="normal")
         self.btn_resume.config(state="disabled")
         self.status_label.config(text="准备转换..." if not resume else "准备继续转换...")
+        self._set_engine_controls_state("disabled")
 
         engine = self.engine_var.get()
         voice = get_voice_id(self.voice_var.get(), engine)
         rate = self._get_rate_string()
         mode = self.mode_var.get()
         time_minutes = self.time_var.get()
+
+        # 对话检测参数
+        dialogue_enabled = (
+            self.dialogue_enabled_var.get()
+            if hasattr(self, "dialogue_enabled_var")
+            else False
+        )
+        voice_map = None
+        if dialogue_enabled:
+            narration_display = self.dialogue_narration_var.get()
+            dialogue_display = self.dialogue_voice_var.get()
+            if narration_display and dialogue_display:
+                voice_map = {
+                    "narration": get_voice_id(narration_display, engine),
+                    "dialogue": get_voice_id(dialogue_display, engine),
+                }
 
         def progress_cb(current, total, seg_current=None, seg_total=None, seg_title=None):
             pct = int(current / total * 100) if total else 0
@@ -1604,6 +1789,8 @@ class AudiobookConverterApp:
                     should_stop=should_stop_cb,
                     resume=resume,
                     normalize_audio=self.normalize_var.get() if hasattr(self, "normalize_var") else False,
+                    dialogue_detection=dialogue_enabled,
+                    voice_map=voice_map,
                 )
                 if self.should_stop:
                     self.root.after(0, lambda: self._on_pause(output_dir))
@@ -1619,6 +1806,7 @@ class AudiobookConverterApp:
                 self.root.after(0, lambda: self.btn_convert.config(state="normal"))
                 self.root.after(0, lambda: self.btn_pause.config(state="disabled", text="⏹ 暂停"))
                 self.root.after(0, lambda: self.btn_resume.config(state="normal"))
+                self.root.after(0, lambda: self._set_engine_controls_state("normal"))
 
         threading.Thread(target=run, daemon=True).start()
 

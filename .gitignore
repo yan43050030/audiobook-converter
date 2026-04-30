@@ -6,4 +6,6 @@ dist/
 .audiobook_progress.json
 *.mp3
 *.aiff
+*.zip
 .DS_Store
+tests/__pycache__/

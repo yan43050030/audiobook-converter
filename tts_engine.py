@@ -1,4 +1,4 @@
-"""TTS引擎封装 - 支持 edge-tts（联网）、系统语音（跨平台离线）、Piper（离线高质量） v3.0.0"""
+"""TTS引擎封装 - 支持 edge-tts（联网）、系统语音（跨平台离线）、Piper（离线高质量）、CosyVoice（离线神经） v4.0.0"""
 
 import asyncio
 import json
@@ -40,7 +40,7 @@ except ImportError:
     PYDUB_AVAILABLE = False
     AudioSegment = None
 
-VERSION = "3.1.1"
+VERSION = "4.0.0"
 
 # 当前平台
 _PLATFORM = platform.system()  # "Darwin" / "Windows" / "Linux"
@@ -654,19 +654,24 @@ COSYVOICE_DEFAULT_VOICE = ""
 
 
 def _detect_cosyvoice_voices() -> dict:
-    """检测 CosyVoice 可用语音（通过 Python 包自省）"""
+    """检测 CosyVoice 可用语音。优先从已下载的模型中扫描。"""
     voices: dict = {}
-    if not COSYVOICE_PYTHON_AVAILABLE:
-        return voices
+
+    if COSYVOICE_PYTHON_AVAILABLE:
+        voices["默认中文女声"] = "default_female"
+        voices["默认中文男声"] = "default_male"
+
+    # 扫描已下载的模型目录
     try:
-        # CosyVoice 语音列表检查
-        # 如果有预定义语音列表，通过包 API 获取
-        voices = {
-            "默认中文女声": "default_female",
-            "默认中文男声": "default_male",
-        }
-    except Exception:
-        pass
+        model_dir = get_cosyvoice_model_dir()
+        if os.path.isdir(model_dir):
+            for entry in sorted(os.listdir(model_dir)):
+                entry_path = os.path.join(model_dir, entry)
+                if os.path.isdir(entry_path) and os.listdir(entry_path):
+                    voices[f"CosyVoice ({entry})"] = entry
+    except Exception as e:
+        logger.warning(f"扫描 CosyVoice 模型目录失败: {e}")
+
     return voices
 
 
@@ -680,6 +685,73 @@ def refresh_cosyvoice_voices() -> None:
 refresh_cosyvoice_voices()
 if COSYVOICE_PYTHON_AVAILABLE or _which_portable("cosyvoice"):
     register_builtin_engine("cosyvoice", "CosyVoice（离线神经）")
+
+
+# CosyVoice 模型下载 URL（HuggingFace，hf-mirror 自动回退）
+COSYVOICE_MODEL_URLS = {
+    "CosyVoice-300M-SFT": {
+        "url": "https://huggingface.co/FunAudioLLM/CosyVoice-300M-SFT/resolve/main/cosyvoice-300m-sft.tar.gz",
+        "description": "CosyVoice-300M-SFT 微调模型（推荐，≈600MB）",
+    },
+}
+
+
+def get_cosyvoice_model_dir() -> str:
+    """CosyVoice 模型目录（跟随存储目录）"""
+    path = os.path.join(get_storage_dir(), "cosyvoice-models")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
+def _cosyvoice_install_hint() -> str:
+    """CosyVoice 安装引导提示"""
+    return (
+        "CosyVoice 未安装。请通过以下方式安装：\n"
+        "1. pip install cosyvoice soundfile librosa\n"
+        "2. 在 GUI 依赖检测面板点击「下载 CosyVoice 模型」\n"
+        "3. 或将 CosyVoice 可执行文件放入 engines/cosyvoice/ 作为外挂引擎"
+    )
+
+
+def _download_cosyvoice_model(model_key: str, should_stop=None):
+    """下载并解压 CosyVoice 模型"""
+    if model_key not in COSYVOICE_MODEL_URLS:
+        raise ValueError(f"不支持的 CosyVoice 模型: {model_key}")
+
+    model_dir = get_cosyvoice_model_dir()
+    tar_path = os.path.join(model_dir, f"{model_key}.tar.gz")
+    extract_dir = os.path.join(model_dir, model_key)
+
+    if os.path.isdir(extract_dir) and os.listdir(extract_dir):
+        logger.info(f"CosyVoice 模型已存在: {extract_dir}")
+        return extract_dir
+
+    url = COSYVOICE_MODEL_URLS[model_key]["url"]
+    _download_file_with_progress(url, tar_path,
+        f"CosyVoice {model_key}", should_stop=should_stop)
+
+    import tarfile
+    logger.info(f"解压 CosyVoice 模型: {tar_path}")
+    os.makedirs(extract_dir, exist_ok=True)
+    with tarfile.open(tar_path, "r:gz") as tar:
+        tar.extractall(path=extract_dir)
+
+    try:
+        os.remove(tar_path)
+    except Exception:
+        pass
+
+    logger.info(f"CosyVoice 模型就绪: {extract_dir}")
+    return extract_dir
+
+
+def _ensure_cosyvoice_model(model_key: str = "CosyVoice-300M-SFT", should_stop=None):
+    """确保 CosyVoice 模型存在，不存在则下载"""
+    model_dir = os.path.join(get_cosyvoice_model_dir(), model_key)
+    if not os.path.isdir(model_dir) or not os.listdir(model_dir):
+        logger.info(f"CosyVoice 模型不存在，开始下载: {model_key}")
+        _download_cosyvoice_model(model_key, should_stop=should_stop)
+    return model_dir
 
 
 # Piper运行模式
@@ -904,16 +976,21 @@ def check_engine_ready(engine="edge"):
 
     if engine == "cosyvoice":
         if COSYVOICE_PYTHON_AVAILABLE:
-            return True, "CosyVoice 可用（Python 包）"
+            model_dir = get_cosyvoice_model_dir()
+            models = []
+            if os.path.isdir(model_dir):
+                models = [d for d in os.listdir(model_dir)
+                          if os.path.isdir(os.path.join(model_dir, d))]
+            if models:
+                return True, f"CosyVoice 可用（Python 包, {len(models)} 个模型）"
+            return True, "CosyVoice Python 包已安装（可点击「下载 CosyVoice 模型」获取预训练模型）"
         cli = _which_portable("cosyvoice")
         if cli:
-            return True, f"CosyVoice 可用（{cli}）"
-        hint = "CosyVoice 未安装。\n可通过外部引擎插件放入 engines/cosyvoice/ 目录，或 pip install cosyvoice。"
-        # 检查外部引擎目录中是否有 CosyVoice
+            return True, f"CosyVoice CLI 可用（{cli}）"
         ext = _scan_external_engines()
         if "cosyvoice" in ext:
             return True, f"CosyVoice 外挂引擎可用（{ext['cosyvoice'].get('name')}）"
-        return False, hint
+        return False, "CosyVoice 未安装。\n" + _cosyvoice_install_hint()
 
     # 外部引擎
     if _is_external_engine(engine):
@@ -1053,6 +1130,67 @@ def _find_source(source_map, char_pos):
         else:
             break
     return result
+
+
+# ======== 对话识别（多人对话） ========
+
+DIALOGUE_PATTERNS = [
+    re.compile(r'[\u201c\u201d\"]([^\u201c\u201d\"]+)[\u201c\u201d\"]'),
+    re.compile(r"[\u2018\u2019']([^\u2018\u2019']+)[\u2018\u2019']"),
+    re.compile(r'[\u300c]([^\u300d]+)[\u300d]'),
+    re.compile(r'"([^"]+)"'),
+]
+SPEAKER_PATTERN = re.compile(
+    r'([^\uff0c\u3002\uff01\uff1f\n\u201c\u201d\u2018\u2019\u300c\u300d \t]{1,15})'
+    r'(?:问道|喊道|叫道|答道|讲道|嚷道|吼道|叹道|骂道|喝道|回答|'
+    r'说|问|道|喊|叫|答|讲|嚷|吼|叹|骂|喝)[\uff1a:]'
+)
+
+
+def detect_dialogue_segments(text: str) -> list[dict]:
+    """检测文本中的对话和叙述片段，返回带类型标记的段列表。
+
+    返回: [{"text": str, "type": "narration"|"dialogue", "speaker": str|None}]
+    """
+    if not text.strip():
+        return []
+
+    segments = []
+    pos = 0
+    text_len = len(text)
+
+    while pos < text_len:
+        earliest_match = None
+        earliest_start = text_len
+        for pattern in DIALOGUE_PATTERNS:
+            m = pattern.search(text, pos)
+            if m and m.start() < earliest_start:
+                earliest_start = m.start()
+                earliest_match = m
+
+        if earliest_match is None:
+            remaining = text[pos:].strip()
+            if remaining:
+                segments.append({"text": remaining, "type": "narration", "speaker": None})
+            break
+
+        if earliest_start > pos:
+            narration = text[pos:earliest_start].strip()
+            if narration:
+                segments.append({"text": narration, "type": "narration", "speaker": None})
+
+        speaker = None
+        context_before = text[max(0, earliest_start - 40):earliest_start]
+        spk_match = SPEAKER_PATTERN.search(context_before)
+        if spk_match:
+            speaker = spk_match.group(1).strip()
+
+        dialogue_text = earliest_match.group(0)
+        segments.append({"text": dialogue_text, "type": "dialogue", "speaker": speaker})
+
+        pos = earliest_match.end()
+
+    return segments
 
 
 # ======== 文本分段 ========
@@ -1505,6 +1643,98 @@ def _piper_generate_safe(text, voice, rate, output_path, should_stop=None):
                 raise
 
 
+# ======== CosyVoice TTS 引擎 ========
+
+def _cosyvoice_generate(text: str, voice: str, rate: str, output_path: str,
+                        should_stop=None) -> None:
+    """使用 CosyVoice Python API 生成音频，失败则回退到外部引擎"""
+    if not COSYVOICE_PYTHON_AVAILABLE or _CosyVoiceCls is None:
+        raise RuntimeError("CosyVoice Python 包未安装。\n" + _cosyvoice_install_hint())
+
+    import numpy as np
+    model_key = voice if voice in COSYVOICE_MODEL_URLS else "CosyVoice-300M-SFT"
+    model_dir = _ensure_cosyvoice_model(model_key, should_stop=should_stop)
+
+    rate_val = int(rate.replace("%", "").replace("+", ""))
+    speed = 1.0 + rate_val / 100.0
+    speed = max(0.5, min(2.0, speed))
+
+    try:
+        cosy = _CosyVoiceCls(model_dir=model_dir)
+    except TypeError:
+        cosy = _CosyVoiceCls(model_dir)
+
+    result = cosy.inference_sft(text, stream=False)
+
+    audio_data = np.array([], dtype=np.float32)
+    sample_rate = 22050
+    for chunk in result:
+        if isinstance(chunk, dict):
+            audio_data = np.concatenate([audio_data, chunk.get("tts_speech", np.array([], dtype=np.float32))])
+            sample_rate = chunk.get("sample_rate", sample_rate)
+        elif isinstance(chunk, np.ndarray):
+            audio_data = chunk
+
+    if len(audio_data) == 0:
+        raise RuntimeError("CosyVoice 合成返回空音频")
+
+    # 速度调整
+    if speed != 1.0:
+        try:
+            import librosa
+            audio_data = librosa.effects.time_stretch(audio_data, rate=speed)
+        except ImportError:
+            logger.warning("librosa 未安装，跳过语速调整")
+
+    wav_path = output_path.replace('.mp3', '.wav')
+    try:
+        import soundfile as sf
+        sf.write(wav_path, audio_data, int(sample_rate))
+        _wav_to_mp3(wav_path, output_path)
+    finally:
+        if os.path.exists(wav_path):
+            try:
+                os.remove(wav_path)
+            except Exception:
+                pass
+
+
+def _cosyvoice_generate_safe(text, voice, rate, output_path, should_stop=None):
+    """安全的 CosyVoice 生成，含重试 + 外部引擎回退"""
+    # 优先 Python API
+    if COSYVOICE_PYTHON_AVAILABLE and _CosyVoiceCls is not None:
+        for attempt in range(MAX_RETRIES + 1):
+            if should_stop and should_stop():
+                raise StopRequested("用户暂停")
+            try:
+                logger.info(f"CosyVoice 生成 → {output_path} (尝试 {attempt + 1})")
+                _cosyvoice_generate(text, voice, rate, output_path, should_stop=should_stop)
+                if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                    logger.info(f"CosyVoice 完成: {output_path}")
+                    return
+            except StopRequested:
+                raise
+            except Exception as e:
+                delay = RETRY_DELAY * (2 ** attempt)
+                logger.error(f"CosyVoice 生成失败 尝试{attempt + 1}: {e}")
+                if attempt >= MAX_RETRIES:
+                    logger.warning("CosyVoice Python API 失败，回退到外部引擎")
+                    break
+                if _interruptible_sleep(delay, should_stop):
+                    raise StopRequested("用户暂停")
+
+    # 回退：外部引擎
+    ext = _scan_external_engines()
+    cosy_ext = ext.get("cosyvoice")
+    if not cosy_ext:
+        raise RuntimeError(
+            "CosyVoice 不可用：Python 包未安装且未找到外部引擎。\n"
+            + _cosyvoice_install_hint()
+        )
+    _external_generate(text, voice, rate, output_path, "cosyvoice",
+                       cosy_ext["executable"], should_stop=should_stop)
+
+
 # ======== 音频文件合并 ========
 
 def _merge_mp3_files(file_paths, output_path):
@@ -1820,12 +2050,62 @@ def _local_generate(text: str, voice: str, rate: str, output_path: str, should_s
 
 # ======== 统一生成接口 ========
 
+def _generate_one_safe_multi_voice(
+    dialogue_segments, default_voice, rate, output_path, engine,
+    should_stop=None, seg_progress=None, voice_map=None,
+):
+    """为对话识别后的混合片段生成音频，不同片段使用不同语音。"""
+    temp_dir = tempfile.mkdtemp()
+    temp_files = []
+    total = len(dialogue_segments)
+    try:
+        for i, seg in enumerate(dialogue_segments):
+            if should_stop and should_stop():
+                raise StopRequested("用户暂停")
+
+            seg_text = seg["text"]
+            seg_type = seg.get("type", "narration")
+            seg_speaker = seg.get("speaker")
+
+            seg_voice = default_voice
+            if voice_map:
+                if seg_speaker and seg_speaker in voice_map:
+                    seg_voice = voice_map[seg_speaker]
+                elif seg_type == "dialogue" and "dialogue" in voice_map:
+                    seg_voice = voice_map["dialogue"]
+                elif seg_type == "narration" and "narration" in voice_map:
+                    seg_voice = voice_map["narration"]
+
+            tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
+            _generate_one_safe(seg_text, seg_voice, rate, tp, engine=engine,
+                               should_stop=should_stop, seg_progress=None,
+                               voice_map=None, dialogue_segments=None)
+            temp_files.append(tp)
+            if seg_progress and total > 1:
+                try:
+                    seg_progress(i + 1, total)
+                except Exception:
+                    pass
+
+        _merge_mp3_files(temp_files, output_path)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 def _generate_one_safe(text, voice, rate, output_path, engine="edge", should_stop=None,
-                       seg_progress=None):
+                       seg_progress=None, voice_map=None, dialogue_segments=None):
     """生成单个MP3，带重试和验证（可中断）。
 
     seg_progress(current, total): 当文本被切成多段时，每段生成完毕调用一次。
+    voice_map: 对话检测模式时的语音映射 {"narration": voice_id, "dialogue": voice_id, speaker_name: voice_id}
+    dialogue_segments: 来自 detect_dialogue_segments() 的预检测段列表
     """
+    if dialogue_segments:
+        return _generate_one_safe_multi_voice(
+            dialogue_segments, voice, rate, output_path, engine,
+            should_stop=should_stop, seg_progress=seg_progress, voice_map=voice_map,
+        )
+
     segments = split_text(text)
     total_segs = len(segments)
 
@@ -1877,31 +2157,22 @@ def _generate_one_safe(text, voice, rate, output_path, engine="edge", should_sto
                     finally:
                         shutil.rmtree(temp_dir, ignore_errors=True)
             elif engine == "cosyvoice":
-                # CosyVoice: 优先 Python 包，回退到外部引擎协议
-                if COSYVOICE_PYTHON_AVAILABLE and _CosyVoiceCls is not None:
-                    logger.warning("CosyVoice Python API 尚未完全集成，尝试外部引擎路径...")
-                # 回退：通过外部引擎协议调用
-                ext = _scan_external_engines()
-                cosy_ext = ext.get("cosyvoice")
-                if cosy_ext:
-                    executable = cosy_ext["executable"]
-                    if len(segments) == 1:
-                        _external_generate(segments[0], voice, rate, output_path, "cosyvoice", executable, should_stop=should_stop)
-                    else:
-                        temp_dir = tempfile.mkdtemp()
-                        temp_files = []
-                        try:
-                            for i, seg in enumerate(segments):
-                                if should_stop and should_stop():
-                                    raise StopRequested("用户暂停")
-                                tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
-                                _external_generate(seg, voice, rate, tp, "cosyvoice", executable, should_stop=should_stop)
-                                temp_files.append(tp)
-                            _merge_mp3_files(temp_files, output_path)
-                        finally:
-                            shutil.rmtree(temp_dir, ignore_errors=True)
+                if len(segments) == 1:
+                    _cosyvoice_generate_safe(segments[0], voice, rate, output_path, should_stop=should_stop)
                 else:
-                    raise RuntimeError("CosyVoice 不可用：请将 CosyVoice 程序放入 engines/cosyvoice/ 目录")
+                    temp_dir = tempfile.mkdtemp()
+                    temp_files = []
+                    try:
+                        for i, seg in enumerate(segments):
+                            if should_stop and should_stop():
+                                raise StopRequested("用户暂停")
+                            tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
+                            _cosyvoice_generate_safe(seg, voice, rate, tp, should_stop=should_stop)
+                            temp_files.append(tp)
+                            _notify(i)
+                        _merge_mp3_files(temp_files, output_path)
+                    finally:
+                        shutil.rmtree(temp_dir, ignore_errors=True)
             elif _is_external_engine(engine):
                 ext_info = _scan_external_engines().get(engine)
                 if not ext_info:
@@ -2007,6 +2278,8 @@ def convert_batch(
     should_stop=None,
     resume=False,
     normalize_audio: bool = False,
+    dialogue_detection: bool = False,
+    voice_map: dict | None = None,
 ):
     os.makedirs(output_dir, exist_ok=True)
 
@@ -2071,6 +2344,17 @@ def convert_batch(
 
         save_progress(output_dir, items)
 
+    # 对话检测：对每个待处理 item 运行 detect_dialogue_segments
+    if dialogue_detection and voice_map:
+        for item in items:
+            if item["status"] in ("done", "skipped"):
+                continue
+            segs = detect_dialogue_segments(item.get("text", ""))
+            if segs and any(s["type"] == "dialogue" for s in segs):
+                item["segments"] = segs
+                item["voice_map"] = voice_map
+        save_progress(output_dir, items)
+
     logger.info(f"批量生成开始: {sum(1 for it in items if it['status'] not in ('done','skipped'))} 个待处理, 引擎={engine}")
 
     if engine == "edge":
@@ -2098,7 +2382,9 @@ def convert_batch(
                                 def _piper_cli_one(it=item):
                                     p = os.path.join(output_dir, it["filename"])
                                     _generate_one_safe(it["text"], voice, rate, p,
-                                                       engine="piper", should_stop=should_stop)
+                                                       engine="piper", should_stop=should_stop,
+                                                       voice_map=it.get("voice_map"),
+                                                       dialogue_segments=it.get("segments"))
                                     it["status"] = "done"
                                 future = executor.submit(_piper_cli_one)
                                 fut_map[future] = idx
@@ -2161,7 +2447,9 @@ def convert_batch(
                                     pass
                         _generate_one_safe(item["text"], voice, rate, out_path,
                                            engine=engine, should_stop=should_stop,
-                                           seg_progress=_seg_cb)
+                                           seg_progress=_seg_cb,
+                                           voice_map=item.get("voice_map"),
+                                           dialogue_segments=item.get("segments"))
                         item["status"] = "done"
                     except StopRequested:
                         logger.info(f"用户暂停：[{item['title']}] 未完成")
