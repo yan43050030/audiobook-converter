@@ -458,15 +458,8 @@ class AudiobookConverterApp:
         threading.Thread(target=run, daemon=True).start()
 
     def _download_cosyvoice_models(self):
-        """主动触发 CosyVoice 模型下载"""
-        from tts_engine import COSYVOICE_MODEL_URLS, _ensure_cosyvoice_model, COSYVOICE_PYTHON_AVAILABLE
-        if not COSYVOICE_PYTHON_AVAILABLE:
-            messagebox.showerror(
-                "未安装 CosyVoice",
-                "请先安装 CosyVoice Python 包:\n"
-                "pip install cosyvoice soundfile librosa",
-            )
-            return
+        """主动触发 CosyVoice 模型下载（无需 Python 包，仅需网络）"""
+        from tts_engine import COSYVOICE_MODEL_URLS, _ensure_cosyvoice_model
         models = list(COSYVOICE_MODEL_URLS.keys())
         if not models:
             messagebox.showinfo("提示", "未配置 CosyVoice 模型清单")

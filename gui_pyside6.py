@@ -1,4 +1,4 @@
-"""Qt6 GUI — 文字转有声读物 v5.0.0（兼容 PySide6 / PyQt6）"""
+"""Qt6 GUI — 文字转有声读物 v5.0.1（兼容 PySide6 / PyQt6）"""
 
 import os, sys, threading, subprocess, platform, logging, json, tempfile, shutil
 from typing import Optional
@@ -1405,9 +1405,7 @@ class AudiobookConverterMain(QMainWindow):
         self._download_worker.start()
 
     def _download_cosyvoice_models(self):
-        if not COSYVOICE_PYTHON_AVAILABLE:
-            QMessageBox.critical(self, "未安装 CosyVoice", "请先安装: pip install cosyvoice soundfile librosa")
-            return
+        # 模型下载无需 Python 包，只需网络连接。合成时才需要 cosyvoice 包。
         if QMessageBox.question(self, "下载 CosyVoice 模型",
                                 "将下载 CosyVoice 模型到便携存储目录（≈600MB）。继续？") != QMessageBox.StandardButton.Yes:
             return

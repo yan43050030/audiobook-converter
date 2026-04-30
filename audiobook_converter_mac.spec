@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# macOS .app bundle spec - v5.0.0: 体检稳定版（ID3 修正 + 子进程隐藏 + ASR atexit + 友好错误）
+# macOS .app bundle spec - v5.0.1: 体检稳定版（ID3 修正 + 子进程隐藏 + ASR atexit + 友好错误）
 
 import os
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs
@@ -161,8 +161,8 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'AudiobookConverter',
         'CFBundleDisplayName': '文字转有声读物',
-        'CFBundleVersion': '5.0.0',
-        'CFBundleShortVersionString': '5.0.0',
+        'CFBundleVersion': '5.0.1',
+        'CFBundleShortVersionString': '5.0.1',
         'NSHumanReadableCopyright': 'AudiobookConverter',
         'NSHighResolutionCapable': True,
     },
