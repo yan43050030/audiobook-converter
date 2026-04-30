@@ -271,5 +271,100 @@ class StopRequested(Exception):
     """用户请求暂停"""
 
 
+# ======== 外挂 ASR 引擎 ========
+
+def _find_engine_executable(engine_path: str, name: str) -> Optional[str]:
+    """在引擎目录中查找可执行文件"""
+    import platform as _plat
+    for cand in [name, name + ".exe", name + ".bat", name + ".py"]:
+        p = os.path.join(engine_path, cand)
+        if os.path.isfile(p):
+            if name.endswith(".py") or _plat.system() == "Windows" or os.access(p, os.X_OK):
+                return p
+    # 兼容：目录内任意 .py
+    for fn in sorted(os.listdir(engine_path)):
+        if fn.endswith(".py"):
+            full = os.path.join(engine_path, fn)
+            if os.path.isfile(full):
+                return full
+    return None
+
+
+def scan_external_asr_engines(storage_dir: str) -> dict[str, dict]:
+    """扫描 {storage_dir}/asr-engines/ 下的外挂 ASR 引擎"""
+    engines_dir = os.path.join(storage_dir, "asr-engines")
+    if not os.path.isdir(engines_dir):
+        return {}
+    found: dict[str, dict] = {}
+    for entry in sorted(os.listdir(engines_dir)):
+        epath = os.path.join(engines_dir, entry)
+        if not os.path.isdir(epath):
+            continue
+        exe = _find_engine_executable(epath, entry)
+        if exe is None:
+            continue
+        # 读取 engine.json 元数据
+        meta = {}
+        meta_path = os.path.join(epath, "engine.json")
+        if os.path.isfile(meta_path):
+            try:
+                import json as _json
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = _json.load(f)
+            except Exception:
+                pass
+        found[entry] = {
+            "name": meta.get("name", entry),
+            "executable": exe,
+            "engine_id": entry,
+            "description": meta.get("description", ""),
+        }
+    return found
+
+
+def external_asr_transcribe(engine_id: str, input_path: str, output_format: str = "txt",
+                            model: str = "", language: str = "auto",
+                            should_stop=None, progress_callback=None) -> str:
+    """使用外挂 ASR 引擎转录音频"""
+    from tts_engine import get_storage_dir, _run_subprocess_interruptible, StopRequested
+    engines = scan_external_asr_engines(get_storage_dir())
+    info = engines.get(engine_id)
+    if not info:
+        raise RuntimeError(f"外挂 ASR 引擎 '{engine_id}' 未找到。请放入 asr-engines/{engine_id}/ 目录。")
+
+    exe = info["executable"]
+    # 需要先将音频转为 WAV（外挂引擎可能只支持 WAV）
+    wav_path = convert_audio_to_wav(input_path)
+
+    import tempfile
+    out_path = os.path.join(tempfile.gettempdir(), f"asr_ext_{os.getpid()}.txt")
+    cmd = [exe, "--input", wav_path, "--output", out_path, "--format", output_format]
+    if model:
+        cmd.extend(["--model", model])
+    if language and language != "auto":
+        cmd.extend(["--language", language])
+
+    try:
+        rc, _out, err = _run_subprocess_interruptible(cmd, should_stop=should_stop, timeout=1800)
+        if rc != 0:
+            stderr = err.decode("utf-8", errors="replace") if err else ""
+            raise RuntimeError(f"外挂 ASR 引擎 '{engine_id}' 失败 (code {rc}): {stderr}")
+        if os.path.exists(out_path):
+            with open(out_path, "r", encoding="utf-8") as f:
+                return f.read()
+        raise RuntimeError(f"外挂 ASR 引擎 '{engine_id}' 未生成输出文件")
+    finally:
+        if os.path.exists(wav_path):
+            try:
+                os.remove(wav_path)
+            except Exception:
+                pass
+        if os.path.exists(out_path):
+            try:
+                os.remove(out_path)
+            except Exception:
+                pass
+
+
 # 程序退出时确保释放 Whisper 模型，避免 GPU 显存残留
 atexit.register(unload_whisper_model)

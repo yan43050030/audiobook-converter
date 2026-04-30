@@ -1,4 +1,4 @@
-"""Qt6 GUI — 文字转有声读物 v5.0.1（兼容 PySide6 / PyQt6）"""
+"""Qt6 GUI — 文字转有声读物 v5.0.2（兼容 PySide6 / PyQt6）"""
 
 import os, sys, threading, subprocess, platform, logging, json, tempfile, shutil
 from typing import Optional
@@ -48,7 +48,8 @@ from tts_engine import (
     COSYVOICE_MODEL_URLS, _ensure_cosyvoice_model,
     split_text, _generate_one_safe, split_by_duration,
 )
-from asr_engine import transcribe, check_asr_ready, WHISPER_MODELS, unload_whisper_model
+from asr_engine import (transcribe, check_asr_ready, WHISPER_MODELS, unload_whisper_model,
+                        scan_external_asr_engines, external_asr_transcribe)
 from audio_player import AudioPlayer
 from file_reader import load_file_content
 
@@ -494,13 +495,12 @@ QFrame#statusBar QLabel { color: #888; font-size: 12px; background: transparent;
 
 class AudiobookConverterMain(QMainWindow):
     SIDEBAR_ITEMS = [
+        ("files",    "📂 文件管理"),
         ("engine",   "🎤 引擎语音"),
         ("speed",    "⚡ 语速输出"),
         ("dialogue", "🎭 对话识别"),
         ("storage",  "💾 存储依赖"),
-        ("files",    "📂 文件管理"),
         ("appear",   "🎨 外观"),
-        ("ops",      "▶ 操作"),
     ]
 
     def __init__(self):
@@ -604,10 +604,11 @@ class AudiobookConverterMain(QMainWindow):
         splitter.addWidget(self._panel_stack)
 
         splitter.setSizes([520, 100, 380])
-        self._show_panel("engine")
+        self._show_panel("files")
 
         # === ASR Tab ===
         self._build_asr_tab()
+        self._refresh_asr_engines()
 
         # === Bottom: QuickBar + StatusBar + Progress ===
         bottom = QWidget()
@@ -743,7 +744,6 @@ class AudiobookConverterMain(QMainWindow):
             self._mode_group.addButton(rb)
             oc_layout.addWidget(rb)
         self._mode_group.buttonClicked.connect(self._on_mode_change)
-        # Select first
         self._mode_group.buttons()[0].setChecked(True)
         self._mode_var = "chapter"
 
@@ -768,6 +768,31 @@ class AudiobookConverterMain(QMainWindow):
         self._normalize_cb = QCheckBox("响度归一化（统一各文件音量，需 ffmpeg）")
         oc_layout.addWidget(self._normalize_cb)
         layout.addWidget(out_card)
+
+        # 快捷操作（从操作面板移入）
+        ops_card = QGroupBox("快捷操作")
+        ops_layout = QVBoxLayout(ops_card)
+        self._btn_preview_full = QPushButton("🔊 试听全文（可暂停）")
+        self._btn_preview_full.clicked.connect(self._toggle_preview_full)
+        ops_layout.addWidget(self._btn_preview_full)
+        self._btn_convert = QPushButton("▶ 生成MP3")
+        self._btn_convert.setObjectName("accentBtn")
+        self._btn_convert.clicked.connect(self._start_convert)
+        ops_layout.addWidget(self._btn_convert)
+        self._btn_pause = QPushButton("⏹ 暂停")
+        self._btn_pause.setObjectName("stopBtn")
+        self._btn_pause.setEnabled(False)
+        self._btn_pause.clicked.connect(self._pause_convert)
+        ops_layout.addWidget(self._btn_pause)
+        self._btn_resume = QPushButton("▶ 继续生成")
+        self._btn_resume.clicked.connect(self._resume_convert)
+        ops_layout.addWidget(self._btn_resume)
+        tool_row = QHBoxLayout()
+        tool_row.addWidget(QPushButton("🔀 合并MP3", clicked=self._merge_mp3))
+        tool_row.addWidget(QPushButton("📋 日志", clicked=self._show_log))
+        ops_layout.addLayout(tool_row)
+        layout.addWidget(ops_card)
+
         layout.addStretch()
         return w
 
@@ -876,33 +901,6 @@ class AudiobookConverterMain(QMainWindow):
         layout.addStretch()
         return w
 
-    def _build_panel_ops(self):
-        w = QWidget()
-        layout = QVBoxLayout(w)
-        layout.setSpacing(8)
-        card = QGroupBox("工具")
-        cl = QVBoxLayout(card)
-        self._btn_preview_full = QPushButton("🔊 试听全文（可暂停）")
-        self._btn_preview_full.clicked.connect(self._toggle_preview_full)
-        cl.addWidget(self._btn_preview_full)
-        self._btn_convert = QPushButton("▶ 生成MP3")
-        self._btn_convert.setObjectName("accentBtn")
-        self._btn_convert.clicked.connect(self._start_convert)
-        cl.addWidget(self._btn_convert)
-        self._btn_pause = QPushButton("⏹ 暂停")
-        self._btn_pause.setObjectName("stopBtn")
-        self._btn_pause.setEnabled(False)
-        self._btn_pause.clicked.connect(self._pause_convert)
-        cl.addWidget(self._btn_pause)
-        self._btn_resume = QPushButton("▶ 继续生成")
-        self._btn_resume.clicked.connect(self._resume_convert)
-        cl.addWidget(self._btn_resume)
-        cl.addWidget(QPushButton("🔀 合并MP3文件", clicked=self._merge_mp3))
-        cl.addWidget(QPushButton("📋 查看日志", clicked=self._show_log))
-        layout.addWidget(card)
-        layout.addStretch()
-        return w
-
     def _build_quickbar(self):
         w = QFrame()
         w.setObjectName("quickBar")
@@ -963,6 +961,15 @@ class AudiobookConverterMain(QMainWindow):
         audio_row.addWidget(self._audio_file_label, 1)
         audio_row.addWidget(QPushButton("📂 选择音频文件", clicked=self._select_audio_file))
         layout.addLayout(audio_row)
+
+        # ASR 引擎选择（内置 + 外挂）
+        eng_row = QHBoxLayout()
+        eng_row.addWidget(QLabel("ASR 引擎:"))
+        self._asr_engine_combo = QComboBox()
+        self._asr_engine_combo.addItem("faster-whisper（内置）", "builtin")
+        eng_row.addWidget(self._asr_engine_combo, 1)
+        self._asr_engine_combo.currentIndexChanged.connect(self._on_asr_engine_change)
+        layout.addLayout(eng_row)
 
         model_row = QHBoxLayout()
         model_row.addWidget(QLabel("Whisper 模型:"))
@@ -1166,18 +1173,6 @@ class AudiobookConverterMain(QMainWindow):
         self._sb_engine.setText(f"引擎: {msg[:30]}")
         voices = get_voice_list(engine)
         self._sb_voices.setText(f"{len(voices)} 语音")
-
-    # ================ Sidebar / Panel Switching ================
-
-    def _show_panel(self, panel_id):
-        if panel_id in self._panels:
-            self._panel_stack.setCurrentWidget(self._panels[panel_id])
-        for pid, btn in self._sidebar_btns.items():
-            btn.setProperty("active", "true" if pid == panel_id else "false")
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
-        if panel_id == "storage":
-            self._refresh_deps()
 
     # ================ Chapters ================
 
@@ -1708,6 +1703,25 @@ class AudiobookConverterMain(QMainWindow):
 
     # ================ ASR ================
 
+    def _on_asr_engine_change(self, _idx):
+        """ASR 引擎切换：外挂引擎时隐藏模型/语言选择"""
+        is_builtin = self._asr_engine_combo.currentData() == "builtin"
+        self._asr_model_combo.setVisible(is_builtin)
+        # 找到模型标签行并隐藏（简化：直接用 findChildren）
+
+    def _refresh_asr_engines(self):
+        """扫描外挂 ASR 引擎"""
+        self._asr_engine_combo.blockSignals(True)
+        self._asr_engine_combo.clear()
+        self._asr_engine_combo.addItem("faster-whisper（内置）", "builtin")
+        try:
+            ext = scan_external_asr_engines(get_storage_dir())
+            for eid, info in ext.items():
+                self._asr_engine_combo.addItem(f"⚡ {info['name']}（外挂）", eid)
+        except Exception:
+            pass
+        self._asr_engine_combo.blockSignals(False)
+
     def _select_audio_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "选择音频文件", "",
                                                "音频文件 (*.mp3 *.wav *.m4a *.flac *.ogg *.aac *.wma);;所有文件 (*.*)")
@@ -1740,6 +1754,27 @@ class AudiobookConverterMain(QMainWindow):
                 if fmt_btn.text() == label:
                     output_format = val
                     break
+
+        # 检查是否选择了外挂引擎
+        engine_id = self._asr_engine_combo.currentData()
+        if engine_id and engine_id != "builtin":
+            # 外挂引擎：直接用线程调用
+            self._status_label.setText("外挂 ASR 引擎识别中...")
+            def _ext_run():
+                try:
+                    result = external_asr_transcribe(
+                        engine_id, self._audio_file_path, output_format,
+                        model="", language=language)
+                    self._asr_result.setPlainText(result)
+                    self._asr_status.setText("识别完成")
+                    self._asr_last_result = result
+                except Exception as e:
+                    QMessageBox.critical(self, "错误", f"外挂 ASR 识别失败: {e}")
+                finally:
+                    self._btn_asr_start.setEnabled(True)
+                    self._btn_asr_start.setText("▶ 开始识别")
+            threading.Thread(target=_ext_run, daemon=True).start()
+            return
 
         ready, msg = check_asr_ready(get_storage_dir())
         if not ready:

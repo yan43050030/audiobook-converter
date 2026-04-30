@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# Windows exe spec - v5.0.1: 体检稳定版（ID3 修正 + 子进程隐藏 + ASR atexit + 友好错误）
+# Windows exe spec - v5.0.2: 体检稳定版（ID3 修正 + 子进程隐藏 + ASR atexit + 友好错误）
 
 import os
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs
