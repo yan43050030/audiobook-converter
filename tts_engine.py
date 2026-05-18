@@ -40,7 +40,7 @@ except ImportError:
     PYDUB_AVAILABLE = False
     AudioSegment = None
 
-VERSION = "5.0.2"
+VERSION = "5.0.3"
 
 # 当前平台
 _PLATFORM = platform.system()  # "Darwin" / "Windows" / "Linux"
@@ -798,7 +798,7 @@ def _ensure_cosyvoice_model(model_key: str = "CosyVoice-300M-SFT", should_stop=N
 PIPER_MODE_PYTHON = "python"
 PIPER_MODE_CLI = "cli"
 
-CHARS_PER_SECOND_BASE = 2.5
+CHARS_PER_SECOND_BASE = 4.5
 PROGRESS_FILENAME = ".audiobook_progress.json"
 MAX_RETRIES = 3  # 生成失败时重试次数
 RETRY_DELAY = 5  # 重试前等待秒数（指数退避基础值）
@@ -1245,9 +1245,8 @@ def split_text(text, max_length=3000):
     for para in paragraphs:
         para = para.strip()
         if not para:
-            if current:
-                segments.append(current)
-                current = ""
+            # 不要因为空行就截断段落 —— 否则在每段间有空行的中文小说中，
+            # 每个段落都会变成独立文件，split_by_duration 无法累积到目标时长。
             continue
         if len(current) + len(para) + 1 <= max_length:
             current = current + "\n" + para if current else para
@@ -2352,29 +2351,47 @@ def convert_batch(
                     "status": "pending", "chapter_idx": idx,
                 })
         elif split_mode == "time":
+            # 合并所有选中章节为整段文本，再按时长拆分，确保每个文件接近
+            # 用户设定的目标时长（之前的"按章节再拆分"会让短章节生成几秒到十几秒
+            # 的碎片文件）。
             max_sec = time_minutes * 60
-            file_idx = 0
-            # 修复：按章节下标过滤；时间拆分后的所有片段都属于同一章节
-            for ch_idx, ch in enumerate(chapters):
-                if sel_set is not None and ch_idx not in sel_set:
+            selected_chapters = [
+                ch for ch_idx, ch in enumerate(chapters)
+                if sel_set is None or ch_idx in sel_set
+            ]
+            # 用双换行拼接，保留段落边界，章节标题也作为文本一部分朗读
+            joined_parts = []
+            for ch in selected_chapters:
+                title = (ch.get("title") or "").strip()
+                body = (ch.get("text") or "").strip()
+                if not body:
                     continue
-                parts = split_by_duration(ch["text"], max_sec, rate)
-                if not parts:
-                    logger.warning(f"章节 [{ch['title']}] 文本为空，跳过")
+                if title and title != "全文" and not body.startswith(title):
+                    joined_parts.append(f"{title}\n\n{body}")
+                else:
+                    joined_parts.append(body)
+            joined_text = "\n\n".join(joined_parts).strip()
+
+            if not joined_text:
+                logger.warning("按时间拆分：没有可用文本")
+                parts = []
+            else:
+                parts = split_by_duration(joined_text, max_sec, rate)
+
+            total_parts = len(parts)
+            for pi, part in enumerate(parts):
+                if not part or not part.strip():
                     continue
-                for pi, part in enumerate(parts):
-                    if not part or not part.strip():
-                        continue
-                    file_idx += 1
-                    label = ch["title"] if ch["title"] != "全文" else ""
-                    if len(parts) > 1:
-                        suffix = f"_第{pi + 1}部分"
-                        label = f"{label}{suffix}" if label else f"第{pi + 1}部分"
-                    fn = f"{file_idx:03d}_{sanitize_filename(label or file_prefix)}.mp3"
-                    items.append({
-                        "title": label or file_prefix, "text": part, "filename": fn,
-                        "status": "pending", "chapter_idx": ch_idx, "part_idx": pi,
-                    })
+                file_idx = pi + 1
+                if total_parts > 1:
+                    label = f"{file_prefix}_第{file_idx}部分"
+                else:
+                    label = file_prefix
+                fn = f"{file_idx:03d}_{sanitize_filename(label)}.mp3"
+                items.append({
+                    "title": label, "text": part, "filename": fn,
+                    "status": "pending", "chapter_idx": 0, "part_idx": pi,
+                })
 
         # 选择过滤（time 模式上面已按章节过滤；此处覆盖 chapter / single 模式）
         if sel_set is not None and split_mode != "time":
@@ -2551,6 +2568,19 @@ def convert_batch(
     error_count = sum(1 for it in items if it["status"] == "error")
     if error_count:
         logger.warning(f"{error_count} 个文件生成失败")
+        # 全部失败时向上层抛出详细错误，让 GUI 能弹出提示
+        active_count = sum(1 for it in items if it["status"] in ("pending", "error"))
+        if error_count == active_count and not output_files:
+            first_errors = []
+            for it in items:
+                if it.get("error"):
+                    first_errors.append(f"  [{it.get('title', '?')}] {it['error'][:200]}")
+                    if len(first_errors) >= 3:
+                        break
+            detail = "\n".join(first_errors)
+            raise RuntimeError(
+                f"全部 {error_count} 个文件生成失败，请检查后重试。\n\n{detail}"
+            )
 
     return output_files
 

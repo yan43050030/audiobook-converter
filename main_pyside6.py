@@ -57,7 +57,25 @@ def main():
     from tts_engine import VERSION
     window = AudiobookConverterMain()
     window.setWindowTitle(f"文字转有声读物 v{VERSION}")
-    window.resize(1200, 800)
+
+    # 允许调整大小：设置最小尺寸，并按当前屏幕可用区域裁剪初始尺寸，
+    # 避免在小屏（如 13" 笔电）上底部被 Dock / 任务栏挡住。
+    window.setMinimumSize(900, 560)
+    screen = app.primaryScreen()
+    avail = screen.availableGeometry() if screen else None
+    target_w, target_h = 1200, 800
+    if avail is not None:
+        # 留一点边距，避免贴边
+        max_w = max(900, avail.width() - 40)
+        max_h = max(560, avail.height() - 40)
+        target_w = min(target_w, max_w)
+        target_h = min(target_h, max_h)
+    window.resize(target_w, target_h)
+    if avail is not None:
+        # 居中到屏幕可用区域
+        x = avail.x() + (avail.width() - target_w) // 2
+        y = avail.y() + (avail.height() - target_h) // 2
+        window.move(max(avail.x(), x), max(avail.y(), y))
     window.show()
 
     sys.exit(app.exec())

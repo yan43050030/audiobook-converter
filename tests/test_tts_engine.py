@@ -49,15 +49,15 @@ class TestSanitizeFilename(unittest.TestCase):
 class TestEstimateDuration(unittest.TestCase):
     def test_default_rate(self):
         d = estimate_duration("x" * 250, "+0%")
-        self.assertEqual(d, 100.0)
+        self.assertAlmostEqual(d, 55.6, places=1)
 
     def test_fast_rate(self):
         d = estimate_duration("x" * 250, "+100%")
-        self.assertEqual(d, 50.0)
+        self.assertAlmostEqual(d, 27.8, places=1)
 
     def test_slow_rate(self):
         d = estimate_duration("x" * 250, "-50%")
-        self.assertEqual(d, 200.0)
+        self.assertAlmostEqual(d, 111.1, places=1)
 
     def test_empty_text(self):
         d = estimate_duration("", "+0%")

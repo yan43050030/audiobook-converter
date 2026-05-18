@@ -1,6 +1,6 @@
-"""Qt6 GUI — 文字转有声读物 v5.0.2（兼容 PySide6 / PyQt6）"""
+"""Qt6 GUI — 文字转有声读物 v5.0.3（兼容 PySide6 / PyQt6）"""
 
-import os, sys, threading, subprocess, platform, logging, json, tempfile, shutil
+import os, sys, threading, subprocess, platform, logging, json, tempfile, shutil, time
 from typing import Optional
 
 # 自动适配 PySide6 或 PyQt6
@@ -307,6 +307,8 @@ QTreeWidget {
 QTreeWidget::item { padding: 4px 4px; }
 QTreeWidget::item:selected { background: #2563EB; color: white; }
 QTreeWidget::item:hover { background: #EBE6DE; }
+QTreeWidget::indicator { width: 18px; height: 18px; border: 1.5px solid #888; border-radius: 3px; background: white; margin-right: 6px; }
+QTreeWidget::indicator:checked { background: #2563EB; border-color: #2563EB; }
 QTableWidget, QTableView { color: #1D1B1A; background: #FAF8F5; }
 QHeaderView::section {
     color: #333; background: #F5F2ED; padding: 6px 10px; border: 1px solid #DDD9D2;
@@ -449,6 +451,8 @@ QTreeWidget {
 QTreeWidget::item { padding: 4px 4px; }
 QTreeWidget::item:selected { background: #3B82F6; color: white; }
 QTreeWidget::item:hover { background: #2A2A2A; }
+QTreeWidget::indicator { width: 18px; height: 18px; border: 1.5px solid #666; border-radius: 3px; background: #1A1A1A; margin-right: 6px; }
+QTreeWidget::indicator:checked { background: #3B82F6; border-color: #3B82F6; }
 QTableWidget, QTableView { color: #E0E0E0; background: #1A1A1A; }
 QHeaderView::section {
     color: #CCC; background: #2A2A2A; padding: 6px 10px; border: 1px solid #444;
@@ -508,6 +512,8 @@ class AudiobookConverterMain(QMainWindow):
         self._file_paths: list = []
         self._single_file_path = None
         self.is_converting = False
+        self._last_output_dir = None
+        self._convert_start_time = None
         self._preview_state = "idle"
         self._theme = "light"
         self._audio_file_path = None
@@ -578,6 +584,7 @@ class AudiobookConverterMain(QMainWindow):
         self._chapter_tree.setHeaderHidden(True)
         self._chapter_tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._chapter_tree.itemSelectionChanged.connect(self._on_chapter_select)
+        self._chapter_tree.itemChanged.connect(self._on_chapter_check_changed)
         ch_layout.addWidget(self._chapter_tree)
         left_layout.addWidget(ch_group)
 
@@ -603,7 +610,9 @@ class AudiobookConverterMain(QMainWindow):
             self._panel_stack.addWidget(w)
         splitter.addWidget(self._panel_stack)
 
-        splitter.setSizes([520, 100, 380])
+        splitter.setSizes([700, 100, 400])
+        splitter.setStretchFactor(0, 1)  # 左面板（章节+文本）可拉伸
+        splitter.setStretchFactor(2, 0)  # 右面板（设置）不自动拉伸
         self._show_panel("files")
 
         # === ASR Tab ===
@@ -747,19 +756,21 @@ class AudiobookConverterMain(QMainWindow):
         self._mode_group.buttons()[0].setChecked(True)
         self._mode_var = "chapter"
 
-        time_row = QHBoxLayout()
-        time_row.addWidget(QLabel("每段:"))
-        self._time_spin = QSpinBox()
-        self._time_spin.setRange(5, 180)
-        self._time_spin.setValue(30)
-        self._time_spin.setSingleStep(5)
-        self._time_spin.setSuffix(" 分钟")
-        self._time_spin.valueChanged.connect(lambda: self._update_split_estimate())
         self._time_frame = QWidget()
-        self._time_frame.setLayout(time_row)
+        tf_layout = QVBoxLayout(self._time_frame)
+        tf_layout.setContentsMargins(0, 0, 0, 0)
+        self._time_label = QLabel("30 分钟")
+        self._time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        tf_layout.addWidget(self._time_label)
+        self._time_slider = QSlider(Qt.Orientation.Horizontal)
+        self._time_slider.setRange(5, 180)
+        self._time_slider.setValue(30)
+        self._time_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._time_slider.setTickInterval(15)
+        self._time_slider.valueChanged.connect(self._on_time_slider_change)
+        tf_layout.addWidget(self._time_slider)
         self._time_frame.setVisible(False)
         oc_layout.addWidget(self._time_frame)
-        time_row.addWidget(self._time_spin)
 
         self._split_estimate = QLabel("")
         self._split_estimate.setStyleSheet("color:gray;font-size:11px")
@@ -769,24 +780,12 @@ class AudiobookConverterMain(QMainWindow):
         oc_layout.addWidget(self._normalize_cb)
         layout.addWidget(out_card)
 
-        # 快捷操作（从操作面板移入）
+        # 快捷操作（仅保留试听/合并/日志）
         ops_card = QGroupBox("快捷操作")
         ops_layout = QVBoxLayout(ops_card)
         self._btn_preview_full = QPushButton("🔊 试听全文（可暂停）")
         self._btn_preview_full.clicked.connect(self._toggle_preview_full)
         ops_layout.addWidget(self._btn_preview_full)
-        self._btn_convert = QPushButton("▶ 生成MP3")
-        self._btn_convert.setObjectName("accentBtn")
-        self._btn_convert.clicked.connect(self._start_convert)
-        ops_layout.addWidget(self._btn_convert)
-        self._btn_pause = QPushButton("⏹ 暂停")
-        self._btn_pause.setObjectName("stopBtn")
-        self._btn_pause.setEnabled(False)
-        self._btn_pause.clicked.connect(self._pause_convert)
-        ops_layout.addWidget(self._btn_pause)
-        self._btn_resume = QPushButton("▶ 继续生成")
-        self._btn_resume.clicked.connect(self._resume_convert)
-        ops_layout.addWidget(self._btn_resume)
         tool_row = QHBoxLayout()
         tool_row.addWidget(QPushButton("🔀 合并MP3", clicked=self._merge_mp3))
         tool_row.addWidget(QPushButton("📋 日志", clicked=self._show_log))
@@ -928,6 +927,11 @@ class AudiobookConverterMain(QMainWindow):
         self._qb_pause.setEnabled(False)
         self._qb_pause.clicked.connect(self._pause_convert)
         layout.addWidget(self._qb_pause)
+        self._qb_resume = QPushButton("▶ 继续生成")
+        self._qb_resume.setObjectName("accentBtn")
+        self._qb_resume.setEnabled(False)
+        self._qb_resume.clicked.connect(self._qb_resume_convert)
+        layout.addWidget(self._qb_resume)
         return w
 
     def _build_statusbar(self):
@@ -1088,8 +1092,6 @@ class AudiobookConverterMain(QMainWindow):
         self._voice_combo.blockSignals(False)
 
         ready, msg = check_engine_ready(engine)
-        if hasattr(self, '_btn_convert'):
-            self._btn_convert.setEnabled(ready)
         if hasattr(self, '_qb_convert'):
             self._qb_convert.setEnabled(ready)
         if hasattr(self, '_status_label'):
@@ -1128,12 +1130,20 @@ class AudiobookConverterMain(QMainWindow):
         self._time_frame.setVisible(self._mode_var == "time")
         self._update_split_estimate()
 
+    def _on_time_slider_change(self, val):
+        self._time_label.setText(f"{val} 分钟")
+        self._update_split_estimate()
+
     def _get_rate_string(self):
         return f"+{self._rate_slider.value()}%" if self._rate_slider.value() >= 0 else f"{self._rate_slider.value()}%"
 
     def _get_selected_indices(self):
+        """返回已勾选章节的索引列表（基于 checkbox 状态）"""
         result = []
-        for item in self._chapter_tree.selectedItems():
+        for i in range(self._chapter_tree.topLevelItemCount()):
+            item = self._chapter_tree.topLevelItem(i)
+            if item.checkState(0) != Qt.CheckState.Checked:
+                continue
             idx = item.data(0, Qt.ItemDataRole.UserRole)
             if idx is not None:
                 result.append(idx)
@@ -1187,38 +1197,64 @@ class AudiobookConverterMain(QMainWindow):
         self._refresh_chapters_list()
 
     def _refresh_chapters_list(self, filter_text=""):
-        self._chapter_tree.clear()
-        for idx, ch in enumerate(self.chapters):
-            if filter_text and filter_text not in ch["title"].lower():
-                continue
-            title = ch["title"]
-            source = ch.get("source", "")
-            if source and len(self._file_paths) > 1:
-                title = f"[{source}] {title}"
-            item = QTreeWidgetItem([f"☐ {title}"])
-            item.setData(0, Qt.ItemDataRole.UserRole, idx)
-            item.setCheckState(0, Qt.CheckState.Checked)
-            self._chapter_tree.addTopLevelItem(item)
+        self._chapter_tree.blockSignals(True)
+        try:
+            self._chapter_tree.clear()
+            for idx, ch in enumerate(self.chapters):
+                if filter_text and filter_text not in ch["title"].lower():
+                    continue
+                title = ch["title"]
+                source = ch.get("source", "")
+                if source and len(self._file_paths) > 1:
+                    title = f"[{source}] {title}"
+                item = QTreeWidgetItem([title])
+                item.setData(0, Qt.ItemDataRole.UserRole, idx)
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(0, Qt.CheckState.Checked)
+                self._chapter_tree.addTopLevelItem(item)
+        finally:
+            self._chapter_tree.blockSignals(False)
         self._update_chapter_count()
+        self._update_split_estimate()
 
     def _filter_chapters(self, text):
         self._refresh_chapters_list(text)
 
     def _select_all_chapters(self):
-        for i in range(self._chapter_tree.topLevelItemCount()):
-            self._chapter_tree.topLevelItem(i).setSelected(True)
+        self._chapter_tree.blockSignals(True)
+        try:
+            for i in range(self._chapter_tree.topLevelItemCount()):
+                self._chapter_tree.topLevelItem(i).setCheckState(0, Qt.CheckState.Checked)
+        finally:
+            self._chapter_tree.blockSignals(False)
+        self._update_chapter_count()
+        self._update_split_estimate()
 
     def _deselect_all_chapters(self):
-        self._chapter_tree.clearSelection()
+        self._chapter_tree.blockSignals(True)
+        try:
+            for i in range(self._chapter_tree.topLevelItemCount()):
+                self._chapter_tree.topLevelItem(i).setCheckState(0, Qt.CheckState.Unchecked)
+        finally:
+            self._chapter_tree.blockSignals(False)
+        self._update_chapter_count()
+        self._update_split_estimate()
 
     def _on_chapter_select(self):
+        # 仅在 ExtendedSelection 高亮时触发；统计与估算以"勾选"为准
+        self._update_split_estimate()
+
+    def _on_chapter_check_changed(self, item, column):
         self._update_chapter_count()
         self._update_split_estimate()
 
     def _update_chapter_count(self):
         total = self._chapter_tree.topLevelItemCount()
-        sel = len(self._chapter_tree.selectedItems()) or total
-        self._chapter_count.setText(f"已选 {sel}/{total} 章" if total else "未检测到章节")
+        checked = 0
+        for i in range(total):
+            if self._chapter_tree.topLevelItem(i).checkState(0) == Qt.CheckState.Checked:
+                checked += 1
+        self._chapter_count.setText(f"已选 {checked}/{total} 章" if total else "未检测到章节")
 
     def _update_split_estimate(self):
         mode = self._mode_var
@@ -1229,18 +1265,21 @@ class AudiobookConverterMain(QMainWindow):
         elif mode == "chapter":
             self._split_estimate.setText(f"将生成 {len(sel_chs)} 个文件（每章一个）")
         elif mode == "time":
-            mins = self._time_spin.value()
+            mins = self._time_slider.value()
             rate = self._get_rate_string()
-            count = 0
-            for ch in sel_chs:
-                t = ch.get("text", "")
-                if t:
-                    try:
-                        parts = split_by_duration(t, mins * 60, rate)
-                        count += max(len(parts), 1)
-                    except Exception:
-                        count += 1
-            self._split_estimate.setText(f"将生成约 {count} 个文件（每段 ≤ {mins} 分钟）")
+            # 与转换流程保持一致：先把选中章节合并，再按时长拆分
+            joined = "\n\n".join(
+                (c.get("text") or "").strip() for c in sel_chs if (c.get("text") or "").strip()
+            )
+            if joined:
+                try:
+                    parts = split_by_duration(joined, mins * 60, rate)
+                    count = max(len(parts), 1)
+                except Exception:
+                    count = 1
+            else:
+                count = 0
+            self._split_estimate.setText(f"将生成约 {count} 个文件（每段 ≈ {mins} 分钟）")
         else:
             self._split_estimate.setText("")
 
@@ -1581,20 +1620,21 @@ class AudiobookConverterMain(QMainWindow):
 
     def _run_convert(self, output_dir, file_prefix, selected_indices, resume):
         self.is_converting = True
+        self._last_output_dir = output_dir
+        self._convert_start_time = time.time()
         self._progress_bar.setVisible(True)
         self._progress_bar.setValue(0)
-        self._btn_convert.setEnabled(False)
-        self._btn_pause.setEnabled(True)
         self._qb_convert.setEnabled(False)
         self._qb_pause.setEnabled(True)
-        self._status_label.setText("准备转换..." if not resume else "准备继续转换...")
+        self._qb_resume.setEnabled(False)
+        self._status_label.setText("正在分析文本并拆分..." if not resume else "准备继续转换...")
         self._set_controls_enabled(False)
 
         engine = self._get_current_engine()
         voice = get_voice_id(self._voice_combo.currentText(), engine)
         rate = self._get_rate_string()
         mode = self._mode_var
-        time_min = self._time_spin.value()
+        time_min = self._time_slider.value()
 
         dia_enabled = self._dialogue_enabled_cb.isChecked()
         voice_map = None
@@ -1622,14 +1662,36 @@ class AudiobookConverterMain(QMainWindow):
         if total:
             self._progress_bar.setMaximum(total)
             self._progress_bar.setValue(current)
-        self._status_label.setText(f"正在处理: {current}/{total}")
+        elapsed = ""
+        if hasattr(self, '_convert_start_time') and self._convert_start_time:
+            mins = int((time.time() - self._convert_start_time) / 60)
+            secs = int((time.time() - self._convert_start_time) % 60)
+            elapsed = f"（已用 {mins} 分 {secs} 秒）" if mins else f"（已用 {secs} 秒）"
+        self._status_label.setText(f"正在生成: {current}/{total} {elapsed}")
 
     def _on_convert_done(self, output_dir, files):
         self._progress_bar.setValue(self._progress_bar.maximum())
-        self._status_label.setText(f"完成! 共生成 {len(files)} 个文件")
+        elapsed = ""
+        if hasattr(self, '_convert_start_time') and self._convert_start_time:
+            mins = int((time.time() - self._convert_start_time) / 60)
+            secs = int((time.time() - self._convert_start_time) % 60)
+            elapsed = f"（用时 {mins} 分 {secs} 秒）" if mins else f"（用时 {secs} 秒）"
+        count = len(files)
+        self._status_label.setText(f"完成! 共生成 {count} 个文件 {elapsed}")
+        if not files:
+            self._status_label.setText("未生成文件，请查看日志了解详情")
+            QMessageBox.warning(self, "生成结果",
+                "未能生成任何文件。\n\n"
+                "可能原因：\n"
+                "  · 网络不通（Edge 引擎需要访问 speech.platform.bing.com）\n"
+                "  · 引擎未就绪\n"
+                "  · 文本内容为空\n\n"
+                "请查看日志文件了解详细错误。")
+            return
         names = "\n".join(os.path.basename(f) for f in files[:8])
+        tail = f"\n  ... 等共 {count} 个文件" if count > 8 else ""
         if QMessageBox.question(self, "完成",
-                                f"已生成 {len(files)} 个MP3文件:\n{names}\n\n是否打开文件夹？") == QMessageBox.StandardButton.Yes:
+                                f"已生成 {count} 个MP3文件 {elapsed}:\n{names}{tail}\n\n是否打开文件夹？") == QMessageBox.StandardButton.Yes:
             if platform.system() == "Darwin":
                 subprocess.Popen(["open", output_dir])
             elif platform.system() == "Windows":
@@ -1643,18 +1705,25 @@ class AudiobookConverterMain(QMainWindow):
     def _on_convert_finished(self):
         self.is_converting = False
         self._progress_bar.setVisible(False)
-        self._btn_convert.setEnabled(True)
-        self._btn_pause.setEnabled(False)
         self._qb_convert.setEnabled(True)
         self._qb_pause.setEnabled(False)
+        self._qb_resume.setEnabled(False)
         self._set_controls_enabled(True)
 
     def _pause_convert(self):
         if self._convert_worker:
             self._convert_worker.request_stop()
-        self._btn_pause.setEnabled(False)
         self._qb_pause.setEnabled(False)
+        self._qb_resume.setEnabled(True)
         self._status_label.setText("正在暂停...")
+
+    def _qb_resume_convert(self):
+        if self._last_output_dir:
+            items = load_progress(self._last_output_dir)
+            if items:
+                self._run_convert(self._last_output_dir, "有声读物", None, resume=True)
+                return
+        self._resume_convert()
 
     def _set_controls_enabled(self, enabled):
         for btn in self._engine_group.buttons():
@@ -1865,6 +1934,27 @@ class AudiobookConverterMain(QMainWindow):
             remove_download_listener(self._on_download_progress)
         except Exception:
             pass
+        # 停止所有后台 QThread，避免退出时 "QThread: Destroyed while thread is still running" 导致 abort()
+        for attr in ("_convert_worker", "_preview_worker", "_stream_worker",
+                     "_asr_worker", "_download_worker"):
+            w = getattr(self, attr, None)
+            if w is None:
+                continue
+            try:
+                if w.isRunning():
+                    try:
+                        w.request_stop()
+                    except Exception:
+                        pass
+                    # 给 worker 最多 3 秒退出循环
+                    if not w.wait(3000):
+                        try:
+                            w.terminate()
+                            w.wait(1000)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
         try:
             self.player.stop()
         except Exception:
