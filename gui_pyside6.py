@@ -599,9 +599,10 @@ class AudiobookConverterMain(QMainWindow):
 
         # --- Right: 设置面板（用标签页导航） ---
         self._panel_tabs = QTabWidget()
-        # 移除边框内边距，让内容更紧凑
         self._panel_tabs.setDocumentMode(True)
         self._panel_tabs.setTabPosition(QTabWidget.TabPosition.North)
+        # 标签太多时显示滚动按钮，避免裁剪
+        self._panel_tabs.tabBar().setUsesScrollButtons(True)
         for pid, label in self.SIDEBAR_ITEMS:
             w = getattr(self, f"_build_panel_{pid}")()
             self._panel_tabs.addTab(w, label)
