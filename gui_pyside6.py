@@ -597,23 +597,25 @@ class AudiobookConverterMain(QMainWindow):
 
         splitter.addWidget(left)
 
-        # --- Sidebar ---
-        sidebar = self._build_sidebar()
-        splitter.addWidget(sidebar)
-
-        # --- Right: Settings panels ---
-        self._panel_stack = QStackedWidget()
-        self._panels = {}
-        for pid, _label in self.SIDEBAR_ITEMS:
+        # --- Right: 设置面板（用标签页导航） ---
+        self._panel_tabs = QTabWidget()
+        # 移除边框内边距，让内容更紧凑
+        self._panel_tabs.setDocumentMode(True)
+        self._panel_tabs.setTabPosition(QTabWidget.TabPosition.North)
+        for pid, label in self.SIDEBAR_ITEMS:
             w = getattr(self, f"_build_panel_{pid}")()
-            self._panels[pid] = w
-            self._panel_stack.addWidget(w)
-        splitter.addWidget(self._panel_stack)
+            self._panel_tabs.addTab(w, label)
+        # 默认显示文件管理
+        for i, (pid, _label) in enumerate(self.SIDEBAR_ITEMS):
+            if pid == "files":
+                self._panel_tabs.setCurrentIndex(i)
+                break
+        self._panel_tabs.currentChanged.connect(self._on_panel_tab_changed)
+        splitter.addWidget(self._panel_tabs)
 
-        splitter.setSizes([700, 100, 400])
-        splitter.setStretchFactor(0, 1)  # 左面板（章节+文本）可拉伸
-        splitter.setStretchFactor(2, 0)  # 右面板（设置）不自动拉伸
-        self._show_panel("files")
+        splitter.setSizes([750, 450])
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
 
         # === ASR Tab ===
         self._build_asr_tab()
@@ -653,41 +655,15 @@ class AudiobookConverterMain(QMainWindow):
         self._status_label.setStyleSheet("color:gray;font-size:12px;padding:2px")
         bottom_layout.addWidget(self._status_label)
 
-    # ================ Sidebar ================
-
-    def _build_sidebar(self):
-        frame = QFrame()
-        frame.setObjectName("sidebarFrame")
-        frame.setFixedWidth(130)
-        layout = QVBoxLayout(frame)
-        layout.setContentsMargins(4, 8, 4, 8)
-        layout.setSpacing(2)
-        title = QLabel("导航")
-        title.setFont(QFont("Helvetica", 10, QFont.Weight.Bold))
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(title)
-        layout.addSpacing(8)
-        self._sidebar_btns = {}
-        for pid, label in self.SIDEBAR_ITEMS:
-            btn = QPushButton(label)
-            btn.setObjectName("sidebarBtn")
-            btn.clicked.connect(lambda checked, p=pid: self._show_panel(p))
-            layout.addWidget(btn)
-            self._sidebar_btns[pid] = btn
-        layout.addStretch()
-        return frame
-
-    def _show_panel(self, panel_id: str):
-        if panel_id in self._panels:
-            self._panel_stack.setCurrentWidget(self._panels[panel_id])
-        for pid, btn in self._sidebar_btns.items():
-            btn.setProperty("active", "true" if pid == panel_id else "false")
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
-        if panel_id == "storage":
-            self._refresh_deps()
 
     # ================ Panel Builders ================
+
+    def _on_panel_tab_changed(self, index):
+        """切换右侧面板标签页时刷新存储依赖"""
+        if 0 <= index < len(self.SIDEBAR_ITEMS):
+            pid = self.SIDEBAR_ITEMS[index][0]
+            if pid == "storage":
+                self._refresh_deps()
 
     def _build_panel_engine(self):
         w = QWidget()
