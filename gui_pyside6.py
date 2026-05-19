@@ -11,7 +11,7 @@ try:
         QComboBox, QRadioButton, QButtonGroup, QCheckBox, QSlider,
         QSpinBox, QProgressBar, QPlainTextEdit, QTreeWidget, QTreeWidgetItem,
         QLineEdit, QFileDialog, QMessageBox, QFrame, QSizePolicy,
-        QHeaderView, QAbstractItemView, QApplication,
+        QHeaderView, QAbstractItemView, QApplication, QScrollArea,
     )
     from PySide6.QtCore import (
         Qt, Signal, Slot, QThread, QTimer, QSize, QRect,
@@ -27,7 +27,7 @@ except ImportError:
         QComboBox, QRadioButton, QButtonGroup, QCheckBox, QSlider,
         QSpinBox, QProgressBar, QPlainTextEdit, QTreeWidget, QTreeWidgetItem,
         QLineEdit, QFileDialog, QMessageBox, QFrame, QSizePolicy,
-        QHeaderView, QAbstractItemView, QApplication,
+        QHeaderView, QAbstractItemView, QApplication, QScrollArea,
     )
     from PyQt6.QtCore import (
         Qt, QThread, QTimer, QSize, QRect, pyqtSignal as Signal, pyqtSlot as Slot,
@@ -498,14 +498,6 @@ QFrame#statusBar QLabel { color: #888; font-size: 12px; background: transparent;
 # ===================== Main Window =====================
 
 class AudiobookConverterMain(QMainWindow):
-    SIDEBAR_ITEMS = [
-        ("files",    "📂 文件管理"),
-        ("engine",   "🎤 引擎语音"),
-        ("speed",    "⚡ 语速输出"),
-        ("dialogue", "🎭 对话识别"),
-        ("storage",  "💾 存储依赖"),
-        ("appear",   "🎨 外观"),
-    ]
 
     def __init__(self):
         super().__init__()
@@ -561,10 +553,13 @@ class AudiobookConverterMain(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         tts_layout.addWidget(splitter)
 
-        # --- Left: Chapters + Text ---
+        # --- Left: 文件 + 章节 + 文本（自上而下的工作流层级）---
         left = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(4, 0, 4, 0)
+
+        # 文件管理移到左栏顶部
+        left_layout.addWidget(self._build_panel_files())
 
         ch_group = QGroupBox("章节列表（勾选要生成的章节）")
         ch_layout = QVBoxLayout(ch_group)
@@ -597,24 +592,25 @@ class AudiobookConverterMain(QMainWindow):
 
         splitter.addWidget(left)
 
-        # --- Right: 设置面板（用标签页导航） ---
-        self._panel_tabs = QTabWidget()
-        self._panel_tabs.setDocumentMode(True)
-        self._panel_tabs.setTabPosition(QTabWidget.TabPosition.North)
-        # 标签太多时显示滚动按钮，避免裁剪
-        self._panel_tabs.tabBar().setUsesScrollButtons(True)
-        for pid, label in self.SIDEBAR_ITEMS:
-            w = getattr(self, f"_build_panel_{pid}")()
-            self._panel_tabs.addTab(w, label)
-        # 默认显示文件管理
-        for i, (pid, _label) in enumerate(self.SIDEBAR_ITEMS):
-            if pid == "files":
-                self._panel_tabs.setCurrentIndex(i)
-                break
-        self._panel_tabs.currentChanged.connect(self._on_panel_tab_changed)
-        splitter.addWidget(self._panel_tabs)
+        # --- Right: 单列可滚动设置面板（按工作流顺序堆叠，不再用标签导航） ---
+        self._panel_scroll = QScrollArea()
+        self._panel_scroll.setWidgetResizable(True)
+        self._panel_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._panel_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        panel_container = QWidget()
+        panel_v = QVBoxLayout(panel_container)
+        panel_v.setContentsMargins(4, 4, 4, 4)
+        panel_v.setSpacing(8)
+        # 引擎语音 → 语速输出 → 对话识别 → 存储依赖 → 外观
+        for pid in ("engine", "speed", "dialogue", "storage", "appear"):
+            pw = getattr(self, f"_build_panel_{pid}")()
+            pw.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+            panel_v.addWidget(pw)
+        panel_v.addStretch()
+        self._panel_scroll.setWidget(panel_container)
+        splitter.addWidget(self._panel_scroll)
 
-        splitter.setSizes([750, 450])
+        splitter.setSizes([780, 400])
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 0)
 
@@ -642,29 +638,22 @@ class AudiobookConverterMain(QMainWindow):
         bottom_layout.addWidget(self._dl_label)
         bottom_layout.addWidget(self._dl_progress)
 
-        # Status bar
-        self._statusbar_widget = self._build_statusbar()
-        bottom_layout.addWidget(self._statusbar_widget)
-
-        # Quick bar
+        # 单一操作条（引擎/语音/语速摘要 + 生成/停止/继续）
         self._quickbar_widget = self._build_quickbar()
         bottom_layout.addWidget(self._quickbar_widget)
 
         root.addWidget(bottom)
 
-        self._status_label = QLabel("就绪")
-        self._status_label.setStyleSheet("color:gray;font-size:12px;padding:2px")
+        # 单一状态行（合并原状态栏 + 状态标签）
+        self._status_label = QLabel("● 就绪")
+        self._status_label.setObjectName("statusLine")
+        self._status_label.setStyleSheet("color:#777;font-size:12px;padding:3px 6px")
         bottom_layout.addWidget(self._status_label)
 
 
     # ================ Panel Builders ================
 
-    def _on_panel_tab_changed(self, index):
-        """切换右侧面板标签页时刷新存储依赖"""
-        if 0 <= index < len(self.SIDEBAR_ITEMS):
-            pid = self.SIDEBAR_ITEMS[index][0]
-            if pid == "storage":
-                self._refresh_deps()
+    # 右侧面板已改为单列滚动，无需标签切换回调
 
     def _build_panel_engine(self):
         w = QWidget()
@@ -701,7 +690,6 @@ class AudiobookConverterMain(QMainWindow):
         btn_ext.clicked.connect(self._open_external_dialog)
         layout.addWidget(btn_ext)
 
-        layout.addStretch()
         self._rebuild_engine_buttons()
         return w
 
@@ -768,8 +756,6 @@ class AudiobookConverterMain(QMainWindow):
         tool_row.addWidget(QPushButton("📋 日志", clicked=self._show_log))
         ops_layout.addLayout(tool_row)
         layout.addWidget(ops_card)
-
-        layout.addStretch()
         return w
 
     def _build_panel_dialogue(self):
@@ -792,7 +778,6 @@ class AudiobookConverterMain(QMainWindow):
         dr.addWidget(self._dialogue_voice_combo, 1)
         cl.addLayout(dr)
         layout.addWidget(card)
-        layout.addStretch()
         self._on_dialogue_toggle(False)
         return w
 
@@ -854,6 +839,8 @@ class AudiobookConverterMain(QMainWindow):
         self._file_tree.setHeaderLabels(["文件名", "大小", "状态"])
         self._file_tree.setRootIsDecorated(False)
         self._file_tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        # 左栏顶部空间有限，限高避免挤占章节列表
+        self._file_tree.setMaximumHeight(130)
         cl.addWidget(self._file_tree)
         self._file_count_label = QLabel("未加载文件")
         self._file_count_label.setStyleSheet("color:gray")
@@ -874,7 +861,6 @@ class AudiobookConverterMain(QMainWindow):
         self._theme_status.setStyleSheet("color:gray")
         cl.addWidget(self._theme_status)
         layout.addWidget(card)
-        layout.addStretch()
         return w
 
     def _build_quickbar(self):
@@ -897,37 +883,27 @@ class AudiobookConverterMain(QMainWindow):
         layout.addStretch()
         self._qb_convert = QPushButton("▶ 开始转换")
         self._qb_convert.setObjectName("accentBtn")
+        self._qb_convert.setMinimumHeight(40)
+        self._qb_convert.setMinimumWidth(150)
+        _bf = QFont("Helvetica", 12, QFont.Weight.Bold)
+        self._qb_convert.setFont(_bf)
         self._qb_convert.clicked.connect(self._start_convert)
         layout.addWidget(self._qb_convert)
         self._qb_pause = QPushButton("⏹ 停止")
         self._qb_pause.setObjectName("stopBtn")
+        self._qb_pause.setMinimumHeight(40)
         self._qb_pause.setEnabled(False)
         self._qb_pause.clicked.connect(self._pause_convert)
         layout.addWidget(self._qb_pause)
         self._qb_resume = QPushButton("▶ 继续生成")
         self._qb_resume.setObjectName("accentBtn")
+        self._qb_resume.setMinimumHeight(40)
         self._qb_resume.setEnabled(False)
         self._qb_resume.clicked.connect(self._qb_resume_convert)
         layout.addWidget(self._qb_resume)
         return w
 
-    def _build_statusbar(self):
-        w = QFrame()
-        w.setObjectName("statusBar")
-        layout = QHBoxLayout(w)
-        layout.setContentsMargins(8, 2, 8, 2)
-        layout.setSpacing(8)
-        self._sb_status = QLabel("● 就绪")
-        layout.addWidget(self._sb_status)
-        layout.addWidget(QLabel("|"))
-        self._sb_engine = QLabel("引擎: Edge（联网）")
-        layout.addWidget(self._sb_engine)
-        layout.addWidget(QLabel("|"))
-        self._sb_voices = QLabel("6 语音")
-        layout.addWidget(self._sb_voices)
-        layout.addStretch()
-        layout.addWidget(QLabel(f"v{VERSION}"))
-        return w
+    # 状态栏已合并进底部单一状态行（见 _update_statusbar）
 
     # ================ ASR Tab ================
 
@@ -1146,7 +1122,8 @@ class AudiobookConverterMain(QMainWindow):
         self._qb_voice.setText(f"▸ {voice}" if voice else "▸ 未选择语音")
 
     def _update_statusbar(self):
-        if not hasattr(self, '_sb_status'):
+        """空闲时把引擎就绪情况汇总到底部单一状态行"""
+        if not hasattr(self, '_status_label') or self.is_converting:
             return
         engine = "edge"
         btn = self._engine_group.checkedButton()
@@ -1156,10 +1133,9 @@ class AudiobookConverterMain(QMainWindow):
                     engine = eng_id
                     break
         ready, msg = check_engine_ready(engine)
-        self._sb_status.setText("● 就绪" if ready else "○ 引擎不可用")
-        self._sb_engine.setText(f"引擎: {msg[:30]}")
         voices = get_voice_list(engine)
-        self._sb_voices.setText(f"{len(voices)} 语音")
+        dot = "●" if ready else "○"
+        self._status_label.setText(f"{dot} {msg[:40]} · {len(voices)} 语音 · v{VERSION}")
 
     # ================ Chapters ================
 

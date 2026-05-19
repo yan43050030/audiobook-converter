@@ -693,6 +693,13 @@ COSYVOICE_VOICES: dict[str, str] = {}
 COSYVOICE_DEFAULT_VOICE = ""
 
 
+def get_cosyvoice_model_dir() -> str:
+    """CosyVoice 模型目录（跟随存储目录）"""
+    path = os.path.join(get_storage_dir(), "cosyvoice-models")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
 def _detect_cosyvoice_voices() -> dict:
     """检测 CosyVoice 可用语音。优先从已下载的模型中扫描。"""
     voices: dict = {}
@@ -734,13 +741,6 @@ COSYVOICE_MODEL_URLS = {
         "description": "CosyVoice-300M-SFT 微调模型（推荐，≈600MB）",
     },
 }
-
-
-def get_cosyvoice_model_dir() -> str:
-    """CosyVoice 模型目录（跟随存储目录）"""
-    path = os.path.join(get_storage_dir(), "cosyvoice-models")
-    os.makedirs(path, exist_ok=True)
-    return path
 
 
 def _cosyvoice_install_hint() -> str:
