@@ -502,6 +502,20 @@ EDGE_DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
 # 运行时诊断信息，便于 UI 展示具体失败原因
 _LOCAL_UNAVAILABLE_REASON: str = ""
 
+# Windows 上避免子进程弹出黑色控制台窗口
+if _PLATFORM == "Windows":
+    _SUBPROCESS_HIDDEN_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+else:
+    _SUBPROCESS_HIDDEN_FLAGS = 0
+
+
+def _quiet_popen_kwargs(extra: Optional[dict] = None) -> dict:
+    """所有 subprocess 调用统一附加 Windows 隐藏窗口标志。"""
+    kw = dict(extra) if extra else {}
+    if _SUBPROCESS_HIDDEN_FLAGS:
+        kw.setdefault("creationflags", _SUBPROCESS_HIDDEN_FLAGS)
+    return kw
+
 
 def _detect_local_voices_macos() -> dict:
     """macOS: 通过 say -v ? 枚举中文语音"""
@@ -848,21 +862,6 @@ def _interruptible_sleep(total_seconds: float, should_stop=None, step: float = 0
         time.sleep(min(step, total_seconds - elapsed))
         elapsed += step
     return False
-
-
-# Windows 上避免子进程弹出黑色控制台窗口（PyInstaller --windowed 模式下尤为重要）
-if _PLATFORM == "Windows":
-    _SUBPROCESS_HIDDEN_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
-else:
-    _SUBPROCESS_HIDDEN_FLAGS = 0
-
-
-def _quiet_popen_kwargs(extra: Optional[dict] = None) -> dict:
-    """所有 subprocess 调用统一附加 Windows 隐藏窗口标志。"""
-    kw = dict(extra) if extra else {}
-    if _SUBPROCESS_HIDDEN_FLAGS:
-        kw.setdefault("creationflags", _SUBPROCESS_HIDDEN_FLAGS)
-    return kw
 
 
 def _run_subprocess_interruptible(cmd, should_stop=None, input_bytes: Optional[bytes] = None,

@@ -5,7 +5,7 @@ import sys
 import os
 
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPalette, QColor
 
 from gui_pyside6 import AudiobookConverterMain
@@ -54,29 +54,48 @@ def main():
     app.setOrganizationName("AudiobookConverter")
     _apply_theme(app)
 
-    from tts_engine import VERSION
+    from tts_engine import VERSION, _load_config
     window = AudiobookConverterMain()
     window.setWindowTitle(f"文字转有声读物 v{VERSION}")
 
-    # 允许调整大小：设置最小尺寸，并按当前屏幕可用区域裁剪初始尺寸，
-    # 避免在小屏（如 13" 笔电）上底部被 Dock / 任务栏挡住。
-    window.setMinimumSize(900, 560)
-    screen = app.primaryScreen()
-    avail = screen.availableGeometry() if screen else None
-    target_w, target_h = 1200, 800
-    if avail is not None:
-        # 留一点边距，避免贴边
-        max_w = max(900, avail.width() - 40)
-        max_h = max(560, avail.height() - 40)
-        target_w = min(target_w, max_w)
-        target_h = min(target_h, max_h)
-    window.resize(target_w, target_h)
-    if avail is not None:
-        # 居中到屏幕可用区域
-        x = avail.x() + (avail.width() - target_w) // 2
-        y = avail.y() + (avail.height() - target_h) // 2
-        window.move(max(avail.x(), x), max(avail.y(), y))
+    cfg = _load_config()
+
+    def _init_window():
+        """在窗口显示后初始化尺寸和位置"""
+        screen = app.primaryScreen()
+        avail = screen.availableGeometry() if screen else None
+
+        # 尝试恢复上次窗口位置
+        saved_geo = cfg.get("window_geometry", "")
+        restored = False
+        if saved_geo:
+            import re as _re
+            m = _re.match(r"(\d+)x(\d+)\+(\-?\d+)\+(\-?\d+)", saved_geo)
+            if m and avail:
+                sw, sh, sx, sy = int(m[1]), int(m[2]), int(m[3]), int(m[4])
+                sw = max(800, min(sw, avail.width() - 20))
+                sh = max(400, min(sh, avail.height() - 40))
+                sx = max(avail.x(), min(sx, avail.x() + avail.width() - sw))
+                sy = max(avail.y(), min(sy, avail.y() + avail.height() - sh))
+                window.resize(sw, sh)
+                window.move(sx, sy)
+                restored = True
+
+        if not restored and avail:
+            target_w = min(1200, avail.width() - 40)
+            target_h = max(400, min(800, avail.height() - 40))
+            window.resize(target_w, target_h)
+            x = avail.x() + (avail.width() - target_w) // 2
+            y = avail.y() + (avail.height() - target_h) // 2
+            window.move(max(avail.x(), x), max(avail.y(), y))
+
+        # 显示后设置最小/最大尺寸（此时 NSWindow 已创建，不会误解约束）
+        window.setMinimumSize(800, 400)
+        window.setMaximumSize(16777215, 16777215)
+
+    # 先显示窗口，让 NSWindow 创建完成
     window.show()
+    QTimer.singleShot(0, _init_window)
 
     sys.exit(app.exec())
 

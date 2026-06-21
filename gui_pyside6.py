@@ -11,7 +11,7 @@ try:
         QComboBox, QRadioButton, QButtonGroup, QCheckBox, QSlider,
         QSpinBox, QProgressBar, QPlainTextEdit, QTreeWidget, QTreeWidgetItem,
         QLineEdit, QFileDialog, QMessageBox, QFrame, QSizePolicy,
-        QHeaderView, QAbstractItemView, QApplication, QScrollArea,
+        QHeaderView, QAbstractItemView, QApplication, QScrollArea, QLayout,
     )
     from PySide6.QtCore import (
         Qt, Signal, Slot, QThread, QTimer, QSize, QRect,
@@ -27,7 +27,7 @@ except ImportError:
         QComboBox, QRadioButton, QButtonGroup, QCheckBox, QSlider,
         QSpinBox, QProgressBar, QPlainTextEdit, QTreeWidget, QTreeWidgetItem,
         QLineEdit, QFileDialog, QMessageBox, QFrame, QSizePolicy,
-        QHeaderView, QAbstractItemView, QApplication, QScrollArea,
+        QHeaderView, QAbstractItemView, QApplication, QScrollArea, QLayout,
     )
     from PyQt6.QtCore import (
         Qt, QThread, QTimer, QSize, QRect, pyqtSignal as Signal, pyqtSlot as Slot,
@@ -599,6 +599,7 @@ class AudiobookConverterMain(QMainWindow):
         self._panel_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         panel_container = QWidget()
         panel_v = QVBoxLayout(panel_container)
+        panel_v.setSizeConstraint(QLayout.SetNoConstraint)
         panel_v.setContentsMargins(4, 4, 4, 4)
         panel_v.setSpacing(8)
         # 引擎语音 → 语速输出 → 对话识别 → 存储依赖 → 外观

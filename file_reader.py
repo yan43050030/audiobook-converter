@@ -1,5 +1,6 @@
 """文件读取工具 — 从 gui.py 提取，不依赖任何 UI 框架。"""
 
+import os
 import re as _re
 import zipfile
 import xml.etree.ElementTree as ET
@@ -189,6 +190,3 @@ def load_file_content(path: str) -> dict:
         "content": content,
         "encoding": ext,
     }
-
-
-import os
