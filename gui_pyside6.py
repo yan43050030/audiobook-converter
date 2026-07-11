@@ -48,7 +48,8 @@ from tts_engine import (
     COSYVOICE_MODEL_URLS, _ensure_cosyvoice_model,
     split_text, _generate_one_safe, split_by_duration,
 )
-from asr_engine import (transcribe, check_asr_ready, WHISPER_MODELS, unload_whisper_model,
+from asr_engine import (transcribe, check_asr_ready, WHISPER_MODELS, WHISPER_COMPUTE_TYPES,
+                        unload_whisper_model,
                         scan_external_asr_engines, external_asr_transcribe)
 from audio_player import AudioPlayer
 from file_reader import load_file_content
@@ -158,12 +159,15 @@ class AsrWorker(_BaseWorker):
     """ASR 语音识别工作线程"""
     progress_update = Signal(int, int)
 
-    def setup(self, input_path, storage_dir, model_size, language, output_format):
-        self._params = (input_path, storage_dir, model_size, language, output_format)
+    def setup(self, input_path, storage_dir, model_size, language, output_format,
+              compute_type="default"):
+        self._params = (input_path, storage_dir, model_size, language, output_format,
+                        compute_type)
 
     def run(self):
         try:
-            input_path, storage_dir, model_size, language, output_format = self._params
+            (input_path, storage_dir, model_size, language, output_format,
+             compute_type) = self._params
             def progress_cb(cur, tot):
                 self.progress_update.emit(cur, tot)
             def stop_cb():
@@ -173,6 +177,7 @@ class AsrWorker(_BaseWorker):
                 model_size=model_size, language=language,
                 output_format=output_format,
                 progress_callback=progress_cb, should_stop=stop_cb,
+                compute_type=compute_type,
             )
             self.finished_ok.emit(result)
         except Exception as e:
@@ -935,6 +940,14 @@ class AudiobookConverterMain(QMainWindow):
         self._asr_model_combo.addItems(list(WHISPER_MODELS.keys()))
         self._asr_model_combo.setCurrentText("base")
         model_row.addWidget(self._asr_model_combo, 1)
+        model_row.addWidget(QLabel("精度:"))
+        self._asr_compute_combo = QComboBox()
+        for label, val in WHISPER_COMPUTE_TYPES.items():
+            self._asr_compute_combo.addItem(label, val)
+        self._asr_compute_combo.setToolTip(
+            "auto: CPU 用 int8、GPU 用 float16\n"
+            "int8_float16: GPU 上更省显存，速度接近 float16")
+        model_row.addWidget(self._asr_compute_combo, 1)
         layout.addLayout(model_row)
         layout.addWidget(QLabel("tiny=最快 ~150MB | base=推荐 ~300MB | small ~1GB | medium ~3GB | large-v3=最准 ~6GB"))
 
@@ -1806,8 +1819,10 @@ class AudiobookConverterMain(QMainWindow):
             self._btn_asr_start.setText("▶ 开始识别")
             return
 
+        compute_type = self._asr_compute_combo.currentData() or "default"
         self._asr_worker = AsrWorker()
-        self._asr_worker.setup(self._audio_file_path, get_storage_dir(), model_size, language, output_format)
+        self._asr_worker.setup(self._audio_file_path, get_storage_dir(), model_size, language,
+                               output_format, compute_type=compute_type)
         self._asr_worker.progress_update.connect(lambda c, t: self._asr_status.setText(f"识别进度: {c}/{t}"))
         self._asr_worker.finished_ok.connect(self._on_asr_done)
         self._asr_worker.error_occurred.connect(lambda e: (

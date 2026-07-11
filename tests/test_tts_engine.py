@@ -444,3 +444,96 @@ class TestDetectDialogueSegments(unittest.TestCase):
         result = detect_dialogue_segments(text)
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0]["type"], "narration")
+
+
+class TestConcurrencyConfig(unittest.TestCase):
+    """v5.1: 并发数配置"""
+
+    def test_local_concurrency_in_bounds(self):
+        from tts_engine import get_local_concurrency
+        n = get_local_concurrency()
+        self.assertGreaterEqual(n, 2)
+        self.assertLessEqual(n, 16)
+
+    def test_edge_concurrency_in_bounds(self):
+        from tts_engine import get_edge_concurrency
+        n = get_edge_concurrency()
+        self.assertGreaterEqual(n, 1)
+        self.assertLessEqual(n, 10)
+
+
+class TestOptionalEdgeTts(unittest.TestCase):
+    """v5.1: edge-tts 可选依赖降级"""
+
+    def test_engine_ready_reports_missing(self):
+        from tts_engine import EDGE_TTS_AVAILABLE, check_engine_ready
+        ready, msg = check_engine_ready("edge")
+        if EDGE_TTS_AVAILABLE:
+            self.assertTrue(ready)
+        else:
+            self.assertFalse(ready)
+            self.assertIn("edge-tts", msg)
+
+
+class TestPiperThreadLocalCache(unittest.TestCase):
+    """v5.1: Piper 模型缓存线程隔离"""
+
+    def test_caches_are_per_thread(self):
+        import threading
+        from tts_engine import _get_piper_model_cache
+        main_cache = _get_piper_model_cache()
+        other = {}
+
+        def worker():
+            other["cache"] = _get_piper_model_cache()
+
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+        self.assertIsNot(main_cache, other["cache"])
+
+    def test_unload_clears_all_threads(self):
+        import threading
+        from tts_engine import _get_piper_model_cache, _unload_piper_model
+        _get_piper_model_cache()[("v1", "/tmp/v1.onnx")] = None
+
+        def worker():
+            _get_piper_model_cache()[("v2", "/tmp/v2.onnx")] = None
+
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+        _unload_piper_model()
+        self.assertEqual(len(_get_piper_model_cache()), 0)
+
+
+class TestCosyVoiceSpkResolve(unittest.TestCase):
+    """v5.1: CosyVoice 说话人解析"""
+
+    class _FakeCosy:
+        def __init__(self, spks):
+            self._spks = spks
+
+        def list_avaliable_spks(self):
+            return self._spks
+
+    def test_alias_mapping(self):
+        from tts_engine import _cosyvoice_resolve_spk
+        cosy = self._FakeCosy(["中文女", "中文男"])
+        self.assertEqual(_cosyvoice_resolve_spk(cosy, "default_female"), "中文女")
+        self.assertEqual(_cosyvoice_resolve_spk(cosy, "default_male"), "中文男")
+
+    def test_direct_match(self):
+        from tts_engine import _cosyvoice_resolve_spk
+        cosy = self._FakeCosy(["中文女", "英文男"])
+        self.assertEqual(_cosyvoice_resolve_spk(cosy, "英文男"), "英文男")
+
+    def test_unknown_falls_back_to_first(self):
+        from tts_engine import _cosyvoice_resolve_spk
+        cosy = self._FakeCosy(["中文女"])
+        self.assertEqual(_cosyvoice_resolve_spk(cosy, "不存在的语音"), "中文女")
+
+    def test_no_spks_returns_none(self):
+        from tts_engine import _cosyvoice_resolve_spk
+        cosy = self._FakeCosy([])
+        self.assertIsNone(_cosyvoice_resolve_spk(cosy, "中文女"))

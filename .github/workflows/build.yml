@@ -36,6 +36,9 @@ jobs:
           pip install pyinstaller
           pip install -r requirements.txt
 
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
       - name: Build macOS app
         run: |
           pyinstaller audiobook_converter_mac.spec --clean --noconfirm
@@ -71,6 +74,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller
           pip install -r requirements.txt
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
 
       - name: Build Windows exe
         run: |

@@ -122,3 +122,18 @@ class TestFormatJson(unittest.TestCase):
         self.assertIn("segments", parsed)
         self.assertEqual(parsed["segments"][0]["start"], 1.5)
         self.assertEqual(parsed["segments"][0]["end"], 3.0)
+
+
+class TestWhisperModelMeta(unittest.TestCase):
+    """v5.1: Whisper 模型仓库映射与精度选项"""
+
+    def test_every_model_has_repo(self):
+        from asr_engine import WHISPER_MODELS, WHISPER_HF_REPOS
+        for size in WHISPER_MODELS:
+            self.assertIn(size, WHISPER_HF_REPOS)
+
+    def test_compute_types_valid(self):
+        from asr_engine import WHISPER_COMPUTE_TYPES
+        valid = {"default", "float16", "int8_float16", "int8"}
+        self.assertTrue(set(WHISPER_COMPUTE_TYPES.values()) <= valid)
+        self.assertIn("default", WHISPER_COMPUTE_TYPES.values())

@@ -1,4 +1,4 @@
-"""TTS引擎封装 - 支持 edge-tts（联网）、系统语音（跨平台离线）、Piper（离线高质量）、CosyVoice（离线神经） v5.0.0"""
+"""TTS引擎封装 - 支持 edge-tts（联网）、系统语音（跨平台离线）、Piper（离线高质量）、CosyVoice（离线神经） v5.1.0"""
 
 import asyncio
 import json
@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.parse
 import wave
@@ -17,7 +18,13 @@ from collections import OrderedDict
 from shutil import which
 from typing import Callable, List, Optional
 
-import edge_tts
+# 可选导入 - Edge TTS（在线引擎，与其他引擎一致按可选依赖处理）
+try:
+    import edge_tts
+    EDGE_TTS_AVAILABLE = True
+except ImportError:
+    EDGE_TTS_AVAILABLE = False
+    edge_tts = None
 
 # 可选导入 - Piper TTS和音频处理
 try:
@@ -40,7 +47,7 @@ except ImportError:
     PYDUB_AVAILABLE = False
     AudioSegment = None
 
-VERSION = "5.0.3"
+VERSION = "5.1.0"
 
 # 当前平台
 _PLATFORM = platform.system()  # "Darwin" / "Windows" / "Linux"
@@ -651,15 +658,28 @@ def _detect_local_voices() -> dict:
     return {}
 
 
+_local_voices_lock = threading.Lock()
+_local_voices_detected = False
+
+
 def refresh_local_voices() -> None:
     """重新扫描本地语音（在用户安装语音包后可手动触发）"""
-    global LOCAL_VOICES, LOCAL_DEFAULT_VOICE
-    LOCAL_VOICES = _detect_local_voices()
-    LOCAL_DEFAULT_VOICE = list(LOCAL_VOICES.values())[0] if LOCAL_VOICES else ""
+    global LOCAL_VOICES, LOCAL_DEFAULT_VOICE, _local_voices_detected
+    with _local_voices_lock:
+        LOCAL_VOICES = _detect_local_voices()
+        LOCAL_DEFAULT_VOICE = list(LOCAL_VOICES.values())[0] if LOCAL_VOICES else ""
+        _local_voices_detected = True
 
 
-LOCAL_VOICES = _detect_local_voices()
-LOCAL_DEFAULT_VOICE = list(LOCAL_VOICES.values())[0] if LOCAL_VOICES else ""
+def _ensure_local_voices() -> None:
+    """懒加载：首次用到系统语音时才枚举。枚举需要调外部进程
+    （say / PowerShell / espeak-ng，Windows 上最长 15s），放在导入期会拖慢启动。"""
+    if not _local_voices_detected:
+        refresh_local_voices()
+
+
+LOCAL_VOICES: dict = {}
+LOCAL_DEFAULT_VOICE = ""
 
 PIPER_VOICES = {
     "Piper中文女声（中等质量）": "zh_CN-huayan-medium",
@@ -757,6 +777,53 @@ COSYVOICE_MODEL_URLS = {
 }
 
 
+# CosyVoice 模型实例缓存：加载一次约需数十秒 + 数 GB 内存，
+# 批量生成时逐章重新加载不可接受
+_cosyvoice_model_cache: dict = {}
+_cosyvoice_lock = threading.Lock()
+
+# 界面上历史遗留的语音 ID → CosyVoice-300M-SFT 预置说话人名
+_COSYVOICE_SPK_ALIASES = {
+    "default_female": "中文女",
+    "default_male": "中文男",
+}
+
+
+def _load_cosyvoice_model(model_dir: str):
+    """加载 CosyVoice 模型实例（带缓存）"""
+    with _cosyvoice_lock:
+        inst = _cosyvoice_model_cache.get(model_dir)
+        if inst is not None:
+            return inst
+        logger.info(f"加载 CosyVoice 模型: {model_dir}")
+        try:
+            inst = _CosyVoiceCls(model_dir=model_dir)
+        except TypeError:
+            inst = _CosyVoiceCls(model_dir)
+        _cosyvoice_model_cache[model_dir] = inst
+        return inst
+
+
+def _unload_cosyvoice_model() -> None:
+    """卸载 CosyVoice 模型，释放内存"""
+    with _cosyvoice_lock:
+        if _cosyvoice_model_cache:
+            _cosyvoice_model_cache.clear()
+            logger.info("已卸载 CosyVoice 模型")
+
+
+def _cosyvoice_resolve_spk(cosy, voice: str) -> Optional[str]:
+    """把界面选择的语音解析为模型可用的说话人 ID，取不到列表时返回 None"""
+    try:
+        spks = cosy.list_avaliable_spks()  # CosyVoice 官方 API 即为此拼写
+    except Exception:
+        return None
+    if not spks:
+        return None
+    candidate = _COSYVOICE_SPK_ALIASES.get(voice, voice)
+    return candidate if candidate in spks else spks[0]
+
+
 def _cosyvoice_install_hint() -> str:
     """CosyVoice 安装引导提示"""
     return (
@@ -788,7 +855,11 @@ def _download_cosyvoice_model(model_key: str, should_stop=None):
     logger.info(f"解压 CosyVoice 模型: {tar_path}")
     os.makedirs(extract_dir, exist_ok=True)
     with tarfile.open(tar_path, "r:gz") as tar:
-        tar.extractall(path=extract_dir)
+        try:
+            tar.extractall(path=extract_dir, filter="data")
+        except TypeError:
+            # Python < 3.12 不支持 filter 参数
+            tar.extractall(path=extract_dir)  # noqa: S202
 
     try:
         os.remove(tar_path)
@@ -940,6 +1011,7 @@ def _onnxruntime_gpu_available() -> bool:
 
 def get_voice_list(engine="edge"):
     if engine == "local":
+        _ensure_local_voices()
         return list(LOCAL_VOICES.keys())
     elif engine == "piper":
         return list(PIPER_VOICES.keys())
@@ -954,6 +1026,7 @@ def get_voice_list(engine="edge"):
 
 def get_voice_id(display_name, engine="edge"):
     if engine == "local":
+        _ensure_local_voices()
         return LOCAL_VOICES.get(display_name, LOCAL_DEFAULT_VOICE)
     elif engine == "piper":
         return PIPER_VOICES.get(display_name, PIPER_DEFAULT_VOICE)
@@ -997,9 +1070,12 @@ def _piper_install_hint() -> str:
 def check_engine_ready(engine="edge"):
     """检测引擎是否可用，返回 (ready: bool, message: str)"""
     if engine == "edge":
+        if not EDGE_TTS_AVAILABLE:
+            return False, "Edge TTS 未安装。\n请运行: pip install edge-tts"
         return True, "Edge TTS 可用（微软在线语音，需要联网）"
 
     if engine == "local":
+        _ensure_local_voices()
         if LOCAL_VOICES:
             plat_name = {"Darwin": "macOS", "Windows": "Windows", "Linux": "Linux"}.get(_PLATFORM, _PLATFORM)
             return True, f"{plat_name} 系统语音可用（{len(LOCAL_VOICES)} 个中文语音）"
@@ -1293,10 +1369,26 @@ def split_by_duration(chapter_text, max_seconds, rate="+0%"):
     return split_text(chapter_text, max_length=max_chars)
 
 
-# ======== Piper 模型缓存（LRU，上限 2 个模型） ========
+# ======== Piper 模型缓存（LRU，每线程上限 2 个模型） ========
 
 MAX_PIPER_CACHE = 2
-_piper_model_cache: OrderedDict = OrderedDict()
+
+# PiperVoice / onnxruntime 会话跨线程共享不安全：并行生成时每个工作线程
+# 持有独立的模型实例（线程本地缓存），主线程串行使用时行为与全局缓存一致。
+_piper_tls = threading.local()
+_piper_all_caches: List[OrderedDict] = []
+_piper_caches_lock = threading.Lock()
+_piper_download_lock = threading.Lock()
+
+
+def _get_piper_model_cache() -> OrderedDict:
+    cache = getattr(_piper_tls, "cache", None)
+    if cache is None:
+        cache = OrderedDict()
+        _piper_tls.cache = cache
+        with _piper_caches_lock:
+            _piper_all_caches.append(cache)
+    return cache
 
 
 def _get_piper_mode() -> str:
@@ -1313,11 +1405,12 @@ def _load_piper_model(voice_name, should_stop=None):
     model_path = _ensure_piper_model(voice_name, should_stop=should_stop)
     config_path = model_path + ".json"
     cache_key = (voice_name, model_path)
+    cache = _get_piper_model_cache()
 
-    if cache_key in _piper_model_cache:
+    if cache_key in cache:
         logger.debug(f"使用缓存的Piper模型: {voice_name}")
-        _piper_model_cache.move_to_end(cache_key)  # LRU: 标记为最近使用
-        return _piper_model_cache[cache_key]
+        cache.move_to_end(cache_key)  # LRU: 标记为最近使用
+        return cache[cache_key]
 
     mode = _get_piper_mode()
 
@@ -1326,33 +1419,34 @@ def _load_piper_model(voice_name, should_stop=None):
             raise FileNotFoundError(f"Piper配置文件不存在: {config_path}")
         voice_model = PiperVoice.load(model_path, config_path)
         # LRU：达到上限时淘汰最久未使用的
-        if len(_piper_model_cache) >= MAX_PIPER_CACHE:
-            _piper_model_cache.popitem(last=False)
+        if len(cache) >= MAX_PIPER_CACHE:
+            cache.popitem(last=False)
             logger.debug("LRU淘汰：Piper模型缓存已满")
-        _piper_model_cache[cache_key] = voice_model
-        logger.info(f"Piper模型已加载并缓存: {voice_name} (缓存大小={len(_piper_model_cache)})")
+        cache[cache_key] = voice_model
+        logger.info(f"Piper模型已加载并缓存: {voice_name} (缓存大小={len(cache)})")
         return voice_model
     else:
         # CLI模式：仅验证文件存在，不加载到内存
         if not os.path.exists(config_path):
             raise FileNotFoundError(f"Piper配置文件不存在: {config_path}")
-        _piper_model_cache[cache_key] = None  # CLI模式缓存标记
+        cache[cache_key] = None  # CLI模式缓存标记
         logger.info(f"Piper CLI模式就绪: {voice_name}")
         return None
 
 
 def _unload_piper_model(voice_name=None):
-    """卸载Piper模型，释放内存"""
-    global _piper_model_cache
+    """卸载Piper模型，释放内存（清空所有线程的缓存；在批量结束后调用）"""
+    with _piper_caches_lock:
+        for cache in _piper_all_caches:
+            if voice_name is None:
+                cache.clear()
+            else:
+                for key in [k for k in cache if k[0] == voice_name]:
+                    del cache[key]
     if voice_name is None:
-        _piper_model_cache.clear()
         logger.info("已卸载所有Piper模型")
     else:
-        model_path = _get_piper_model_path(voice_name)
-        cache_key = (voice_name, model_path)
-        if cache_key in _piper_model_cache:
-            del _piper_model_cache[cache_key]
-            logger.info(f"已卸载Piper模型: {voice_name}")
+        logger.info(f"已卸载Piper模型: {voice_name}")
 
 
 # ======== Piper TTS 引擎 ========
@@ -1472,11 +1566,14 @@ def _download_piper_model(voice_name, should_stop=None):
 
 
 def _ensure_piper_model(voice_name, should_stop=None):
-    """确保Piper模型存在，如果不存在则下载"""
+    """确保Piper模型存在，如果不存在则下载。
+    加锁防止并行生成时多个工作线程同时下载同一模型导致文件损坏。"""
     model_path = _get_piper_model_path(voice_name)
     if not os.path.exists(model_path):
-        logger.info(f"模型不存在，开始下载: {voice_name}")
-        _download_piper_model(voice_name, should_stop=should_stop)
+        with _piper_download_lock:
+            if not os.path.exists(model_path):
+                logger.info(f"模型不存在，开始下载: {voice_name}")
+                _download_piper_model(voice_name, should_stop=should_stop)
     return model_path
 
 
@@ -1486,7 +1583,7 @@ def _convert_wav_to_mp3(wav_path, mp3_path=None):
         raise ImportError("pydub库未安装，无法转换音频格式")
 
     if mp3_path is None:
-        mp3_path = wav_path.replace('.wav', '.mp3')
+        mp3_path = os.path.splitext(wav_path)[0] + '.mp3'
 
     audio = AudioSegment.from_wav(wav_path)
     audio.export(mp3_path, format="mp3", bitrate="128k")
@@ -1631,7 +1728,7 @@ def _piper_generate(text, voice, rate, output_path, should_stop=None):
     speed = 1.0 + rate_val / 100.0
     speed = max(0.5, min(2.0, speed))
 
-    wav_path = output_path.replace('.mp3', '.wav')
+    wav_path = os.path.splitext(output_path)[0] + '.wav'
 
     try:
         mode = _get_piper_mode()
@@ -1697,12 +1794,16 @@ def _cosyvoice_generate(text: str, voice: str, rate: str, output_path: str,
     speed = 1.0 + rate_val / 100.0
     speed = max(0.5, min(2.0, speed))
 
-    try:
-        cosy = _CosyVoiceCls(model_dir=model_dir)
-    except TypeError:
-        cosy = _CosyVoiceCls(model_dir)
+    cosy = _load_cosyvoice_model(model_dir)
 
-    result = cosy.inference_sft(text, stream=False)
+    spk_id = _cosyvoice_resolve_spk(cosy, voice)
+    if spk_id is not None:
+        try:
+            result = cosy.inference_sft(text, spk_id, stream=False)
+        except TypeError:
+            result = cosy.inference_sft(text, stream=False)
+    else:
+        result = cosy.inference_sft(text, stream=False)
 
     audio_data = np.array([], dtype=np.float32)
     sample_rate = 22050
@@ -1724,7 +1825,7 @@ def _cosyvoice_generate(text: str, voice: str, rate: str, output_path: str,
         except ImportError:
             logger.warning("librosa 未安装，跳过语速调整")
 
-    wav_path = output_path.replace('.mp3', '.wav')
+    wav_path = os.path.splitext(output_path)[0] + '.wav'
     try:
         import soundfile as sf
         sf.write(wav_path, audio_data, int(sample_rate))
@@ -1845,10 +1946,37 @@ def normalize_loudness(input_path: str, output_path: Optional[str] = None,
 
 # ======== 并发数配置 ========
 
+def _config_concurrency(key: str) -> int:
+    """从 config.json 读取并发数覆盖值，未配置或非法时返回 0"""
+    try:
+        val = int(_load_config().get(key, 0))
+        return val if val > 0 else 0
+    except Exception:
+        return 0
+
+
+def get_edge_concurrency() -> int:
+    """Edge 在线引擎并发数：网络绑定，默认保守值，config.json 的
+    edge_concurrency 可覆盖（上限 10，避免触发微软限流）"""
+    override = _config_concurrency("edge_concurrency")
+    return min(override, 10) if override else CONCURRENCY
+
+
+def get_local_concurrency() -> int:
+    """本地引擎（Piper 等）并行数：默认按 CPU 核数自适应，
+    config.json 的 concurrency 可覆盖（上限 16）"""
+    override = _config_concurrency("concurrency")
+    if override:
+        return min(override, 16)
+    cpu = os.cpu_count() or 2
+    return max(2, min(4, cpu // 2))
+
 
 # ======== Edge TTS 引擎 ========
 
 async def _edge_generate(text, voice, rate, output_path):
+    if not EDGE_TTS_AVAILABLE:
+        raise RuntimeError("Edge TTS 未安装。请运行: pip install edge-tts")
     communicate = edge_tts.Communicate(text, voice, rate=rate)
     await communicate.save(output_path)
 
@@ -1924,7 +2052,7 @@ async def _edge_batch_generate(items, voice, rate, output_dir, progress_callback
     total_active = len(pending_items)
     done_count = 0
 
-    semaphore = asyncio.Semaphore(CONCURRENCY)
+    semaphore = asyncio.Semaphore(get_edge_concurrency())
     stop_event = asyncio.Event()
 
     async def _watch_stop():
@@ -2414,62 +2542,68 @@ def convert_batch(
     logger.info(f"批量生成开始: {sum(1 for it in items if it['status'] not in ('done','skipped'))} 个待处理, 引擎={engine}")
 
     if engine == "edge":
+        if not EDGE_TTS_AVAILABLE:
+            raise RuntimeError("Edge TTS 未安装。请运行: pip install edge-tts，"
+                               "或切换到离线引擎（系统语音 / Piper / CosyVoice）。")
         # 用单一事件循环批量生成
         asyncio.run(_edge_batch_generate(items, voice, rate, output_dir, progress_callback, should_stop))
     elif engine in ("local", "piper", "cosyvoice") or _is_external_engine(engine):
-        # Piper CLI 模式：用 ThreadPoolExecutor 并行处理（子进程隔离，线程安全）
+        # Piper：用 ThreadPoolExecutor 并行处理。
+        # CLI 模式靠子进程隔离；Python 模式每个工作线程持有独立模型实例（线程本地缓存）。
         _parallel_piper_done = False
         if engine == "piper":
+            piper_mode = None
             try:
-                if _get_piper_mode() == PIPER_MODE_CLI:
-                    from concurrent.futures import ThreadPoolExecutor, as_completed
-                    pending = [(i, it) for i, it in enumerate(items)
-                               if it["status"] not in ("done", "skipped")]
-                    total_active = len(pending)
-                    done_count = 0
+                piper_mode = _get_piper_mode()
+            except Exception as e:
+                logger.warning(f"Piper 模式检测失败，改用串行路径: {e}")
+            if piper_mode in (PIPER_MODE_CLI, PIPER_MODE_PYTHON):
+                from concurrent.futures import ThreadPoolExecutor, as_completed
+                pending = [(i, it) for i, it in enumerate(items)
+                           if it["status"] not in ("done", "skipped")]
+                total_active = len(pending)
+                done_count = 0
 
-                    try:
-                        with ThreadPoolExecutor(max_workers=3) as executor:
-                            fut_map = {}
-                            for idx, item in pending:
-                                if should_stop and should_stop():
-                                    logger.info("用户暂停生成")
-                                    break
-                                def _piper_cli_one(it=item):
-                                    p = os.path.join(output_dir, it["filename"])
-                                    _generate_one_safe(it["text"], voice, rate, p,
-                                                       engine="piper", should_stop=should_stop,
-                                                       voice_map=it.get("voice_map"),
-                                                       dialogue_segments=it.get("segments"))
-                                    it["status"] = "done"
-                                future = executor.submit(_piper_cli_one)
-                                fut_map[future] = idx
+                try:
+                    with ThreadPoolExecutor(max_workers=get_local_concurrency()) as executor:
+                        fut_map = {}
+                        for idx, item in pending:
+                            if should_stop and should_stop():
+                                logger.info("用户暂停生成")
+                                break
+                            def _piper_one(it=item):
+                                p = os.path.join(output_dir, it["filename"])
+                                _generate_one_safe(it["text"], voice, rate, p,
+                                                   engine="piper", should_stop=should_stop,
+                                                   voice_map=it.get("voice_map"),
+                                                   dialogue_segments=it.get("segments"))
+                                it["status"] = "done"
+                            future = executor.submit(_piper_one)
+                            fut_map[future] = idx
 
-                            for future in as_completed(fut_map):
-                                idx = fut_map[future]
+                        for future in as_completed(fut_map):
+                            idx = fut_map[future]
+                            try:
+                                future.result()
+                            except StopRequested:
+                                logger.info(f"用户暂停：[{items[idx]['title']}] 未完成")
+                                executor.shutdown(wait=False, cancel_futures=True)
+                                break
+                            except Exception as e:
+                                items[idx]["status"] = "error"
+                                items[idx]["error"] = str(e)
+                                logger.error(f"Piper生成失败 [{items[idx]['title']}]: {e}")
+
+                            save_progress(output_dir, items)
+                            done_count += 1
+                            if progress_callback:
                                 try:
-                                    future.result()
-                                except StopRequested:
-                                    logger.info(f"用户暂停：[{items[idx]['title']}] 未完成")
-                                    executor.shutdown(wait=False, cancel_futures=True)
-                                    break
-                                except Exception as e:
-                                    items[idx]["status"] = "error"
-                                    items[idx]["error"] = str(e)
-                                    logger.error(f"Piper CLI生成失败 [{items[idx]['title']}]: {e}")
-
-                                save_progress(output_dir, items)
-                                done_count += 1
-                                if progress_callback:
-                                    try:
-                                        progress_callback(done_count, total_active)
-                                    except Exception:
-                                        pass
-                    finally:
-                        _unload_piper_model()
-                    _parallel_piper_done = True
-            except Exception:
-                pass
+                                    progress_callback(done_count, total_active)
+                                except Exception:
+                                    pass
+                finally:
+                    _unload_piper_model()
+                _parallel_piper_done = True
 
         if not _parallel_piper_done:
             # 本地/外部引擎同步逐个生成（支持暂停）
@@ -2526,6 +2660,8 @@ def convert_batch(
             finally:
                 if engine == "piper":
                     _unload_piper_model()
+                elif engine == "cosyvoice":
+                    _unload_cosyvoice_model()
     else:
         raise ValueError(f"不支持的引擎类型: {engine}")
 

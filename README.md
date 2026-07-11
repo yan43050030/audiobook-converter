@@ -1,11 +1,12 @@
 # 文字转有声读物 (Text-to-Audiobook Converter)
 
-**v5.0.0** — 将文字转换为自然语音的有声读物制作工具，PySide6/Qt6 全新界面，支持多引擎 TTS、ASR 语音转文字、多人对话识别。
+**v5.1.0** — 将文字转换为自然语音的有声读物制作工具，PySide6/Qt6 界面，支持多引擎 TTS、ASR 语音转文字、多人对话识别。v5.1 聚焦离线引擎的稳定性与性能：完全离线安装、CosyVoice 模型缓存、Piper 全模式并行、Whisper 镜像下载与批量推理加速。
 
 ## 功能特点
 
 ### 文字转语音 (TTS)
 - **多引擎支持**：Edge（联网高质量）、系统语音（离线）、Piper（离线神经网络）、CosyVoice（实验性离线）、外挂引擎插件
+- **完全离线可用**：所有引擎依赖（含 edge-tts）均为可选安装，离线环境只装需要的引擎即可运行
 - **多文件导入**：支持 txt / markdown / docx / epub / html / pdf，可同时导入多个文件，逐个移除
 - **智能章节检测**：自动识别中文章节标题（第X章、序章、楔子等），支持章节选择、过滤搜索
 - **灵活拆分**：按章节拆分、按时长拆分、合并为单个文件
@@ -14,8 +15,9 @@
 
 ### 语音转文字 (ASR)
 - 基于 faster-whisper 的高精度语音识别
-- 支持多种 Whisper 模型（tiny ~ large-v3），首次自动下载
-- GPU 加速（CUDA）自动检测
+- 支持多种 Whisper 模型（tiny ~ large-v3），首次自动下载（带进度显示 + hf-mirror 镜像回退）
+- 批量推理管线（BatchedInferencePipeline）自动启用，长音频提速约 3-4 倍
+- GPU 加速（CUDA）自动检测，可选精度（float16 / int8_float16 / int8）
 - 输出格式：纯文本 (txt)、字幕 (srt)、JSON
 - 支持多种音频格式（mp3 / wav / m4a / flac / ogg / aac / wma）
 
@@ -142,6 +144,7 @@ audiobook_converter/
 
 ## 版本历史
 
+- **v5.1.0** (2026-07) — 离线引擎稳定性与性能：edge-tts 改为可选依赖（完全离线安装）、CosyVoice 模型实例缓存 + 语音选择生效、Piper Python 模式并行（并发数按 CPU 自适应，config.json 可配）、Whisper 模型镜像下载 + UI 进度 + 批量推理加速、系统语音懒加载提速启动、CI 双矩阵测试（83 项）
 - **v5.0.0** (2026-05) — PySide6/Qt6 全新界面（侧栏导航 + 面板切换 + 底部快速栏）、暖色浅色主题 / 深色主题 QSS、引擎选择卡片化、所有引擎始终可见、文件读取模块独立、PySide6/PyQt6/Tkinter 三后端自动适配
 - **v4.0.0** (2026-04) — 生成中引擎锁定 + 语音切换提示、CosyVoice 一键安装向导（含模型下载）、多人对话识别（旁白/对话不同音色）、pytest 回归测试（72 项）
 - **v3.0.0** (2026-04) — UI 美化、sv-ttk 默认主题、章节列表 Treeview、LabelFrame 分组布局、内边距规范化、按钮图标统一

@@ -36,6 +36,26 @@ WHISPER_MODELS = {
 }
 WHISPER_DEFAULT_MODEL = "base"
 
+# faster-whisper 官方转换模型仓库（CTranslate2 格式）
+WHISPER_HF_REPOS = {
+    "tiny": "Systran/faster-whisper-tiny",
+    "base": "Systran/faster-whisper-base",
+    "small": "Systran/faster-whisper-small",
+    "medium": "Systran/faster-whisper-medium",
+    "large-v3": "Systran/faster-whisper-large-v3",
+}
+# 模型目录必备文件；词表文件名随模型版本不同，作为可选文件逐个尝试
+_WHISPER_REQUIRED_FILES = ["model.bin", "config.json", "tokenizer.json"]
+_WHISPER_OPTIONAL_FILES = ["vocabulary.txt", "vocabulary.json", "preprocessor_config.json"]
+
+# 精度选项：显示名 -> compute_type（"default" 表示按设备自动选择）
+WHISPER_COMPUTE_TYPES = {
+    "auto（推荐）": "default",
+    "float16（GPU）": "float16",
+    "int8_float16（GPU 省显存）": "int8_float16",
+    "int8（CPU）": "int8",
+}
+
 
 def _cuda_available() -> bool:
     """检测 CUDA 是否可用于 PyTorch"""
@@ -83,7 +103,8 @@ def convert_audio_to_wav(input_path: str, sample_rate: int = 16000) -> str:
     ff = _ffmpeg_path()
     if not ff:
         raise RuntimeError("ffmpeg 不可用，无法转换音频格式。")
-    output_path = os.path.join(tempfile.gettempdir(), f"asr_input_{os.getpid()}.wav")
+    fd, output_path = tempfile.mkstemp(prefix="asr_input_", suffix=".wav")
+    os.close(fd)  # 只要唯一路径，句柄立即关闭，由 ffmpeg -y 覆盖写入
     subprocess.run(
         [ff, "-y", "-i", input_path,
          "-ar", str(sample_rate), "-ac", "1", "-sample_fmt", "s16",
@@ -97,9 +118,66 @@ def convert_audio_to_wav(input_path: str, sample_rate: int = 16000) -> str:
 _whisper_model_cache: dict = {}
 
 
+def _ensure_whisper_model(model_size: str, storage_dir: str,
+                          should_stop: Optional[Callable[[], bool]] = None) -> Optional[str]:
+    """预下载 Whisper 模型到本地目录。
+
+    复用 tts_engine 的下载基础设施：断点续传、hf-mirror 镜像回退、UI 进度推送。
+    成功返回模型目录路径；无法预下载时返回 None（回退 faster-whisper 自带下载）。
+    """
+    from tts_engine import _download_file_with_progress
+    from tts_engine import StopRequested as _TtsStopRequested
+
+    repo = WHISPER_HF_REPOS.get(model_size)
+    if not repo:
+        return None
+
+    # 老版本用户可能已有 faster-whisper 自带的 HF 缓存布局模型，直接复用，避免重复下载
+    hf_cache_dir = os.path.join(get_whisper_model_dir(storage_dir),
+                                "models--" + repo.replace("/", "--"))
+    if os.path.isdir(hf_cache_dir):
+        import glob as _glob
+        if _glob.glob(os.path.join(hf_cache_dir, "snapshots", "*", "model.bin")):
+            logger.info(f"检测到已有 HF 缓存模型，跳过预下载: {hf_cache_dir}")
+            return None  # 返回 None 让 faster-whisper 走本地缓存
+
+    target_dir = os.path.join(get_whisper_model_dir(storage_dir), model_size)
+    os.makedirs(target_dir, exist_ok=True)
+    marker = os.path.join(target_dir, ".complete")
+    if os.path.isfile(marker):
+        return target_dir
+
+    base_url = f"https://huggingface.co/{repo}/resolve/main"
+    try:
+        for fname in _WHISPER_REQUIRED_FILES:
+            _download_file_with_progress(
+                f"{base_url}/{fname}", os.path.join(target_dir, fname),
+                f"Whisper {model_size}/{fname}", should_stop=should_stop)
+        for fname in _WHISPER_OPTIONAL_FILES:
+            try:
+                _download_file_with_progress(
+                    f"{base_url}/{fname}", os.path.join(target_dir, fname),
+                    f"Whisper {model_size}/{fname}", should_stop=should_stop)
+            except _TtsStopRequested:
+                raise
+            except Exception:
+                # 可选文件在部分模型仓库中不存在（404），跳过
+                fpath = os.path.join(target_dir, fname)
+                if os.path.exists(fpath) and os.path.getsize(fpath) == 0:
+                    os.remove(fpath)
+    except _TtsStopRequested:
+        raise StopRequested()
+
+    with open(marker, "w", encoding="utf-8") as f:
+        f.write(repo)
+    logger.info(f"Whisper 模型预下载完成: {target_dir}")
+    return target_dir
+
+
 def _load_whisper_model(model_size: str, storage_dir: str,
                          device: str = "auto",
-                         compute_type: str = "default") -> "WhisperModel":
+                         compute_type: str = "default",
+                         should_stop: Optional[Callable[[], bool]] = None) -> "WhisperModel":
     """加载 Whisper 模型（缓存）"""
     if not FASTER_WHISPER_AVAILABLE:
         raise ImportError("faster-whisper 未安装")
@@ -109,14 +187,23 @@ def _load_whisper_model(model_size: str, storage_dir: str,
     if compute_type == "default":
         compute_type = "float16" if device == "cuda" else "int8"
 
-    cache_key = (model_size, device)
+    cache_key = (model_size, device, compute_type)
     if cache_key in _whisper_model_cache:
         return _whisper_model_cache[cache_key]
 
+    # 优先用带镜像回退和 UI 进度的预下载；失败则回退 faster-whisper 自动下载
+    model_path = None
+    try:
+        model_path = _ensure_whisper_model(model_size, storage_dir, should_stop=should_stop)
+    except StopRequested:
+        raise
+    except Exception as e:
+        logger.warning(f"Whisper 模型预下载失败，回退 faster-whisper 自动下载: {e}")
+
     model_dir = get_whisper_model_dir(storage_dir)
-    logger.info(f"加载 Whisper 模型: {model_size} (device={device}, compute={compute_type})")
+    logger.info(f"加载 Whisper 模型: {model_path or model_size} (device={device}, compute={compute_type})")
     model = WhisperModel(
-        model_size, device=device,
+        model_path or model_size, device=device,
         compute_type=compute_type,
         download_root=model_dir,
     )
@@ -176,6 +263,8 @@ def transcribe(
     output_path: Optional[str] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
     should_stop: Optional[Callable[[], bool]] = None,
+    compute_type: str = "default",
+    batched: bool = True,
 ) -> str:
     """将音频文件转录为文字。
 
@@ -188,6 +277,8 @@ def transcribe(
         output_path: 可选，输出文件路径
         progress_callback: 进度回调 (current, total)
         should_stop: 中断检测函数
+        compute_type: default/float16/int8_float16/int8（default 按设备自动选择）
+        batched: 使用 BatchedInferencePipeline 批量推理加速（长音频约 3-4x）
 
     返回:
         转录文本
@@ -201,23 +292,42 @@ def transcribe(
     try:
         # 2. 自动检测设备
         device = "cuda" if _cuda_available() else "cpu"
-        compute_type = "float16" if device == "cuda" else "int8"
 
         if should_stop and should_stop():
             raise StopRequested()
 
         # 3. 加载模型
-        model = _load_whisper_model(model_size, storage_dir, device, compute_type)
+        model = _load_whisper_model(model_size, storage_dir, device, compute_type,
+                                    should_stop=should_stop)
 
         if should_stop and should_stop():
             raise StopRequested()
 
-        # 4. 运行转录
+        # 4. 运行转录（优先批量推理管线）
         lang = None if language == "auto" else language
-        segments_gen, info = model.transcribe(
-            wav_path, language=lang,
-            beam_size=5, vad_filter=True,
-        )
+        pipeline = None
+        if batched:
+            try:
+                from faster_whisper import BatchedInferencePipeline
+                pipeline = BatchedInferencePipeline(model=model)
+            except Exception as e:
+                logger.info(f"BatchedInferencePipeline 不可用，使用普通转录: {e}")
+
+        segments_gen = info = None
+        if pipeline is not None:
+            try:
+                segments_gen, info = pipeline.transcribe(
+                    wav_path, language=lang,
+                    beam_size=5, vad_filter=True, batch_size=8,
+                )
+            except TypeError as e:
+                # 不同 faster-whisper 版本的批量管线参数有差异，回退普通转录
+                logger.info(f"批量推理管线参数不兼容，使用普通转录: {e}")
+        if segments_gen is None:
+            segments_gen, info = model.transcribe(
+                wav_path, language=lang,
+                beam_size=5, vad_filter=True,
+            )
 
         # 5. 收集结果
         result_segments = []
@@ -336,8 +446,8 @@ def external_asr_transcribe(engine_id: str, input_path: str, output_format: str 
     # 需要先将音频转为 WAV（外挂引擎可能只支持 WAV）
     wav_path = convert_audio_to_wav(input_path)
 
-    import tempfile
-    out_path = os.path.join(tempfile.gettempdir(), f"asr_ext_{os.getpid()}.txt")
+    fd, out_path = tempfile.mkstemp(prefix="asr_ext_", suffix=".txt")
+    os.close(fd)
     cmd = [exe, "--input", wav_path, "--output", out_path, "--format", output_format]
     if model:
         cmd.extend(["--model", model])
@@ -349,10 +459,11 @@ def external_asr_transcribe(engine_id: str, input_path: str, output_format: str 
         if rc != 0:
             stderr = err.decode("utf-8", errors="replace") if err else ""
             raise RuntimeError(f"外挂 ASR 引擎 '{engine_id}' 失败 (code {rc}): {stderr}")
-        if os.path.exists(out_path):
+        # out_path 由 mkstemp 预创建，用内容非空判断引擎是否产出结果
+        if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
             with open(out_path, "r", encoding="utf-8") as f:
                 return f.read()
-        raise RuntimeError(f"外挂 ASR 引擎 '{engine_id}' 未生成输出文件")
+        raise RuntimeError(f"外挂 ASR 引擎 '{engine_id}' 未生成输出内容")
     finally:
         if os.path.exists(wav_path):
             try:

@@ -1,6 +1,49 @@
 # 项目情况日志 — 文字转有声读物 (Audiobook Converter)
 
-## 当前版本：v5.0.0 (2026-05-01)
+## 当前版本：v5.1.0 (2026-07-11)
+
+## v5.1.0 本次升级内容（P0 稳定性 + P1 性能，按 ROADMAP.md 实施）
+
+### S1：edge-tts 改为可选依赖
+- `import edge_tts` 包裹 try/except（`EDGE_TTS_AVAILABLE` 标志），与其他引擎一致
+- 未安装时 `check_engine_ready("edge")` 返回安装提示，UI 显示"需安装"
+- 修复了因此导致的测试收集失败（此前 72 项只能跑 20 项）
+
+### S2：CI 测试
+- 新增 `.github/workflows/test.yml`：push/PR 到 main 触发，minimal（零可选依赖）+ full（完整 requirements）双矩阵
+- `build.yml` 两个打包 job 在 PyInstaller 之前先跑测试，测试不过不出包
+
+### S3：CosyVoice 模型缓存 + 语音选择生效
+- `_load_cosyvoice_model()` 模型实例缓存（此前逐章重新加载 600MB 模型）
+- `_cosyvoice_resolve_spk()` 把界面语音解析为说话人 ID 传入 `inference_sft`（此前 voice 参数不生效）
+- 批量结束 `_unload_cosyvoice_model()` 释放内存
+
+### S4：Whisper 模型下载接入镜像 + 进度
+- `_ensure_whisper_model()` 用 tts_engine 的下载基础设施预下载 Systran/faster-whisper-* 模型
+  （断点续传 + hf-mirror 回退 + `add_download_listener` UI 进度）
+- 已有 HF 缓存布局模型的老用户自动复用，不重复下载；预下载失败回退 faster-whisper 自带下载
+
+### S5：健壮性修复
+- Piper 并行分支不再 `except Exception: pass` 吞异常（改为记录日志 + 显式回退串行）
+- CosyVoice tar 解压加 `filter="data"`（Python <3.12 回退）
+- `.mp3`→`.wav` 路径替换改用 `os.path.splitext`
+- ASR 临时文件改用 `tempfile.mkstemp` 唯一命名
+
+### P1-1：系统语音懒加载
+- 模块导入期不再同步枚举系统语音（Windows PowerShell 枚举最长 15s），改为首次访问时线程安全检测
+
+### P1-2/P1-3：Piper 并行 + 并发自适应
+- Piper 模型缓存改为线程本地（每线程 LRU 2 个），Python 模式也走 ThreadPoolExecutor 并行（此前仅 CLI 模式）
+- `_ensure_piper_model` 加下载锁，防止并行线程同时下载同一模型
+- `get_local_concurrency()`（CPU 自适应，config.json `concurrency` 覆盖，上限 16）
+- `get_edge_concurrency()`（config.json `edge_concurrency` 覆盖，上限 10）
+
+### P1-4：ASR 加速
+- `transcribe()` 默认启用 `BatchedInferencePipeline`（batch_size=8，长音频约 3-4x），不可用时自动回退
+- 新增 `compute_type` 参数 + PySide6 界面"精度"下拉框（auto/float16/int8_float16/int8）
+
+### 测试
+- 新增 11 项测试（并发边界、edge 降级、Piper 线程缓存、CosyVoice 说话人解析、Whisper 元数据），共 83 项
 
 ## 项目概览
 
@@ -8,8 +51,8 @@
 
 - **仓库**: https://github.com/yan43050030/audiobook-converter
 - **Python**: 3.12+（打包用 3.12，开发使用 3.14）
-- **测试**: 72 项 unittest（`python3 -m unittest discover -s tests -v`）
-- **CI**: GitHub Actions，推送 `v*` tag 触发 macOS + Windows 双平台 PyInstaller 打包
+- **测试**: 83 项 unittest（`python3 -m unittest discover -s tests -v`）
+- **CI**: GitHub Actions，push/PR 到 main 跑测试（minimal/full 双矩阵）；推送 `v*` tag 触发 macOS + Windows 双平台 PyInstaller 打包（打包前先跑测试）
 
 ## 文件架构
 
