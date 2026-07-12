@@ -53,6 +53,17 @@
 
 ## 快速开始
 
+### 下载预构建版本（推荐）
+
+从 [Releases](https://github.com/yan43050030/audiobook-converter/releases) 下载对应平台的压缩包，解压即用。
+
+> **首次打开提示**：应用未做代码签名，系统会弹出安全提示，属正常现象：
+> - **macOS**：首次启动请**右键点击 AudiobookConverter.app → 打开**（直接双击会被 Gatekeeper 拦截）；
+>   若仍被阻止，到 系统设置 → 隐私与安全性 中点击「仍要打开」。
+> - **Windows**：SmartScreen 弹窗时点击「更多信息 → 仍要运行」。
+>
+> 以上操作每台机器只需一次。
+
 ### 安装
 
 ```bash
