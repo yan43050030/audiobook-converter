@@ -537,3 +537,134 @@ class TestCosyVoiceSpkResolve(unittest.TestCase):
         from tts_engine import _cosyvoice_resolve_spk
         cosy = self._FakeCosy([])
         self.assertIsNone(_cosyvoice_resolve_spk(cosy, "中文女"))
+
+
+class TestExtractSpeakers(unittest.TestCase):
+    """v5.2: 角色提取"""
+
+    def test_extracts_named_speakers(self):
+        from tts_engine import extract_speakers
+        text = '老王说："今天天气不错。"老李说："是啊。"老王说："走吧。"'
+        speakers = extract_speakers(text)
+        self.assertIn("老王", speakers)
+        self.assertIn("老李", speakers)
+        # 出现次数多的排前面
+        self.assertEqual(speakers[0], "老王")
+
+    def test_no_dialogue_returns_empty(self):
+        from tts_engine import extract_speakers
+        self.assertEqual(extract_speakers("平静的叙述，没有对话。"), [])
+
+    def test_max_speakers_limit(self):
+        from tts_engine import extract_speakers
+        text = "".join(f'角色{i}说："第{i}句。"' for i in range(30))
+        self.assertLessEqual(len(extract_speakers(text, max_speakers=5)), 5)
+
+
+class TestResolveSegmentVoice(unittest.TestCase):
+    """v5.2: 对话段语音解析"""
+
+    def test_speakers_map_wins(self):
+        from tts_engine import _resolve_segment_voice
+        vm = {"narration": "n", "dialogue": "d", "speakers": {"老王": "wang"}}
+        seg = {"text": "x", "type": "dialogue", "speaker": "老王"}
+        self.assertEqual(_resolve_segment_voice(seg, "def", vm), "wang")
+
+    def test_legacy_flat_speaker_key(self):
+        from tts_engine import _resolve_segment_voice
+        vm = {"narration": "n", "dialogue": "d", "老王": "wang"}
+        seg = {"text": "x", "type": "dialogue", "speaker": "老王"}
+        self.assertEqual(_resolve_segment_voice(seg, "def", vm), "wang")
+
+    def test_type_fallback(self):
+        from tts_engine import _resolve_segment_voice
+        vm = {"narration": "n", "dialogue": "d"}
+        self.assertEqual(_resolve_segment_voice(
+            {"text": "x", "type": "dialogue", "speaker": "路人"}, "def", vm), "d")
+        self.assertEqual(_resolve_segment_voice(
+            {"text": "x", "type": "narration", "speaker": None}, "def", vm), "n")
+
+    def test_no_map_returns_default(self):
+        from tts_engine import _resolve_segment_voice
+        self.assertEqual(_resolve_segment_voice({"text": "x"}, "def", None), "def")
+
+
+class TestSrtGeneration(unittest.TestCase):
+    """v5.2: 字幕生成"""
+
+    def test_timestamp_format(self):
+        from tts_engine import _srt_timestamp
+        self.assertEqual(_srt_timestamp(0), "00:00:00,000")
+        self.assertEqual(_srt_timestamp(3661.5), "01:01:01,500")
+        self.assertEqual(_srt_timestamp(-1), "00:00:00,000")
+
+    def test_proportional_allocation(self):
+        from tts_engine import generate_srt_from_text
+        srt = generate_srt_from_text("短句。这是一个比较长的句子啊。", 10.0)
+        self.assertIn("1\n00:00:00,000", srt)
+        self.assertIn("短句。", srt)
+        blocks = [b for b in srt.split("\n\n") if b.strip()]
+        self.assertEqual(len(blocks), 2)
+        # 结尾时间应为总时长
+        self.assertIn("00:00:10,000", srt)
+
+    def test_empty_inputs(self):
+        from tts_engine import generate_srt_from_text
+        self.assertEqual(generate_srt_from_text("", 10.0), "")
+        self.assertEqual(generate_srt_from_text("你好。", 0), "")
+
+
+class TestFfmetadataChapters(unittest.TestCase):
+    """v5.2: m4b 章节元数据"""
+
+    def test_basic_chapters(self):
+        from tts_engine import build_ffmetadata_chapters
+        meta = build_ffmetadata_chapters(["第一章", "第二章"], [10.0, 20.0], album="测试书")
+        self.assertTrue(meta.startswith(";FFMETADATA1"))
+        self.assertEqual(meta.count("[CHAPTER]"), 2)
+        self.assertIn("START=0", meta)
+        self.assertIn("END=10000", meta)
+        self.assertIn("START=10000", meta)
+        self.assertIn("END=30000", meta)
+        self.assertIn("album=测试书", meta)
+
+    def test_escaping(self):
+        from tts_engine import _ffmeta_escape
+        self.assertEqual(_ffmeta_escape("a=b;c#d"), "a\\=b\;c\\#d")
+
+
+class TestPiperCatalog(unittest.TestCase):
+    """v5.2: Piper 语音目录解析"""
+
+    _CATALOG = {
+        "zh_CN-huayan-medium": {
+            "language": {"code": "zh_CN", "name_native": "简体中文"},
+            "quality": "medium", "num_speakers": 1,
+            "files": {
+                "zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx": {"size_bytes": 60000000},
+                "zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json": {"size_bytes": 5000},
+                "zh/zh_CN/huayan/medium/MODEL_CARD": {"size_bytes": 300},
+            },
+        },
+        "en_US-amy-low": {
+            "language": {"code": "en_US", "name_english": "English"},
+            "quality": "low", "num_speakers": 1,
+            "files": {"en/en_US/amy/low/en_US-amy-low.onnx": {"size_bytes": 20000000}},
+        },
+    }
+
+    def test_language_filter(self):
+        from tts_engine import list_piper_catalog_voices
+        zh = list_piper_catalog_voices(self._CATALOG, "zh")
+        self.assertEqual(len(zh), 1)
+        self.assertEqual(zh[0]["key"], "zh_CN-huayan-medium")
+        self.assertEqual(zh[0]["language_name"], "简体中文")
+
+    def test_no_filter_returns_all(self):
+        from tts_engine import list_piper_catalog_voices
+        self.assertEqual(len(list_piper_catalog_voices(self._CATALOG)), 2)
+
+    def test_size_sum(self):
+        from tts_engine import list_piper_catalog_voices
+        zh = list_piper_catalog_voices(self._CATALOG, "zh")
+        self.assertEqual(zh[0]["size_bytes"], 60000000 + 5000 + 300)

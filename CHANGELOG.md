@@ -1,6 +1,50 @@
 # 项目情况日志 — 文字转有声读物 (Audiobook Converter)
 
-## 当前版本：v5.1.0 (2026-07-11)
+## 当前版本：v5.2.0 (2026-07-11)
+
+## v5.2.0 本次升级内容（P2 功能扩展 + macOS 包瘦身，按 ROADMAP.md 实施）
+
+### F0：macOS 包体积瘦身（v5.1.0 实测 1.4GB → 预期 ~200MB）
+- mac spec 移除 `collect_data_files/collect_submodules/collect_dynamic_libs('PySide6')` 全量收集
+  （曾把 QtWebEngine 内嵌 Chromium、QtQuick、Qt3D 等全部打进包）
+- 改为 hiddenimports 按需声明（与 Windows spec 一致），excludes 显式排除全部重型 Qt 模块
+- 清理指向本地 Homebrew 的 PyQt6 插件收集死代码；info_plist 版本号同步
+
+### F1：Piper 语音包在线目录
+- `fetch_piper_voice_catalog()`：下载官方 voices.json（数百个多语言语音），本地缓存 + 镜像回退
+- `download_piper_voice_from_catalog()`：按目录下载 .onnx + .onnx.json
+- `refresh_piper_voices()`：懒扫描 piper-models/ 与额外搜索路径，已下载模型自动并入语音列表
+  （`PIPER_MODEL_PATHS` 支持任意位置的模型文件）
+- GUI「🌐 更多语音包…」对话框：语言筛选、大小显示、后台下载（进度经全局监听器）
+
+### F2：角色→音色多对多映射
+- `extract_speakers()` 从文本提取说话人名单（按出现频次排序）
+- `_resolve_segment_voice()` 统一语音解析：speakers 映射 > 旧格式顶层键 > 类型默认
+- GUI 对话面板新增「从文本检测角色」+ 角色/语音映射表
+- 修复说话人归属缺陷：连续多角色对话时归属取窗口内最后一个紧邻的「X说：」
+  （此前取第一个，会归给上一个说话人）；SPEAKER_PATTERN 排除 ASCII 引号
+
+### F3：Edge 引擎对话检测
+- `_edge_generate_dialogue()`：Edge 异步批量路径支持 segments+voice_map 按段切换语音
+
+### F4：ASR 批量转录
+- AsrWorker 支持多文件队列（内置 + 外挂引擎），批量结果自动保存到各音频文件旁
+- 文件选择改多选，逐文件进度显示
+
+### F5：m4b 有声书 + ID3 元数据
+- `export_m4b()`：ffmpeg concat + FFMETADATA 章节标记，输出 .m4b（AAC 64k）
+- `write_id3_tags()`：ffmpeg 流复制写入标题/专辑/音轨/封面（无损快速）
+- `get_audio_duration()`：ffprobe → pydub → 码率估算三级回退
+- convert_batch 新增 `write_metadata` 选项（专辑=书名，标题=章节名，音轨=顺序）
+- GUI：「📚 导出 m4b」按钮 + 「写入 ID3 元数据」复选框
+
+### F6：srt 字幕同步生成
+- `generate_srt_from_text()`：按句切分 + 字数比例分配时间轴（离线估算，引擎通用）
+- convert_batch 新增 `generate_subtitles` 选项，字幕存到 MP3 同名 .srt
+- GUI：「同时生成 srt 字幕」复选框
+
+### 测试
+- 新增 15 项测试（角色提取、语音解析、字幕、FFMETADATA、语音目录解析），共 98 项
 
 ## v5.1.0 本次升级内容（P0 稳定性 + P1 性能，按 ROADMAP.md 实施）
 
@@ -51,7 +95,7 @@
 
 - **仓库**: https://github.com/yan43050030/audiobook-converter
 - **Python**: 3.12+（打包用 3.12，开发使用 3.14）
-- **测试**: 83 项 unittest（`python3 -m unittest discover -s tests -v`）
+- **测试**: 98 项 unittest（`python3 -m unittest discover -s tests -v`）
 - **CI**: GitHub Actions，push/PR 到 main 跑测试（minimal/full 双矩阵）；推送 `v*` tag 触发 macOS + Windows 双平台 PyInstaller 打包（打包前先跑测试）
 
 ## 文件架构

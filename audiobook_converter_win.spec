@@ -112,7 +112,15 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['PyQt6', 'PyQt6.QtWidgets', 'PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.sip'],
+    excludes=[
+        'PyQt6', 'PyQt6.QtWidgets', 'PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.sip',
+        # 与 mac spec 一致：排除未用到的重型 Qt 模块
+        'PySide6.QtWebEngineWidgets', 'PySide6.QtWebEngineCore', 'PySide6.QtWebEngineQuick',
+        'PySide6.QtQml', 'PySide6.QtQuick', 'PySide6.QtQuick3D',
+        'PySide6.QtCharts', 'PySide6.QtDataVisualization',
+        'PySide6.QtMultimedia', 'PySide6.QtMultimediaWidgets',
+        'PySide6.QtPdf', 'PySide6.QtPdfWidgets',
+    ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

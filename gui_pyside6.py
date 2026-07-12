@@ -1,4 +1,4 @@
-"""Qt6 GUI — 文字转有声读物 v5.0.3（兼容 PySide6 / PyQt6）"""
+"""Qt6 GUI — 文字转有声读物 v5.2.0（兼容 PySide6 / PyQt6）"""
 
 import os, sys, threading, subprocess, platform, logging, json, tempfile, shutil, time
 from typing import Optional
@@ -12,6 +12,7 @@ try:
         QSpinBox, QProgressBar, QPlainTextEdit, QTreeWidget, QTreeWidgetItem,
         QLineEdit, QFileDialog, QMessageBox, QFrame, QSizePolicy,
         QHeaderView, QAbstractItemView, QApplication, QScrollArea, QLayout,
+        QTableWidget, QTableWidgetItem, QDialog, QListWidget, QListWidgetItem,
     )
     from PySide6.QtCore import (
         Qt, Signal, Slot, QThread, QTimer, QSize, QRect,
@@ -28,6 +29,7 @@ except ImportError:
         QSpinBox, QProgressBar, QPlainTextEdit, QTreeWidget, QTreeWidgetItem,
         QLineEdit, QFileDialog, QMessageBox, QFrame, QSizePolicy,
         QHeaderView, QAbstractItemView, QApplication, QScrollArea, QLayout,
+        QTableWidget, QTableWidgetItem, QDialog, QListWidget, QListWidgetItem,
     )
     from PyQt6.QtCore import (
         Qt, QThread, QTimer, QSize, QRect, pyqtSignal as Signal, pyqtSlot as Slot,
@@ -47,6 +49,9 @@ from tts_engine import (
     PIPER_VOICES, _ensure_piper_model,
     COSYVOICE_MODEL_URLS, _ensure_cosyvoice_model,
     split_text, _generate_one_safe, split_by_duration,
+    extract_speakers, export_m4b, refresh_piper_voices,
+    fetch_piper_voice_catalog, list_piper_catalog_voices,
+    download_piper_voice_from_catalog,
 )
 from asr_engine import (transcribe, check_asr_ready, WHISPER_MODELS, WHISPER_COMPUTE_TYPES,
                         unload_whisper_model,
@@ -76,16 +81,19 @@ class ConvertWorker(_BaseWorker):
 
     def setup(self, text, voice, rate, output_dir, split_mode, time_minutes,
               file_prefix, selected_indices, engine, normalize_audio,
-              dialogue_detection, voice_map, resume):
+              dialogue_detection, voice_map, resume,
+              generate_subtitles=False, write_metadata=False):
         self._params = (text, voice, rate, output_dir, split_mode, time_minutes,
                         file_prefix, selected_indices, engine, normalize_audio,
-                        dialogue_detection, voice_map, resume)
+                        dialogue_detection, voice_map, resume,
+                        generate_subtitles, write_metadata)
 
     def run(self):
         try:
             (text, voice, rate, output_dir, split_mode, time_minutes,
              file_prefix, selected_indices, engine, normalize_audio,
-             dialogue_detection, voice_map, resume) = self._params
+             dialogue_detection, voice_map, resume,
+             generate_subtitles, write_metadata) = self._params
 
             def progress_cb(current, total, **kw):
                 self.progress_update.emit(current, total)
@@ -101,6 +109,7 @@ class ConvertWorker(_BaseWorker):
                 should_stop=stop_cb, resume=resume,
                 normalize_audio=normalize_audio,
                 dialogue_detection=dialogue_detection, voice_map=voice_map,
+                generate_subtitles=generate_subtitles, write_metadata=write_metadata,
             )
             self.finished_ok.emit(files)
         except Exception as e:
@@ -156,30 +165,54 @@ class StreamPreviewWorker(_BaseWorker):
 
 
 class AsrWorker(_BaseWorker):
-    """ASR 语音识别工作线程"""
+    """ASR 语音识别工作线程（支持多文件队列）"""
     progress_update = Signal(int, int)
+    file_progress = Signal(int, int, str)  # file_idx, total_files, filename
 
-    def setup(self, input_path, storage_dir, model_size, language, output_format,
+    _FORMAT_EXT = {"txt": ".txt", "srt": ".srt", "json": ".json"}
+
+    def setup(self, input_paths, storage_dir, model_size, language, output_format,
               compute_type="default"):
-        self._params = (input_path, storage_dir, model_size, language, output_format,
-                        compute_type)
+        if isinstance(input_paths, str):
+            input_paths = [input_paths]
+        self._params = (list(input_paths), storage_dir, model_size, language,
+                        output_format, compute_type)
 
     def run(self):
         try:
-            (input_path, storage_dir, model_size, language, output_format,
+            (input_paths, storage_dir, model_size, language, output_format,
              compute_type) = self._params
             def progress_cb(cur, tot):
                 self.progress_update.emit(cur, tot)
             def stop_cb():
                 return self._should_stop
-            result = transcribe(
-                input_path=input_path, storage_dir=storage_dir,
-                model_size=model_size, language=language,
-                output_format=output_format,
-                progress_callback=progress_cb, should_stop=stop_cb,
-                compute_type=compute_type,
-            )
-            self.finished_ok.emit(result)
+
+            batch = len(input_paths) > 1
+            ext = self._FORMAT_EXT.get(output_format, ".txt")
+            done = []
+            for idx, input_path in enumerate(input_paths, 1):
+                if self._should_stop:
+                    break
+                self.file_progress.emit(idx, len(input_paths), os.path.basename(input_path))
+                # 批量模式：结果自动存到源文件旁
+                out_path = os.path.splitext(input_path)[0] + ext if batch else None
+                result = transcribe(
+                    input_path=input_path, storage_dir=storage_dir,
+                    model_size=model_size, language=language,
+                    output_format=output_format, output_path=out_path,
+                    progress_callback=progress_cb, should_stop=stop_cb,
+                    compute_type=compute_type,
+                )
+                done.append((input_path, out_path, result))
+
+            if batch:
+                lines = [f"✅ {os.path.basename(p)} → {os.path.basename(o)}"
+                         for p, o, _r in done]
+                if len(done) < len(input_paths):
+                    lines.append(f"（已停止，完成 {len(done)}/{len(input_paths)}）")
+                self.finished_ok.emit("批量转录完成:\n" + "\n".join(lines))
+            else:
+                self.finished_ok.emit(done[0][2] if done else "")
         except Exception as e:
             logger.error(f"ASR 失败: {e}", exc_info=True)
             self.error_occurred.emit(str(e))
@@ -196,7 +229,9 @@ class DownloadWorker(_BaseWorker):
         try:
             dtype, model_key = self._params
             if dtype == "piper":
-                for v in list(PIPER_VOICES.values()):
+                # 只下载内置默认语音；目录中的其他语音走「更多语音包」对话框
+                from tts_engine import PIPER_BUILTIN_VOICES
+                for v in list(PIPER_BUILTIN_VOICES.values()):
                     _ensure_piper_model(v, should_stop=self._check_stop)
                 self.finished_ok.emit("piper")
             elif dtype == "cosyvoice":
@@ -206,6 +241,38 @@ class DownloadWorker(_BaseWorker):
                 self.finished_ok.emit("cosyvoice")
         except Exception as e:
             logger.error(f"下载失败: {e}")
+            self.error_occurred.emit(str(e))
+
+
+class _CatalogWorker(_BaseWorker):
+    """Piper 语音目录获取线程"""
+
+    def setup(self, force=False):
+        self._force = force
+
+    def run(self):
+        try:
+            catalog = fetch_piper_voice_catalog(force_refresh=self._force,
+                                                should_stop=self._check_stop)
+            self.finished_ok.emit(catalog)
+        except Exception as e:
+            logger.error(f"语音目录获取失败: {e}")
+            self.error_occurred.emit(str(e))
+
+
+class _VoiceDownloadWorker(_BaseWorker):
+    """Piper 语音包下载线程（进度经全局下载监听器推送）"""
+
+    def setup(self, voice_key):
+        self._voice_key = voice_key
+
+    def run(self):
+        try:
+            path = download_piper_voice_from_catalog(self._voice_key,
+                                                     should_stop=self._check_stop)
+            self.finished_ok.emit(path)
+        except Exception as e:
+            logger.error(f"语音包下载失败: {e}")
             self.error_occurred.emit(str(e))
 
 
@@ -749,6 +816,10 @@ class AudiobookConverterMain(QMainWindow):
 
         self._normalize_cb = QCheckBox("响度归一化（统一各文件音量，需 ffmpeg）")
         oc_layout.addWidget(self._normalize_cb)
+        self._subtitle_cb = QCheckBox("同时生成 srt 字幕（按句估算时间轴）")
+        oc_layout.addWidget(self._subtitle_cb)
+        self._metadata_cb = QCheckBox("写入 ID3 元数据（专辑/章节标题/音轨号，需 ffmpeg）")
+        oc_layout.addWidget(self._metadata_cb)
         layout.addWidget(out_card)
 
         # 快捷操作（仅保留试听/合并/日志）
@@ -759,6 +830,7 @@ class AudiobookConverterMain(QMainWindow):
         ops_layout.addWidget(self._btn_preview_full)
         tool_row = QHBoxLayout()
         tool_row.addWidget(QPushButton("🔀 合并MP3", clicked=self._merge_mp3))
+        tool_row.addWidget(QPushButton("📚 导出 m4b", clicked=self._export_m4b))
         tool_row.addWidget(QPushButton("📋 日志", clicked=self._show_log))
         ops_layout.addLayout(tool_row)
         layout.addWidget(ops_card)
@@ -784,8 +856,65 @@ class AudiobookConverterMain(QMainWindow):
         dr.addWidget(self._dialogue_voice_combo, 1)
         cl.addLayout(dr)
         layout.addWidget(card)
+
+        # 角色→音色映射（可选，覆盖统一的"对话语音"）
+        spk_card = QGroupBox("角色音色映射（可选）")
+        sl = QVBoxLayout(spk_card)
+        self._btn_detect_speakers = QPushButton("🔍 从文本检测角色")
+        self._btn_detect_speakers.clicked.connect(self._detect_speakers)
+        sl.addWidget(self._btn_detect_speakers)
+        self._speaker_table = QTableWidget(0, 2)
+        self._speaker_table.setHorizontalHeaderLabels(["角色", "语音"])
+        self._speaker_table.horizontalHeader().setStretchLastSection(True)
+        self._speaker_table.verticalHeader().setVisible(False)
+        self._speaker_table.setMaximumHeight(180)
+        sl.addWidget(self._speaker_table)
+        self._speaker_hint = QLabel("未映射的角色使用统一的对话语音")
+        self._speaker_hint.setStyleSheet("color:gray;font-size:11px")
+        sl.addWidget(self._speaker_hint)
+        layout.addWidget(spk_card)
+        self._speaker_panel = spk_card
+
         self._on_dialogue_toggle(False)
         return w
+
+    def _detect_speakers(self):
+        text = self._text_area.toPlainText().strip()
+        if not text:
+            QMessageBox.information(self, "提示", "请先导入或输入文本")
+            return
+        speakers = extract_speakers(text)
+        self._speaker_table.setRowCount(0)
+        if not speakers:
+            self._speaker_hint.setText("未检测到带名字的对话（形如「XX说：“…”」）")
+            return
+        engine = self._get_current_engine()
+        voices = get_voice_list(engine)
+        for name in speakers:
+            row = self._speaker_table.rowCount()
+            self._speaker_table.insertRow(row)
+            item = QTableWidgetItem(name)
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self._speaker_table.setItem(row, 0, item)
+            combo = QComboBox()
+            combo.addItem("（使用对话语音）", "")
+            for v in voices:
+                combo.addItem(v, v)
+            self._speaker_table.setCellWidget(row, 1, combo)
+        self._speaker_hint.setText(f"检测到 {len(speakers)} 个角色；未映射的角色使用统一的对话语音")
+
+    def _collect_speaker_map(self, engine) -> dict:
+        """从角色映射表收集 {角色名: voice_id}，未选择的跳过"""
+        result = {}
+        for row in range(self._speaker_table.rowCount()):
+            name_item = self._speaker_table.item(row, 0)
+            combo = self._speaker_table.cellWidget(row, 1)
+            if not name_item or combo is None:
+                continue
+            display = combo.currentData()
+            if display:
+                result[name_item.text()] = get_voice_id(display, engine)
+        return result
 
     def _build_panel_storage(self):
         w = QWidget()
@@ -822,6 +951,7 @@ class AudiobookConverterMain(QMainWindow):
         br1 = QHBoxLayout()
         br1.addWidget(QPushButton("⚙ 重新扫描", clicked=self._refresh_deps))
         br1.addWidget(QPushButton("⬇ 下载 Piper 模型", clicked=self._download_piper_models))
+        br1.addWidget(QPushButton("🌐 更多语音包…", clicked=self._open_voice_catalog))
         dps.addLayout(br1)
         dps.addWidget(QPushButton("⬇ 下载 CosyVoice 模型", clicked=self._download_cosyvoice_models))
         br3 = QHBoxLayout()
@@ -1418,6 +1548,96 @@ class AudiobookConverterMain(QMainWindow):
         self._download_worker.error_occurred.connect(lambda e: QMessageBox.critical(self, "下载失败", e))
         self._download_worker.start()
 
+    def _open_voice_catalog(self):
+        """打开 Piper 语音包目录对话框：拉取官方 voices.json，按语言筛选下载"""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Piper 语音包下载")
+        dlg.resize(560, 480)
+        v = QVBoxLayout(dlg)
+
+        top = QHBoxLayout()
+        top.addWidget(QLabel("语言:"))
+        lang_combo = QComboBox()
+        for label, code in [("中文 (zh)", "zh"), ("英文 (en)", "en"), ("日文 (ja)", "ja"),
+                            ("韩文 (ko)", "ko"), ("法文 (fr)", "fr"), ("德文 (de)", "de"),
+                            ("西班牙文 (es)", "es"), ("俄文 (ru)", "ru"), ("全部语言", "")]:
+            lang_combo.addItem(label, code)
+        top.addWidget(lang_combo, 1)
+        btn_refresh = QPushButton("🔄 刷新目录")
+        top.addWidget(btn_refresh)
+        v.addLayout(top)
+
+        lst = QListWidget()
+        v.addWidget(lst, 1)
+        status = QLabel("正在获取语音目录…")
+        status.setStyleSheet("color:gray")
+        v.addWidget(status)
+        btn_row = QHBoxLayout()
+        btn_download = QPushButton("⬇ 下载选中语音")
+        btn_download.setEnabled(False)
+        btn_row.addWidget(btn_download)
+        btn_close = QPushButton("关闭")
+        btn_close.clicked.connect(dlg.close)
+        btn_row.addWidget(btn_close)
+        v.addLayout(btn_row)
+
+        catalog_holder = {"catalog": None}
+
+        def _populate():
+            lst.clear()
+            catalog = catalog_holder["catalog"]
+            if not catalog:
+                return
+            entries = list_piper_catalog_voices(catalog, lang_combo.currentData() or "")
+            for e in entries:
+                size_mb = e["size_bytes"] / 1024 / 1024
+                spk = f", {e['num_speakers']} 说话人" if e.get("num_speakers", 1) > 1 else ""
+                item = QListWidgetItem(
+                    f"{e['key']}  [{e['language_name']} · {e['quality']}{spk} · {size_mb:.0f}MB]")
+                item.setData(Qt.ItemDataRole.UserRole, e["key"])
+                lst.addItem(item)
+            status.setText(f"共 {lst.count()} 个语音；下载后自动加入语音列表")
+            btn_download.setEnabled(lst.count() > 0)
+
+        def _fetch(force=False):
+            status.setText("正在获取语音目录…")
+            btn_download.setEnabled(False)
+            self._catalog_worker = _CatalogWorker()
+            self._catalog_worker.setup(force)
+            self._catalog_worker.finished_ok.connect(
+                lambda cat: (catalog_holder.__setitem__("catalog", cat), _populate()))
+            self._catalog_worker.error_occurred.connect(
+                lambda e: status.setText(f"目录获取失败: {e}"))
+            self._catalog_worker.start()
+
+        def _download():
+            item = lst.currentItem()
+            if item is None:
+                status.setText("请先选中一个语音")
+                return
+            key = item.data(Qt.ItemDataRole.UserRole)
+            status.setText(f"正在下载 {key}…（进度见主窗口底部）")
+            btn_download.setEnabled(False)
+            self._voice_dl_worker = _VoiceDownloadWorker()
+            self._voice_dl_worker.setup(key)
+
+            def _done(_r):
+                status.setText(f"{key} 下载完成，已加入语音列表")
+                btn_download.setEnabled(True)
+                self._refresh_deps()
+                self._on_engine_change()
+
+            self._voice_dl_worker.finished_ok.connect(_done)
+            self._voice_dl_worker.error_occurred.connect(
+                lambda e: (status.setText(f"下载失败: {e}"), btn_download.setEnabled(True)))
+            self._voice_dl_worker.start()
+
+        lang_combo.currentIndexChanged.connect(lambda _i: _populate())
+        btn_refresh.clicked.connect(lambda: _fetch(force=True))
+        btn_download.clicked.connect(_download)
+        _fetch()
+        dlg.exec()
+
     def _add_model_folder(self):
         path = QFileDialog.getExistingDirectory(self, "选择包含语音模型的文件夹")
         if not path:
@@ -1610,6 +1830,9 @@ class AudiobookConverterMain(QMainWindow):
             dv = get_voice_id(self._dialogue_voice_combo.currentText(), engine)
             if nv and dv:
                 voice_map = {"narration": nv, "dialogue": dv}
+                speakers = self._collect_speaker_map(engine)
+                if speakers:
+                    voice_map["speakers"] = speakers
 
         self._convert_worker = ConvertWorker()
         self._convert_worker.setup(
@@ -1618,6 +1841,8 @@ class AudiobookConverterMain(QMainWindow):
             file_prefix=file_prefix, selected_indices=selected_indices,
             engine=engine, normalize_audio=self._normalize_cb.isChecked(),
             dialogue_detection=dia_enabled, voice_map=voice_map, resume=resume,
+            generate_subtitles=self._subtitle_cb.isChecked(),
+            write_metadata=self._metadata_cb.isChecked(),
         )
         self._convert_worker.progress_update.connect(self._on_convert_progress)
         self._convert_worker.finished_ok.connect(lambda files: self._on_convert_done(output_dir, files))
@@ -1729,6 +1954,8 @@ class AudiobookConverterMain(QMainWindow):
         enabled = checked if isinstance(checked, bool) else self._dialogue_enabled_cb.isChecked()
         self._dialogue_narration_combo.setEnabled(enabled)
         self._dialogue_voice_combo.setEnabled(enabled)
+        if hasattr(self, '_speaker_panel'):
+            self._speaker_panel.setEnabled(enabled)
         if enabled:
             engine = self._get_current_engine()
             voices = get_voice_list(engine)
@@ -1759,15 +1986,24 @@ class AudiobookConverterMain(QMainWindow):
         self._asr_engine_combo.blockSignals(False)
 
     def _select_audio_file(self):
-        path, _ = QFileDialog.getOpenFileName(self, "选择音频文件", "",
-                                               "音频文件 (*.mp3 *.wav *.m4a *.flac *.ogg *.aac *.wma);;所有文件 (*.*)")
-        if not path:
+        paths, _ = QFileDialog.getOpenFileNames(self, "选择音频文件（可多选，批量转录）", "",
+                                                 "音频文件 (*.mp3 *.wav *.m4a *.flac *.ogg *.aac *.wma);;所有文件 (*.*)")
+        if not paths:
             return
-        self._audio_file_path = path
-        self._audio_file_label.setText(f"{os.path.basename(path)} ({os.path.getsize(path)/1024:.0f} KB)")
+        self._audio_file_paths = paths
+        self._audio_file_path = paths[0]  # 兼容旧引用
+        if len(paths) == 1:
+            self._audio_file_label.setText(
+                f"{os.path.basename(paths[0])} ({os.path.getsize(paths[0])/1024:.0f} KB)")
+        else:
+            total_mb = sum(os.path.getsize(p) for p in paths) / 1024 / 1024
+            self._audio_file_label.setText(
+                f"已选 {len(paths)} 个文件（共 {total_mb:.1f} MB，批量转录结果自动存到各文件旁）")
 
     def _start_asr(self):
-        if not hasattr(self, '_audio_file_path') or not self._audio_file_path:
+        audio_paths = getattr(self, '_audio_file_paths', None) or (
+            [self._audio_file_path] if getattr(self, '_audio_file_path', None) else [])
+        if not audio_paths:
             QMessageBox.warning(self, "提示", "请先选择音频文件")
             return
         if self.is_converting:
@@ -1794,16 +2030,28 @@ class AudiobookConverterMain(QMainWindow):
         # 检查是否选择了外挂引擎
         engine_id = self._asr_engine_combo.currentData()
         if engine_id and engine_id != "builtin":
-            # 外挂引擎：直接用线程调用
+            # 外挂引擎：直接用线程调用（多文件时逐个转录并存到源文件旁）
             self._status_label.setText("外挂 ASR 引擎识别中...")
+            batch = len(audio_paths) > 1
+            ext_map = {"txt": ".txt", "srt": ".srt", "json": ".json"}
             def _ext_run():
                 try:
-                    result = external_asr_transcribe(
-                        engine_id, self._audio_file_path, output_format,
-                        model="", language=language)
-                    self._asr_result.setPlainText(result)
+                    results = []
+                    for p in audio_paths:
+                        result = external_asr_transcribe(
+                            engine_id, p, output_format,
+                            model="", language=language)
+                        if batch:
+                            out_p = os.path.splitext(p)[0] + ext_map.get(output_format, ".txt")
+                            with open(out_p, "w", encoding="utf-8") as f:
+                                f.write(result)
+                            results.append(f"✅ {os.path.basename(p)} → {os.path.basename(out_p)}")
+                        else:
+                            results.append(result)
+                    text = "批量转录完成:\n" + "\n".join(results) if batch else results[0]
+                    self._asr_result.setPlainText(text)
                     self._asr_status.setText("识别完成")
-                    self._asr_last_result = result
+                    self._asr_last_result = text
                 except Exception as e:
                     QMessageBox.critical(self, "错误", f"外挂 ASR 识别失败: {e}")
                 finally:
@@ -1821,9 +2069,11 @@ class AudiobookConverterMain(QMainWindow):
 
         compute_type = self._asr_compute_combo.currentData() or "default"
         self._asr_worker = AsrWorker()
-        self._asr_worker.setup(self._audio_file_path, get_storage_dir(), model_size, language,
+        self._asr_worker.setup(audio_paths, get_storage_dir(), model_size, language,
                                output_format, compute_type=compute_type)
-        self._asr_worker.progress_update.connect(lambda c, t: self._asr_status.setText(f"识别进度: {c}/{t}"))
+        self._asr_worker.progress_update.connect(lambda c, t: self._asr_status.setText(
+            f"{getattr(self, '_asr_current_file', '')}识别进度: {c}/{t}"))
+        self._asr_worker.file_progress.connect(self._on_asr_file_progress)
         self._asr_worker.finished_ok.connect(self._on_asr_done)
         self._asr_worker.error_occurred.connect(lambda e: (
             QMessageBox.critical(self, "错误", f"ASR 识别失败: {e}"),
@@ -1832,10 +2082,16 @@ class AudiobookConverterMain(QMainWindow):
         self._asr_worker.finished.connect(self._on_asr_finished)
         self._asr_worker.start()
 
+    def _on_asr_file_progress(self, idx, total, filename):
+        self._asr_current_file = f"[{idx}/{total}] {filename} " if total > 1 else ""
+        if total > 1:
+            self._asr_status.setText(f"正在转录 [{idx}/{total}]: {filename}")
+
     def _on_asr_done(self, result):
         self._asr_result.setPlainText(result)
         self._asr_status.setText("识别完成")
         self._asr_last_result = result
+        self._asr_current_file = ""
 
     def _on_asr_finished(self):
         self._btn_asr_start.setEnabled(True)
@@ -1875,6 +2131,32 @@ class AudiobookConverterMain(QMainWindow):
             QMessageBox.information(self, "完成", f"已合并 {len(files)} 个文件:\n{os.path.basename(out)}\n大小: {size_mb:.1f}MB")
         except Exception as e:
             QMessageBox.critical(self, "错误", f"合并失败: {e}")
+
+    def _export_m4b(self):
+        files, _ = QFileDialog.getOpenFileNames(self, "选择要合并为 m4b 的 MP3 文件（按文件名排序为章节顺序）", "",
+                                                 "MP3文件 (*.mp3);;所有文件 (*.*)")
+        if not files:
+            return
+        # 用文件夹名作为默认书名
+        default_album = os.path.basename(os.path.dirname(files[0])) or "有声读物"
+        out, _ = QFileDialog.getSaveFileName(self, "保存 m4b 有声书",
+                                              f"{default_album}.m4b", "M4B 有声书 (*.m4b)")
+        if not out:
+            return
+        sorted_files = sorted(files)
+        self._status_label.setText("正在导出 m4b（重新编码为 AAC，可能需要几分钟）...")
+
+        def _run():
+            try:
+                export_m4b(sorted_files, out, album=default_album)
+                size_mb = os.path.getsize(out) / (1024 * 1024)
+                self._status_label.setText(
+                    f"m4b 导出完成: {os.path.basename(out)}（{len(sorted_files)} 章, {size_mb:.1f}MB）")
+            except Exception as e:
+                logger.error(f"m4b 导出失败: {e}", exc_info=True)
+                self._status_label.setText(f"m4b 导出失败: {e}")
+
+        threading.Thread(target=_run, daemon=True).start()
 
     # ================ Log ================
 

@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# macOS .app bundle spec - v5.0.2: 体检稳定版（ID3 修正 + 子进程隐藏 + ASR atexit + 友好错误）
+# macOS .app bundle spec - v5.2.0: 包体积瘦身（PySide6 按需打包，不再全量收集）
 
 import os
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_dynamic_libs
@@ -64,27 +64,17 @@ try:
 except ImportError:
     pass
 
-# --- Collect PySide6 data ---
-pyside6_datas = collect_data_files('PySide6')
-pyside6_hidden = collect_submodules('PySide6')
-pyside6_bins = collect_dynamic_libs('PySide6')
-
-# --- Qt6 平台插件（PySide6/PyQt6 共享，从 PyQt6 安装路径收集）---
-_qt6_plugins_src = '/opt/homebrew/lib/python3.14/site-packages/PyQt6/Qt6/plugins'
-_qt_plugin_datas = []
-if os.path.isdir(_qt6_plugins_src):
-    for _root, _dirs, _files in os.walk(_qt6_plugins_src):
-        for _fn in _files:
-            _src = os.path.join(_root, _fn)
-            _dst = os.path.join('PySide6', 'Qt', 'plugins',
-                                os.path.relpath(_root, _qt6_plugins_src))
-            _qt_plugin_datas.append((_src, _dst))
+# --- PySide6：只打包实际用到的 QtWidgets/QtCore/QtGui（经 hiddenimports 声明，
+# 由 PyInstaller 的 PySide6 钩子自动收集对应框架和平台插件）。
+# 切勿使用 collect_data_files/collect_submodules('PySide6') 全量收集：
+# 那会把 QtWebEngine（内嵌完整 Chromium）、QtQuick/QML、Qt3D、QtCharts、
+# QtMultimedia 等全部打进 .app，包体积会膨胀到 1.4GB+（v5.1.0 实测）。
 
 # --- Combine all resources ---
 base_datas = [('icon.png', '.'), ('icon.ico', '.'), ('icon.icns', '.')]
-all_datas = base_datas + piper_datas + onnx_datas + pygame_datas + _doc_datas + pyside6_datas + _qt_plugin_datas
+all_datas = base_datas + piper_datas + onnx_datas + pygame_datas + _doc_datas
 
-all_bins = manual_bins + onnx_bins + pygame_bins + pyside6_bins
+all_bins = manual_bins + onnx_bins + pygame_bins
 
 base_hidden = [
     # 在线引擎
@@ -99,7 +89,7 @@ base_hidden = [
     # 内置播放器
     'pygame',
 ]
-all_hidden = base_hidden + piper_hidden + onnx_hidden + pygame_hidden + _doc_hidden + pyside6_hidden + [
+all_hidden = base_hidden + piper_hidden + onnx_hidden + pygame_hidden + _doc_hidden + [
     # ASR 语音转文字
     'faster_whisper', 'ctranslate2',
     # Qt6 GUI（PySide6 推荐 / PyQt6 回退）
@@ -125,7 +115,24 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[os.path.join(SPECPATH, 'runtime_hook.py')],
-    excludes=['PyQt6', 'PyQt6.QtWidgets', 'PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.sip'],
+    excludes=[
+        'PyQt6', 'PyQt6.QtWidgets', 'PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.sip',
+        # 排除未用到的重型 Qt 模块（防止依赖分析间接引入）
+        'PySide6.QtWebEngineWidgets', 'PySide6.QtWebEngineCore', 'PySide6.QtWebEngineQuick',
+        'PySide6.QtWebChannel', 'PySide6.QtWebSockets',
+        'PySide6.QtQml', 'PySide6.QtQuick', 'PySide6.QtQuick3D', 'PySide6.QtQuickWidgets',
+        'PySide6.Qt3DCore', 'PySide6.Qt3DRender', 'PySide6.Qt3DAnimation',
+        'PySide6.Qt3DExtras', 'PySide6.Qt3DInput', 'PySide6.Qt3DLogic',
+        'PySide6.QtCharts', 'PySide6.QtDataVisualization', 'PySide6.QtGraphs',
+        'PySide6.QtMultimedia', 'PySide6.QtMultimediaWidgets',
+        'PySide6.QtPdf', 'PySide6.QtPdfWidgets',
+        'PySide6.QtLocation', 'PySide6.QtPositioning', 'PySide6.QtSensors',
+        'PySide6.QtBluetooth', 'PySide6.QtNfc', 'PySide6.QtSerialPort', 'PySide6.QtSerialBus',
+        'PySide6.QtRemoteObjects', 'PySide6.QtScxml', 'PySide6.QtStateMachine',
+        'PySide6.QtTextToSpeech', 'PySide6.QtDesigner', 'PySide6.QtUiTools',
+        'PySide6.QtHelp', 'PySide6.QtSql', 'PySide6.QtTest',
+        'PySide6.QtNetworkAuth', 'PySide6.QtHttpServer',
+    ],
     noarchive=False,
 )
 
@@ -161,8 +168,8 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'AudiobookConverter',
         'CFBundleDisplayName': '文字转有声读物',
-        'CFBundleVersion': '5.0.2',
-        'CFBundleShortVersionString': '5.0.2',
+        'CFBundleVersion': '5.2.0',
+        'CFBundleShortVersionString': '5.2.0',
         'NSHumanReadableCopyright': 'AudiobookConverter',
         'NSHighResolutionCapable': True,
     },

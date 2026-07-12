@@ -1,4 +1,4 @@
-"""TTS引擎封装 - 支持 edge-tts（联网）、系统语音（跨平台离线）、Piper（离线高质量）、CosyVoice（离线神经） v5.1.0"""
+"""TTS引擎封装 - 支持 edge-tts（联网）、系统语音（跨平台离线）、Piper（离线高质量）、CosyVoice（离线神经） v5.2.0"""
 
 import asyncio
 import json
@@ -47,7 +47,7 @@ except ImportError:
     PYDUB_AVAILABLE = False
     AudioSegment = None
 
-VERSION = "5.1.0"
+VERSION = "5.2.0"
 
 # 当前平台
 _PLATFORM = platform.system()  # "Darwin" / "Windows" / "Linux"
@@ -175,9 +175,12 @@ _scan_cache: dict = {"storage_dir": None, "found": {}, "models": None}
 
 
 def _invalidate_scan_cache() -> None:
+    global _piper_voices_scanned
     _scan_cache["storage_dir"] = None
     _scan_cache["found"] = {}
     _scan_cache["models"] = None
+    # Piper 语音列表随目录变更失效，下次访问时重新扫描
+    _piper_voices_scanned = False
 
 
 def _search_in_tree(root_dir: str, target_names: List[str], max_depth: int = 4) -> Optional[str]:
@@ -681,11 +684,15 @@ def _ensure_local_voices() -> None:
 LOCAL_VOICES: dict = {}
 LOCAL_DEFAULT_VOICE = ""
 
-PIPER_VOICES = {
+PIPER_BUILTIN_VOICES = {
     "Piper中文女声（中等质量）": "zh_CN-huayan-medium",
     "Piper中文女声（较低质量）": "zh_CN-huayan-low",
 }
+PIPER_VOICES = dict(PIPER_BUILTIN_VOICES)
 PIPER_DEFAULT_VOICE = "zh_CN-huayan-medium"
+
+# 已下载模型的 voice_id → 模型文件绝对路径（含额外搜索路径中发现的模型）
+PIPER_MODEL_PATHS: dict[str, str] = {}
 
 # Piper模型下载URL（Hugging Face）
 PIPER_MODEL_URLS = {
@@ -706,6 +713,118 @@ HF_ORIGIN_DOMAIN = "huggingface.co"
 def _get_mirror_url(url: str) -> str:
     """将HuggingFace URL替换为hf-mirror镜像"""
     return url.replace(HF_ORIGIN_DOMAIN, HF_MIRROR_DOMAIN)
+
+
+# ======== Piper 语音包目录（官方 voices.json） ========
+
+PIPER_VOICES_JSON_URL = "https://huggingface.co/rhasspy/piper-voices/resolve/main/voices.json"
+PIPER_VOICES_BASE_URL = "https://huggingface.co/rhasspy/piper-voices/resolve/main/"
+
+
+def fetch_piper_voice_catalog(force_refresh: bool = False, should_stop=None) -> dict:
+    """下载并缓存 Piper 官方语音目录 voices.json（数百个语音，覆盖多语言）。
+
+    返回原始目录 dict：{voice_key: {language, quality, files, ...}}
+    """
+    cache_path = os.path.join(get_piper_model_dir(), "voices_catalog.json")
+    if not force_refresh and os.path.isfile(cache_path):
+        try:
+            with open(cache_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.warning(f"语音目录缓存损坏，重新下载: {e}")
+    # 强制刷新/缓存损坏时删除旧文件，避免断点续传逻辑向旧文件追加
+    if os.path.exists(cache_path):
+        try:
+            os.remove(cache_path)
+        except Exception:
+            pass
+    _download_file_with_progress(PIPER_VOICES_JSON_URL, cache_path,
+                                 "Piper 语音目录", should_stop=should_stop)
+    with open(cache_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def list_piper_catalog_voices(catalog: dict, language_prefix: str = "") -> list[dict]:
+    """把 voices.json 解析为便于展示的列表，可按语言代码前缀过滤（如 "zh"）。"""
+    out = []
+    for key, meta in sorted(catalog.items()):
+        if not isinstance(meta, dict):
+            continue
+        lang = meta.get("language", {}) or {}
+        code = lang.get("code", "")
+        if language_prefix and not code.lower().startswith(language_prefix.lower()):
+            continue
+        files = meta.get("files", {}) or {}
+        out.append({
+            "key": key,
+            "language_code": code,
+            "language_name": lang.get("name_native") or lang.get("name_english") or code,
+            "quality": meta.get("quality", ""),
+            "num_speakers": meta.get("num_speakers", 1),
+            "size_bytes": sum((f or {}).get("size_bytes", 0) for f in files.values()),
+        })
+    return out
+
+
+def download_piper_voice_from_catalog(voice_key: str, should_stop=None) -> str:
+    """按语音目录下载指定语音的 .onnx + .onnx.json 到 piper-models/，返回模型路径"""
+    catalog = fetch_piper_voice_catalog(should_stop=should_stop)
+    meta = catalog.get(voice_key)
+    if not meta:
+        raise ValueError(f"语音目录中没有: {voice_key}")
+
+    model_dir = get_piper_model_dir()
+    onnx_path = None
+    for fpath in (meta.get("files", {}) or {}):
+        if not (fpath.endswith(".onnx") or fpath.endswith(".onnx.json")):
+            continue  # 跳过 MODEL_CARD 等
+        fname = os.path.basename(fpath)
+        dst = os.path.join(model_dir, fname)
+        _download_file_with_progress(PIPER_VOICES_BASE_URL + fpath, dst,
+                                     f"Piper {fname}", should_stop=should_stop)
+        if fpath.endswith(".onnx"):
+            onnx_path = dst
+
+    if not onnx_path:
+        raise RuntimeError(f"语音 {voice_key} 的目录条目中没有 .onnx 模型文件")
+    refresh_piper_voices()
+    return onnx_path
+
+
+_piper_voices_scanned = False
+
+
+def _ensure_piper_voices() -> None:
+    """懒扫描：首次访问 Piper 语音列表时才扫描模型目录"""
+    if not _piper_voices_scanned:
+        refresh_piper_voices()
+
+
+def refresh_piper_voices() -> None:
+    """重新扫描 piper-models/ 与额外搜索路径，把已下载模型并入语音列表"""
+    global PIPER_VOICES, PIPER_MODEL_PATHS, _piper_voices_scanned
+    _piper_voices_scanned = True
+    voices = dict(PIPER_BUILTIN_VOICES)
+    paths: dict[str, str] = {}
+    builtin_ids = set(PIPER_BUILTIN_VOICES.values())
+
+    roots = [get_piper_model_dir()] + get_model_search_paths()
+    seen_ids = set()
+    for root in roots:
+        for onnx in _search_models_in_tree(root):
+            if not os.path.isfile(onnx + ".json"):
+                continue  # 缺配置文件的模型无法使用
+            vid = os.path.splitext(os.path.basename(onnx))[0]
+            if vid in seen_ids:
+                continue
+            seen_ids.add(vid)
+            paths[vid] = os.path.abspath(onnx)
+            if vid not in builtin_ids:
+                voices[f"Piper {vid}"] = vid
+
+    PIPER_MODEL_PATHS = paths
+    PIPER_VOICES = voices
 
 
 # 注册内置引擎
@@ -1014,6 +1133,7 @@ def get_voice_list(engine="edge"):
         _ensure_local_voices()
         return list(LOCAL_VOICES.keys())
     elif engine == "piper":
+        _ensure_piper_voices()
         return list(PIPER_VOICES.keys())
     elif engine == "cosyvoice":
         return list(COSYVOICE_VOICES.keys())
@@ -1029,6 +1149,7 @@ def get_voice_id(display_name, engine="edge"):
         _ensure_local_voices()
         return LOCAL_VOICES.get(display_name, LOCAL_DEFAULT_VOICE)
     elif engine == "piper":
+        _ensure_piper_voices()
         return PIPER_VOICES.get(display_name, PIPER_DEFAULT_VOICE)
     elif engine == "cosyvoice":
         return COSYVOICE_VOICES.get(display_name, COSYVOICE_DEFAULT_VOICE)
@@ -1256,7 +1377,7 @@ DIALOGUE_PATTERNS = [
     re.compile(r'"([^"]+)"'),
 ]
 SPEAKER_PATTERN = re.compile(
-    r'([^\uff0c\u3002\uff01\uff1f\n\u201c\u201d\u2018\u2019\u300c\u300d \t]{1,15})'
+    r'([^\uff0c\u3002\uff01\uff1f\n\u201c\u201d\u2018\u2019\u300c\u300d"\' \t]{1,15})'
     r'(?:问道|喊道|叫道|答道|讲道|嚷道|吼道|叹道|骂道|喝道|回答|'
     r'说|问|道|喊|叫|答|讲|嚷|吼|叹|骂|喝)[\uff1a:]'
 )
@@ -1296,8 +1417,12 @@ def detect_dialogue_segments(text: str) -> list[dict]:
 
         speaker = None
         context_before = text[max(0, earliest_start - 40):earliest_start]
-        spk_match = SPEAKER_PATTERN.search(context_before)
-        if spk_match:
+        # 取窗口内最后一个且紧邻对话起点的 "X说：" —— 连续多角色对话时，
+        # 取第一个会把当前对话错误归给上一个说话人
+        spk_match = None
+        for m in SPEAKER_PATTERN.finditer(context_before):
+            spk_match = m
+        if spk_match and len(context_before) - spk_match.end() <= 2:
             speaker = spk_match.group(1).strip()
 
         dialogue_text = earliest_match.group(0)
@@ -1306,6 +1431,36 @@ def detect_dialogue_segments(text: str) -> list[dict]:
         pos = earliest_match.end()
 
     return segments
+
+
+def extract_speakers(text: str, max_speakers: int = 20) -> list[str]:
+    """从文本中提取对话说话人名单，按出现次数降序。用于角色→音色映射界面。"""
+    from collections import Counter
+    counter: Counter = Counter()
+    for seg in detect_dialogue_segments(text):
+        if seg.get("type") == "dialogue" and seg.get("speaker"):
+            counter[seg["speaker"]] += 1
+    return [name for name, _ in counter.most_common(max_speakers)]
+
+
+def _resolve_segment_voice(seg: dict, default_voice: str, voice_map: Optional[dict]) -> str:
+    """按对话段选择语音。
+
+    voice_map 结构:
+      {"narration": vid, "dialogue": vid, "speakers": {角色名: vid}}
+    兼容旧格式（角色名直接作为顶层键）。
+    """
+    if not voice_map:
+        return default_voice
+    speaker = seg.get("speaker")
+    speakers_map = voice_map.get("speakers") or {}
+    if speaker:
+        if speaker in speakers_map:
+            return speakers_map[speaker]
+        if speaker in voice_map:  # 旧格式兼容
+            return voice_map[speaker]
+    seg_type = seg.get("type", "narration")
+    return voice_map.get(seg_type, default_voice)
 
 
 # ======== 文本分段 ========
@@ -1452,7 +1607,12 @@ def _unload_piper_model(voice_name=None):
 # ======== Piper TTS 引擎 ========
 
 def _get_piper_model_path(voice_name):
-    """获取Piper模型文件路径（跟随当前存储目录）"""
+    """获取Piper模型文件路径。已扫描到的模型（含额外搜索路径）优先，
+    否则落到 piper-models/ 默认位置（不存在时由下载逻辑补齐）。"""
+    _ensure_piper_voices()
+    known = PIPER_MODEL_PATHS.get(voice_name)
+    if known and os.path.isfile(known):
+        return known
     model_dir = get_piper_model_dir()
     model_file = f"{voice_name}.onnx"
     return os.path.join(model_dir, model_file)
@@ -1912,6 +2072,196 @@ def merge_mp3_files(file_paths, output_path):
     _merge_mp3_files(file_paths, output_path)
 
 
+# ======== 音频时长 / m4b 有声书 / ID3 元数据 / 字幕 ========
+
+def get_audio_duration(path: str) -> float:
+    """获取音频时长（秒）。优先 ffprobe，回退 pydub，最后按 128kbps 码率估算。"""
+    fp = _which_portable("ffprobe")
+    if fp:
+        try:
+            rc, out, _err = _run_subprocess_interruptible(
+                [fp, "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", path],
+                timeout=30)
+            if rc == 0:
+                return float(out.decode("ascii", errors="ignore").strip())
+        except Exception:
+            pass
+    if PYDUB_AVAILABLE and _configure_pydub_ffmpeg():
+        try:
+            return len(AudioSegment.from_file(path)) / 1000.0
+        except Exception:
+            pass
+    try:
+        return os.path.getsize(path) * 8 / (128 * 1000)
+    except Exception:
+        return 0.0
+
+
+def _ffmeta_escape(value: str) -> str:
+    """FFMETADATA 值转义（=、;、#、\\ 和换行）"""
+    out = []
+    for ch in str(value):
+        if ch in "=;#\\":
+            out.append("\\" + ch)
+        elif ch == "\n":
+            out.append("\\\n")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def build_ffmetadata_chapters(titles: List[str], durations: List[float],
+                              album: str = "") -> str:
+    """按章节标题和时长生成 FFMETADATA 章节描述内容"""
+    lines = [";FFMETADATA1"]
+    if album:
+        lines.append(f"title={_ffmeta_escape(album)}")
+        lines.append(f"album={_ffmeta_escape(album)}")
+    start_ms = 0
+    for title, dur in zip(titles, durations):
+        end_ms = start_ms + max(int(dur * 1000), 1)
+        lines += [
+            "[CHAPTER]",
+            "TIMEBASE=1/1000",
+            f"START={start_ms}",
+            f"END={end_ms}",
+            f"title={_ffmeta_escape(title)}",
+        ]
+        start_ms = end_ms
+    return "\n".join(lines) + "\n"
+
+
+def export_m4b(file_paths: List[str], output_path: str,
+               titles: Optional[List[str]] = None, album: str = "",
+               should_stop=None, progress_callback=None) -> str:
+    """把多个 MP3 合并为带章节标记的 .m4b 有声书（需 ffmpeg）。
+
+    titles 缺省时用文件名（去掉序号前缀和扩展名）作为章节名。
+    """
+    ff = _ffmpeg_path()
+    if not ff:
+        raise RuntimeError("ffmpeg 未安装，无法导出 m4b。\n" + _ffmpeg_install_hint())
+    if not file_paths:
+        raise ValueError("没有要合并的文件")
+
+    if titles is None:
+        titles = []
+        for p in file_paths:
+            base = os.path.splitext(os.path.basename(p))[0]
+            titles.append(re.sub(r'^\d{1,4}[_\-. ]*', '', base) or base)
+
+    durations = []
+    for i, p in enumerate(file_paths):
+        if should_stop and should_stop():
+            raise StopRequested("用户暂停")
+        durations.append(get_audio_duration(p))
+        if progress_callback:
+            try:
+                progress_callback(i + 1, len(file_paths) + 1)
+            except Exception:
+                pass
+
+    work_dir = tempfile.mkdtemp(prefix="m4b_")
+    list_path = os.path.join(work_dir, "concat.txt")
+    meta_path = os.path.join(work_dir, "chapters.ffmeta")
+    try:
+        with open(list_path, "w", encoding="utf-8") as f:
+            for p in file_paths:
+                escaped = os.path.abspath(p).replace("'", "'\\''")
+                f.write(f"file '{escaped}'\n")
+        with open(meta_path, "w", encoding="utf-8") as f:
+            f.write(build_ffmetadata_chapters(titles, durations, album=album))
+
+        cmd = [ff, "-y", "-f", "concat", "-safe", "0", "-i", list_path,
+               "-i", meta_path, "-map_metadata", "1", "-map", "0:a",
+               "-c:a", "aac", "-b:a", "64k", "-f", "mp4", output_path]
+        rc, _out, err = _run_subprocess_interruptible(cmd, should_stop=should_stop,
+                                                      timeout=3600 * 4)
+        if rc != 0:
+            stderr = err.decode("utf-8", errors="replace") if err else ""
+            raise RuntimeError(f"m4b 导出失败 (rc={rc}): {stderr[-500:]}")
+        if progress_callback:
+            try:
+                progress_callback(len(file_paths) + 1, len(file_paths) + 1)
+            except Exception:
+                pass
+        return output_path
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
+def write_id3_tags(path: str, title: str = "", album: str = "", artist: str = "",
+                   track: Optional[int] = None, cover_path: str = "") -> None:
+    """用 ffmpeg 流复制方式写入 ID3v2 元数据（无损、快速，需 ffmpeg）"""
+    ff = _ffmpeg_path()
+    if not ff:
+        raise RuntimeError("ffmpeg 未安装，无法写入元数据。\n" + _ffmpeg_install_hint())
+
+    tmp_path = path + ".tag.tmp.mp3"
+    cmd = [ff, "-y", "-i", path]
+    if cover_path and os.path.isfile(cover_path):
+        cmd += ["-i", cover_path, "-map", "0:a", "-map", "1:v",
+                "-c", "copy", "-id3v2_version", "3",
+                "-metadata:s:v", "title=Album cover",
+                "-metadata:s:v", "comment=Cover (front)"]
+    else:
+        cmd += ["-c", "copy", "-id3v2_version", "3"]
+    for key, val in (("title", title), ("album", album), ("artist", artist)):
+        if val:
+            cmd += ["-metadata", f"{key}={val}"]
+    if track is not None:
+        cmd += ["-metadata", f"track={track}"]
+    cmd.append(tmp_path)
+
+    try:
+        rc, _out, err = _run_subprocess_interruptible(cmd, timeout=300)
+        if rc != 0:
+            stderr = err.decode("utf-8", errors="replace") if err else ""
+            raise RuntimeError(f"写入元数据失败 (rc={rc}): {stderr[-300:]}")
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+
+_SENTENCE_SPLIT_RE = re.compile(r'(?<=[。！？!?；;…])\s*')
+
+
+def _srt_timestamp(seconds: float) -> str:
+    if seconds < 0:
+        seconds = 0
+    ms = int(round(seconds * 1000))
+    h, rem = divmod(ms, 3600 * 1000)
+    m, rem = divmod(rem, 60 * 1000)
+    s, ms = divmod(rem, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def generate_srt_from_text(text: str, total_duration: float) -> str:
+    """按句切分文本、按字数比例分配时间轴，生成 SRT 字幕。
+
+    离线估算方案：无需引擎提供逐词时间戳，各引擎通用；
+    与真实语音存在小幅偏差，适合校对与听读跟随。
+    """
+    sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
+    if not sentences or total_duration <= 0:
+        return ""
+    total_chars = sum(len(s) for s in sentences)
+    if total_chars == 0:
+        return ""
+    blocks = []
+    t = 0.0
+    for i, sentence in enumerate(sentences, 1):
+        dur = total_duration * len(sentence) / total_chars
+        blocks.append(f"{i}\n{_srt_timestamp(t)} --> {_srt_timestamp(t + dur)}\n{sentence}\n")
+        t += dur
+    return "\n".join(blocks)
+
+
 def normalize_loudness(input_path: str, output_path: Optional[str] = None,
                        target_lufs: float = -16.0, target_tp: float = -1.5,
                        target_lra: float = 11.0) -> str:
@@ -1995,6 +2345,24 @@ async def _edge_generate_multi(segments, voice, rate, output_path):
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+async def _edge_generate_dialogue(dialogue_segments, default_voice, voice_map,
+                                  rate, output_path, stop_event=None):
+    """对话检测模式：逐段按角色/类型切换语音生成后合并（Edge 引擎）"""
+    temp_dir = tempfile.mkdtemp()
+    temp_files = []
+    try:
+        for i, seg in enumerate(dialogue_segments):
+            if stop_event is not None and stop_event.is_set():
+                raise StopRequested("用户暂停")
+            seg_voice = _resolve_segment_voice(seg, default_voice, voice_map)
+            tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
+            await _edge_generate(seg["text"], seg_voice, rate, tp)
+            temp_files.append(tp)
+        _merge_mp3_files(temp_files, output_path)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
 # ======== 批量 Edge TTS（并发 + 单一事件循环） ========
 
 async def _interruptible_asleep(seconds: float, stop_event: "asyncio.Event") -> bool:
@@ -2022,7 +2390,12 @@ async def _generate_one_item(item, voice, rate, output_dir, semaphore, stop_even
             try:
                 logger.info(f"生成 [{item['title']}] → {item['filename']} (尝试 {attempt + 1}/{MAX_RETRIES + 1})")
 
-                if len(segments) == 1:
+                if item.get("segments") and item.get("voice_map"):
+                    # 对话检测模式：按角色/类型切换语音
+                    await _edge_generate_dialogue(item["segments"], voice,
+                                                  item["voice_map"], rate, out_path,
+                                                  stop_event=stop_event)
+                elif len(segments) == 1:
                     await _edge_generate(segments[0], voice, rate, out_path)
                 else:
                     await _edge_generate_multi(segments, voice, rate, out_path)
@@ -2230,17 +2603,7 @@ def _generate_one_safe_multi_voice(
                 raise StopRequested("用户暂停")
 
             seg_text = seg["text"]
-            seg_type = seg.get("type", "narration")
-            seg_speaker = seg.get("speaker")
-
-            seg_voice = default_voice
-            if voice_map:
-                if seg_speaker and seg_speaker in voice_map:
-                    seg_voice = voice_map[seg_speaker]
-                elif seg_type == "dialogue" and "dialogue" in voice_map:
-                    seg_voice = voice_map["dialogue"]
-                elif seg_type == "narration" and "narration" in voice_map:
-                    seg_voice = voice_map["narration"]
+            seg_voice = _resolve_segment_voice(seg, default_voice, voice_map)
 
             tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
             _generate_one_safe(seg_text, seg_voice, rate, tp, engine=engine,
@@ -2446,6 +2809,9 @@ def convert_batch(
     normalize_audio: bool = False,
     dialogue_detection: bool = False,
     voice_map: dict | None = None,
+    generate_subtitles: bool = False,
+    write_metadata: bool = False,
+    album_title: str = "",
 ):
     os.makedirs(output_dir, exist_ok=True)
 
@@ -2693,6 +3059,41 @@ def convert_batch(
                                 pass
                 except Exception as e:
                     logger.error(f"响度归一化失败 {p}: {e}")
+
+    # 可选：生成 srt 字幕（按句估算时间轴，引擎通用）
+    done_items = [it for it in items if it["status"] == "done"]
+    if generate_subtitles and done_items:
+        logger.info(f"生成 {len(done_items)} 个 srt 字幕文件")
+        for it in done_items:
+            if should_stop and should_stop():
+                break
+            mp3_path = os.path.join(output_dir, it["filename"])
+            try:
+                duration = get_audio_duration(mp3_path)
+                srt = generate_srt_from_text(it.get("text", ""), duration)
+                if srt:
+                    srt_path = os.path.splitext(mp3_path)[0] + ".srt"
+                    with open(srt_path, "w", encoding="utf-8") as f:
+                        f.write(srt)
+            except Exception as e:
+                logger.error(f"字幕生成失败 {mp3_path}: {e}")
+
+    # 可选：写入 ID3 元数据（标题=章节名，专辑=书名，音轨号=顺序）
+    if write_metadata and done_items:
+        if _ffmpeg_path() is None:
+            logger.warning("已勾选写入元数据但未找到 ffmpeg，跳过")
+        else:
+            album = album_title or file_prefix
+            logger.info(f"写入 ID3 元数据: {len(done_items)} 个文件, 专辑={album}")
+            for track_no, it in enumerate(done_items, 1):
+                if should_stop and should_stop():
+                    break
+                mp3_path = os.path.join(output_dir, it["filename"])
+                try:
+                    write_id3_tags(mp3_path, title=it.get("title", ""),
+                                   album=album, track=track_no)
+                except Exception as e:
+                    logger.error(f"元数据写入失败 {mp3_path}: {e}")
 
     # 全部完成则清理进度
     all_done = all(it["status"] in ("done", "skipped") for it in items)
