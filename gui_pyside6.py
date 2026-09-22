@@ -610,6 +610,9 @@ class AudiobookConverterMain(QMainWindow):
         root = QVBoxLayout(central)
         root.setContentsMargins(8, 8, 8, 0)
         root.setSpacing(0)
+        # macOS 下布局默认的 SetDefaultConstraint 会把子控件（如 setMaximumHeight）
+        # 推导出有限的 contentMaxSize 并传播到 NSWindow，导致窗口无法自由调整大小。
+        root.setSizeConstraint(QLayout.SetNoConstraint)
 
         # Tabs
         self._tab_widget = QTabWidget()

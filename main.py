@@ -45,11 +45,11 @@ def _run_qt(backend, prefix):
 
     if prefix == "PySide6":
         from PySide6.QtWidgets import QApplication
-        from PySide6.QtCore import Qt
+        from PySide6.QtCore import Qt, QTimer
         from PySide6.QtGui import QPalette, QColor
     else:
         from PyQt6.QtWidgets import QApplication
-        from PyQt6.QtCore import Qt
+        from PyQt6.QtCore import Qt, QTimer
         from PyQt6.QtGui import QPalette, QColor
 
     from tts_engine import _load_config, VERSION
@@ -77,6 +77,15 @@ def _run_qt(backend, prefix):
     window.setWindowTitle(f"文字转有声读物 v{VERSION}")
     window.resize(1200, 800)
     window.show()
+
+    # macOS 下 show() 之后再设置最小/最大尺寸：此时 NSWindow 已创建，
+    # 显式覆盖布局可能推导出的隐含 contentMaxSize，避免窗口无法调整大小。
+    def _enable_resize():
+        window.setMinimumSize(800, 400)
+        window.setMaximumSize(16777215, 16777215)  # QWIDGETSIZE_MAX，表示无上限
+
+    QTimer.singleShot(0, _enable_resize)
+
     sys.exit(app.exec())
 
 
