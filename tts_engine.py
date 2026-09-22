@@ -47,7 +47,7 @@ except ImportError:
     PYDUB_AVAILABLE = False
     AudioSegment = None
 
-VERSION = "5.2.0"
+VERSION = "5.2.1"
 
 # 当前平台
 _PLATFORM = platform.system()  # "Darwin" / "Windows" / "Linux"
@@ -603,13 +603,23 @@ def _detect_local_voices_linux() -> dict:
         )
         for line in result.stdout.splitlines()[1:]:  # 跳过标题
             cols = line.split()
-            if len(cols) >= 4:
-                lang = cols[1]
-                voice_id = cols[3]
-                if lang.lower().startswith("zh"):
-                    display = f"{voice_id}（{lang}）"
-                    voices[display] = voice_id
-        # 至少保留一个默认选项
+            if len(cols) < 4:
+                continue
+            lang = cols[1]
+            voice_name = cols[3]
+            voice_file = cols[4] if len(cols) >= 5 else ""
+            # 只保留中文语系（普通话 cmn / 粤语 yue / 旧式 zh 别名）
+            if not lang.lower().startswith(("zh", "cmn", "yue")):
+                continue
+            # 跳过 MBROLA 语音（如 chinese-mb-cn1）：需额外安装 mbrola 二进制与
+            # 语音数据，新版 espeak-ng 默认缺失会导致合成直接失败。
+            if voice_file.startswith("mb/") or "-mb-" in voice_name:
+                continue
+            # 用语言标识符（cmn / cmn-latn-pinyin 等）作为 voice_id：espeak-ng 能
+            # 直接以 `-v <lang>` 解析出可用语音，避免选到不可用的 VoiceName。
+            display = f"{voice_name}（{lang}）"
+            voices[display] = lang
+        # 至少保留一个默认选项（bare `zh` 由 espeak-ng 解析为可用的普通话语音）
         if not voices:
             voices["espeak-ng 中文"] = "zh"
     except Exception as e:
@@ -2833,7 +2843,10 @@ def convert_batch(
             }]
         elif split_mode == "chapter":
             for idx, ch in enumerate(chapters):
-                source_tag = sanitize_filename(ch.get("source", ""))
+                # 仅当章节有真实来源文件名时才注入来源标签；直接输入的文本
+                # source 为空，sanitize_filename("") 会返回 "untitled"，因此需先判空。
+                raw_source = (ch.get("source") or "").strip()
+                source_tag = sanitize_filename(raw_source) if raw_source else ""
                 title_tag = sanitize_filename(ch['title'])
                 if source_tag and file_prefix != source_tag.replace(".txt", "").replace(".md", ""):
                     fn = f"{idx + 1:03d}_{source_tag}_{title_tag}.mp3"

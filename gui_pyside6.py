@@ -1,4 +1,4 @@
-"""Qt6 GUI — 文字转有声读物 v5.2.0（兼容 PySide6 / PyQt6）"""
+"""Qt6 GUI — 文字转有声读物 v5.2.1（兼容 PySide6 / PyQt6）"""
 
 import os, sys, threading, subprocess, platform, logging, json, tempfile, shutil, time
 from typing import Optional
@@ -7,7 +7,7 @@ from typing import Optional
 try:
     from PySide6.QtWidgets import (
         QMainWindow, QWidget, QSplitter, QTabWidget, QStackedWidget,
-        QVBoxLayout, QHBoxLayout, QGroupBox, QPushButton, QLabel,
+        QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QPushButton, QLabel,
         QComboBox, QRadioButton, QButtonGroup, QCheckBox, QSlider,
         QSpinBox, QProgressBar, QPlainTextEdit, QTreeWidget, QTreeWidgetItem,
         QLineEdit, QFileDialog, QMessageBox, QFrame, QSizePolicy,
@@ -24,7 +24,7 @@ try:
 except ImportError:
     from PyQt6.QtWidgets import (
         QMainWindow, QWidget, QSplitter, QTabWidget, QStackedWidget,
-        QVBoxLayout, QHBoxLayout, QGroupBox, QPushButton, QLabel,
+        QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QPushButton, QLabel,
         QComboBox, QRadioButton, QButtonGroup, QCheckBox, QSlider,
         QSpinBox, QProgressBar, QPlainTextEdit, QTreeWidget, QTreeWidgetItem,
         QLineEdit, QFileDialog, QMessageBox, QFrame, QSizePolicy,
@@ -636,6 +636,9 @@ class AudiobookConverterMain(QMainWindow):
         # 文件管理移到左栏顶部
         left_layout.addWidget(self._build_panel_files())
 
+        # 章节列表与文本内容改用竖向分隔条，用户可自由分配二者高度
+        left_splitter = QSplitter(Qt.Orientation.Vertical)
+
         ch_group = QGroupBox("章节列表（勾选要生成的章节）")
         ch_layout = QVBoxLayout(ch_group)
         ch_toolbar = QHBoxLayout()
@@ -656,14 +659,23 @@ class AudiobookConverterMain(QMainWindow):
         self._chapter_tree.itemSelectionChanged.connect(self._on_chapter_select)
         self._chapter_tree.itemChanged.connect(self._on_chapter_check_changed)
         ch_layout.addWidget(self._chapter_tree)
-        left_layout.addWidget(ch_group)
+        left_splitter.addWidget(ch_group)
 
         text_group = QGroupBox("文本内容")
         text_gl = QVBoxLayout(text_group)
         self._text_area = QPlainTextEdit()
-        self._text_area.setFont(QFont("Helvetica", 12))
+        # 使用系统默认字体（对中文回退更可靠），仅指定字号
+        _text_font = QFont()
+        _text_font.setPointSize(12)
+        self._text_area.setFont(_text_font)
         text_gl.addWidget(self._text_area)
-        left_layout.addWidget(text_group, 1)
+        left_splitter.addWidget(text_group)
+
+        # 初始高度分配：章节列表约 45%，文本内容约 55%（文本为主要编辑区）
+        left_splitter.setStretchFactor(0, 0)
+        left_splitter.setStretchFactor(1, 1)
+        left_splitter.setSizes([320, 380])
+        left_layout.addWidget(left_splitter, 1)
 
         splitter.addWidget(left)
 
@@ -671,7 +683,10 @@ class AudiobookConverterMain(QMainWindow):
         self._panel_scroll = QScrollArea()
         self._panel_scroll.setWidgetResizable(True)
         self._panel_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        self._panel_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._panel_scroll.setMinimumWidth(320)
+        # 横向按需滚动：极窄窗口下（引擎卡片行的最小宽度可能超过面板宽度）出现
+        # 滚动条而非静默裁切，保证所有设置始终可达。
+        self._panel_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         panel_container = QWidget()
         panel_v = QVBoxLayout(panel_container)
         panel_v.setSizeConstraint(QLayout.SetNoConstraint)
@@ -686,7 +701,9 @@ class AudiobookConverterMain(QMainWindow):
         self._panel_scroll.setWidget(panel_container)
         splitter.addWidget(self._panel_scroll)
 
-        splitter.setSizes([780, 400])
+        # 右侧设置面板内容（长路径/长复选框文案）实际需要约 540px 才能完整显示；
+        # 默认给足宽度以免出现横向滚动，窗口放大时多出的空间分配给左侧编辑区。
+        splitter.setSizes([640, 560])
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 0)
 
@@ -726,6 +743,20 @@ class AudiobookConverterMain(QMainWindow):
         self._status_label.setStyleSheet("color:#777;font-size:12px;padding:3px 6px")
         bottom_layout.addWidget(self._status_label)
 
+        # 底部操作条/状态行仅对「文字转语音」有意义；切到 ASR 页时隐藏，避免
+        # 与页内「开始识别」按钮重复、误导用户。
+        self._tab_widget.currentChanged.connect(self._on_main_tab_changed)
+        self._on_main_tab_changed(self._tab_widget.currentIndex())
+
+
+    def _on_main_tab_changed(self, index):
+        """主标签切换：ASR 页隐藏 TTS 专用的底部操作条与状态行。"""
+        is_tts = (self._tab_widget.widget(index) is self._tts_tab)
+        if hasattr(self, "_quickbar_widget"):
+            self._quickbar_widget.setVisible(is_tts)
+        if hasattr(self, "_status_label"):
+            self._status_label.setVisible(is_tts)
+
 
     # ================ Panel Builders ================
 
@@ -741,25 +772,34 @@ class AudiobookConverterMain(QMainWindow):
         self._engine_group = QButtonGroup(self)
         self._engine_group.setExclusive(True)
         self._engine_btns = []
-        self._engine_grid = QHBoxLayout()
+        # 引擎按钮用 2 列网格排布（而非单行），避免引擎数量增多时行宽超出面板被裁切
+        self._engine_grid = QGridLayout()
         self._engine_grid.setSpacing(6)
         self._engine_card_layout.addLayout(self._engine_grid)
         self._engine_group.buttonClicked.connect(self._on_engine_change)
         layout.addWidget(engine_card)
 
         voice_card = QGroupBox("语音参数")
-        vc_layout = QHBoxLayout(voice_card)
-        vc_layout.addWidget(QLabel("语音:"))
+        vc_layout = QVBoxLayout(voice_card)
+        # 第一行：语音标签 + 下拉（下拉可随面板收窄而压缩，避免溢出裁切）
+        voice_row = QHBoxLayout()
+        voice_row.addWidget(QLabel("语音:"))
         self._voice_combo = QComboBox()
-        self._voice_combo.setMinimumWidth(180)
+        self._voice_combo.setMinimumWidth(120)
+        self._voice_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self._voice_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._voice_combo.currentTextChanged.connect(self._on_voice_change)
-        vc_layout.addWidget(self._voice_combo, 1)
+        voice_row.addWidget(self._voice_combo, 1)
+        vc_layout.addLayout(voice_row)
+        # 第二行：试听 / 刷新按钮（独立成行，窄面板下不再被挤出可视区）
+        btn_row = QHBoxLayout()
         btn_preview = QPushButton("试听")
         btn_preview.clicked.connect(self._preview_voice_sample)
-        vc_layout.addWidget(btn_preview)
+        btn_row.addWidget(btn_preview)
         btn_refresh = QPushButton("刷新")
         btn_refresh.clicked.connect(self._refresh_voices)
-        vc_layout.addWidget(btn_refresh)
+        btn_row.addWidget(btn_refresh)
+        vc_layout.addLayout(btn_row)
         layout.addWidget(voice_card)
 
         btn_ext = QPushButton("+ 添加 / 配置外挂引擎")
@@ -1149,7 +1189,8 @@ class AudiobookConverterMain(QMainWindow):
         }
 
         first_btn = None
-        for eng_id, info in engines.items():
+        COLS = 2  # 每行 2 个引擎，保持右侧面板紧凑
+        for i, (eng_id, info) in enumerate(engines.items()):
             if info["type"] == "builtin":
                 name, sub = BUILTIN.get(eng_id, (info.get("name", eng_id), ""))
                 ready, _ = check_engine_ready(eng_id)
@@ -1160,7 +1201,7 @@ class AudiobookConverterMain(QMainWindow):
                 btn = QRadioButton(f"⚡ {name}\n外挂引擎")
 
             btn.setStyleSheet("QRadioButton{font-size:11px;padding:6px}")
-            self._engine_grid.addWidget(btn)
+            self._engine_grid.addWidget(btn, i // COLS, i % COLS)
             self._engine_group.addButton(btn)
             self._engine_btns.append((eng_id, btn, name))
             if first_btn is None:
