@@ -8,7 +8,7 @@ a = Analysis(
     binaries=[],
     datas=[('icon.png', '.'), ('icon.ico', '.')],
     hiddenimports=['edge_tts', 'aiohttp', 'aiosignal', 'frozenlist', 'multidict', 'yarl', 'propcache', 'attr', 'attrs', 'certifi',
-                   'faster_whisper', 'sv_ttk', 'ebooklib', 'fitz', 'pdfplumber', 'torch', 'cosyvoice', 'soundfile', 'librosa'],
+                   'faster_whisper', 'ebooklib', 'fitz', 'pdfplumber', 'torch', 'cosyvoice', 'soundfile', 'librosa'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

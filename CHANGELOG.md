@@ -1,6 +1,27 @@
 # 项目情况日志 — 文字转有声读物 (Audiobook Converter)
 
-## 当前版本：v5.2.1 (2026-09-22)
+## 当前版本：v6.0.0-dev (2026-09-24，开发中)
+
+## v6.0.0 大版本重构（进行中，见 ROADMAP.md「v6.0 大版本升级计划」）
+
+主题：架构跨越 + 产品形态扩展。分三阶段，每阶段可独立发布。
+
+### 阶段 1（地基重构）— 本次进度
+
+- **A1 删除遗留死代码**：`gui.py`(2361 行)、`main_pyside6.py`(104 行)，无任何引用。
+- **A2 移除 Tkinter 后端**（破坏性）：删除 `gui_tkinter_backup.py`(2354 行)；`main.py`
+  改为要求 Qt6（PySide6/PyQt6），未安装时给出安装提示并退出，不再回退 Tkinter；
+  移除 `sv-ttk` 依赖与三个 PyInstaller spec 中的相关引用。
+- **A3 建立 `audiobook/` 包骨架**：`core/`(章节·对话·拆分·文本)、`engines/`、
+  `io/`(读取·输出)、`ui/` 四个子包；包 `__init__` 用 PEP 562 延迟再导出暴露稳定的
+  公共导入面（`from audiobook import VERSION, convert_batch, transcribe`），
+  `import audiobook` 本身很轻，不触发底层重依赖加载。实现暂留顶层模块，后续阶段
+  （A4）逐步迁入并以薄再导出保持兼容。
+
+说明：本阶段行为不变（98 项单元测试保持通过、GUI 可正常启动），未改动构建流程。
+剩余 A4（单体拆分迁移）、A5（引擎插件化 Engine 基类）、A6（集成测试基线）见 ROADMAP。
+
+## v5.2.1 (2026-09-22)
 
 ## v5.2.1 本次升级内容（Bug 修复 + 界面打磨）
 

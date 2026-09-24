@@ -1,4 +1,4 @@
-"""Qt6 GUI — 文字转有声读物 v5.2.1（兼容 PySide6 / PyQt6）"""
+"""Qt6 GUI — 文字转有声读物 v6.0.0-dev（兼容 PySide6 / PyQt6）"""
 
 import os, sys, threading, subprocess, platform, logging, json, tempfile, shutil, time
 from typing import Optional

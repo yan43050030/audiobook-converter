@@ -80,8 +80,6 @@ all_hidden = base_hidden + piper_hidden + onnx_hidden + pygame_hidden + _doc_hid
     # Qt6 GUI（PySide6 推荐）
     'PySide6', 'PySide6.QtWidgets', 'PySide6.QtCore', 'PySide6.QtGui',
     'shiboken6',
-    # 深色主题（Tkinter 回退用）
-    'sv_ttk',
     # 电子书读取
     'docx', 'ebooklib', 'fitz', 'pdfplumber',
     # GPU 检测

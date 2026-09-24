@@ -95,8 +95,6 @@ all_hidden = base_hidden + piper_hidden + onnx_hidden + pygame_hidden + _doc_hid
     # Qt6 GUI（PySide6 推荐 / PyQt6 回退）
     'PySide6', 'PySide6.QtWidgets', 'PySide6.QtCore', 'PySide6.QtGui',
     'shiboken6',
-    # 深色主题（Tkinter 回退用）
-    'sv_ttk',
     # 电子书读取
     'docx', 'ebooklib', 'fitz', 'pdfplumber',
     # GPU 检测
@@ -168,8 +166,8 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'AudiobookConverter',
         'CFBundleDisplayName': '文字转有声读物',
-        'CFBundleVersion': '5.2.1',
-        'CFBundleShortVersionString': '5.2.1',
+        'CFBundleVersion': '6.0.0',
+        'CFBundleShortVersionString': '6.0.0-dev',
         'NSHumanReadableCopyright': 'AudiobookConverter',
         'NSHighResolutionCapable': True,
     },

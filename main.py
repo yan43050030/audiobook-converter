@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""文字转有声读物 — 程序入口（自动选择 PySide6 / PyQt6 / Tkinter 后端）"""
+"""文字转有声读物 — 程序入口（Qt6 界面，自动选择 PySide6 / PyQt6）"""
 
 import sys
 import os
@@ -89,46 +89,19 @@ def _run_qt(backend, prefix):
     sys.exit(app.exec())
 
 
-def _run_tkinter():
-    """使用 Tkinter 启动（回退）"""
-    import platform
-    import tkinter as tk
-
-    if platform.system() == "Windows":
-        try:
-            from ctypes import windll
-            try: windll.shcore.SetProcessDpiAwareness(2)
-            except Exception:
-                try: windll.shcore.SetProcessDpiAwareness(1)
-                except Exception: windll.user32.SetProcessDPIAware()
-        except Exception: pass
-
-    from gui_tkinter_backup import AudiobookConverterApp
-    from tts_engine import _load_config
-
-    root = tk.Tk()
-    try:
-        dpi = root.winfo_fpixels("1i")
-        if dpi and dpi > 0:
-            scale = max(1.0, min(dpi / 72.0, 2.5))
-            root.tk.call("tk", "scaling", scale)
-    except Exception: pass
-
-    cfg = _load_config()
-    import sv_ttk
-    sv_ttk.set_theme(cfg.get("theme", "light"))
-    app = AudiobookConverterApp(root)
-    root.mainloop()
-
-
 def main():
     backend, prefix = _get_qt_backend()
     if backend:
         print(f"使用 {backend} 启动")
         _run_qt(backend, prefix)
     else:
-        print("Qt6 未安装（PySide6 / PyQt6），回退到 Tkinter")
-        _run_tkinter()
+        # v6.0 起仅支持 Qt6 界面（已移除 Tkinter 回退后端）
+        sys.stderr.write(
+            "未检测到 Qt6 界面库（PySide6 / PyQt6）。\n"
+            "请安装其一后重试：\n"
+            "  pip install PySide6\n"
+        )
+        sys.exit(1)
 
 
 if __name__ == "__main__":
