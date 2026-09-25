@@ -83,6 +83,12 @@ class _TtsEngineAdapter(Engine):
 
 _REGISTRY: Dict[str, Engine] = {}
 
+# 已迁移为独立 Engine 子类的内置引擎： id -> (模块, 类名)。
+# get_engine 优先用它们，未迁移的引擎回退到 _TtsEngineAdapter。
+_CONCRETE: Dict[str, Tuple[str, str]] = {
+    "local": ("audiobook.engines.local", "LocalEngine"),
+}
+
 
 def register_engine(engine: Engine) -> None:
     """注册一个引擎实例（按 engine.id 覆盖）。"""
@@ -92,10 +98,17 @@ def register_engine(engine: Engine) -> None:
 
 
 def get_engine(engine_id: str) -> Engine:
-    """按 id 取引擎。显式注册的优先；否则按需为 tts_engine 已注册的引擎
-    （内置 + 外挂）构建薄适配器。找不到则抛 KeyError。"""
+    """按 id 取引擎。顺序：显式注册的 > 已迁移的具体子类（_CONCRETE）> 为
+    tts_engine 已注册引擎（内置 + 外挂）构建的薄适配器。找不到则抛 KeyError。"""
     if engine_id in _REGISTRY:
         return _REGISTRY[engine_id]
+    spec = _CONCRETE.get(engine_id)
+    if spec is not None:
+        import importlib
+        cls = getattr(importlib.import_module(spec[0]), spec[1])
+        engine = cls()
+        _REGISTRY[engine_id] = engine
+        return engine
     import tts_engine as _te
     engines = _te.get_registered_engines()
     info = engines.get(engine_id)

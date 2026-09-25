@@ -12,7 +12,8 @@
 > 当前进度：阶段 1 进行中 —— A1/A2（删遗留与 Tkinter）、A3（包骨架）、A6（集成测试
 > 基线）已并入 main；A4（单体拆分迁移）进行中，已迁 `file_reader → io/readers`、
 > `asr_engine → engines/asr`、`tts_engine` 纯文本层 → `core/text`、音频输出层 → `io/audio`。
-> A5a（`Engine` 抽象接口 + 注册表，薄适配器包现有分发）已完成；剩余 A5b/A5c 见下。
+> A5a（`Engine` 抽象接口 + 注册表）已完成；A5b 进行中（本地引擎 → `engines/local.py`
+> 的 `LocalEngine` 已迁）；剩余 A5b（edge/piper/cosyvoice）、A5c（分发改走注册表）见下。
 
 ## 一、现有功能盘点
 
