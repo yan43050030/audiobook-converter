@@ -38,7 +38,13 @@
     惰性引用同一批已配置对象——模块加载期无循环导入，行为不变；`tts_engine` 顶部再导入
     保持旧 import 与内部调用不变。
 
-剩余 A4（引擎实现 edge/local/piper/cosyvoice）、A5（引擎插件化 Engine 基类）见 ROADMAP。
+- **A5a 引擎抽象接口 + 注册表**（`audiobook/engines/base.py`）：定义统一的 `Engine`
+  抽象基类（`is_ready` / `list_voices` / `synthesize`）与注册表（`register_engine` /
+  `get_engine` / `all_engines`）。以**薄适配器** `_TtsEngineAdapter` 包住 `tts_engine`
+  现有的按引擎分发（`check_engine_ready` / `get_voice_list` / `get_voice_id` /
+  `_generate_one_safe`），**纯附加、零行为变化**。
+
+剩余 A5b（各引擎实现迁入 engines/<name>.py）、A5c（分发改走注册表、删旧分发）见 ROADMAP。
 
 ## v5.2.1 (2026-09-22)
 
