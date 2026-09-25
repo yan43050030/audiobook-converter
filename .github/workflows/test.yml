@@ -24,6 +24,12 @@ jobs:
         with:
           python-version: '3.12'
 
+      # full 腿额外装系统语音/音频工具，让引擎与 IO 层集成测试真正执行；
+      # minimal 腿不装，验证可选依赖缺失时的降级与测试跳过路径。
+      - name: Install system audio tools (full)
+        if: matrix.deps == 'full'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg espeak-ng
+
       - name: Install dependencies (full)
         if: matrix.deps == 'full'
         run: |
