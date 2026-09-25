@@ -83,5 +83,17 @@ class TestSubPackages(unittest.TestCase):
         self.assertTrue(callable(cls))
 
 
+class TestCompatShims(unittest.TestCase):
+    """顶层兼容垫片必须与包内规范实现指向同一对象（A4 迁移保持旧 import 可用）。"""
+
+    def test_file_reader_shim(self):
+        import file_reader
+        from audiobook.io import readers
+        for name in ("load_file_content", "read_docx", "read_markdown",
+                     "read_epub", "read_html", "read_pdf"):
+            with self.subTest(name=name):
+                self.assertIs(getattr(file_reader, name), getattr(readers, name))
+
+
 if __name__ == "__main__":
     unittest.main()

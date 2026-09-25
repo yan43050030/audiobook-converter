@@ -19,7 +19,14 @@
   （A4）逐步迁入并以薄再导出保持兼容。
 
 说明：本阶段行为不变（98 项单元测试保持通过、GUI 可正常启动），未改动构建流程。
-剩余 A4（单体拆分迁移）、A5（引擎插件化 Engine 基类）、A6（集成测试基线）见 ROADMAP。
+
+- **A6 集成测试基线**（已并入）：新增包导入面 / IO / 本地引擎集成测试（+18），
+  CI full 腿加装 ffmpeg+espeak-ng 使其真正执行。
+- **A4 单体拆分迁移（进行中）**：首刀把 `file_reader.py` 迁入 `audiobook/io/readers.py`，
+  顶层 `file_reader` 改为薄再导出垫片保持旧 import 与 PyInstaller 兼容（`git mv` 保留历史）；
+  新增垫片契约测试。后续继续迁移 `tts_engine` 的输出/文本处理逻辑。
+
+剩余 A4（继续拆分）、A5（引擎插件化 Engine 基类）见 ROADMAP。
 
 ## v5.2.1 (2026-09-22)
 
