@@ -18,7 +18,7 @@ _REEXPORT = {
     # 输出（尚在 tts_engine，待迁）
     "merge_mp3_files": ("tts_engine", "merge_mp3_files"),
     "export_m4b": ("tts_engine", "export_m4b"),
-    "generate_srt_from_text": ("tts_engine", "generate_srt_from_text"),
+    "generate_srt_from_text": ("audiobook.core.text", "generate_srt_from_text"),
 }
 
 

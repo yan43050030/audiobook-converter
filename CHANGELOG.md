@@ -26,9 +26,13 @@
   - `file_reader.py` → `audiobook/io/readers.py`
   - `asr_engine.py` → `audiobook/engines/asr.py`（对 tts_engine 的引用为函数内惰性导入，不受影响）
   顶层同名模块保留为薄再导出垫片（保持旧 import 与 PyInstaller 兼容）；每迁一个补垫片契约测试。
-  后续继续迁移 `tts_engine` 的输出/文本处理逻辑。
+  - `tts_engine` 的**纯文本处理层** → `audiobook/core/text.py`：章节识别 /
+    对话·说话人识别 / 文本分段 / 时长估算 / 文件名清理 / SRT 生成及其常量
+    （CHAPTER_PATTERNS / DIALOGUE_PATTERNS / SPEAKER_PATTERN / _SENTENCE_SPLIT_RE）
+    共约 260 行迁出；`tts_engine` 顶部再导入这些名字，`from tts_engine import
+    detect_chapters, ...` 等旧用法与内部调用保持不变（导入方向反转，非整模块搬移）。
 
-剩余 A4（继续拆分 tts_engine）、A5（引擎插件化 Engine 基类）见 ROADMAP。
+剩余 A4（`tts_engine` 输出层 mp3/m4b/ID3、引擎实现）、A5（引擎插件化 Engine 基类）见 ROADMAP。
 
 ## v5.2.1 (2026-09-22)
 
