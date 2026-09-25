@@ -22,11 +22,13 @@
 
 - **A6 集成测试基线**（已并入）：新增包导入面 / IO / 本地引擎集成测试（+18），
   CI full 腿加装 ffmpeg+espeak-ng 使其真正执行。
-- **A4 单体拆分迁移（进行中）**：首刀把 `file_reader.py` 迁入 `audiobook/io/readers.py`，
-  顶层 `file_reader` 改为薄再导出垫片保持旧 import 与 PyInstaller 兼容（`git mv` 保留历史）；
-  新增垫片契约测试。后续继续迁移 `tts_engine` 的输出/文本处理逻辑。
+- **A4 单体拆分迁移（进行中）**：按「实现迁入包 + 顶层薄垫片 + 契约测试」范式逐个迁移：
+  - `file_reader.py` → `audiobook/io/readers.py`
+  - `asr_engine.py` → `audiobook/engines/asr.py`（对 tts_engine 的引用为函数内惰性导入，不受影响）
+  顶层同名模块保留为薄再导出垫片（保持旧 import 与 PyInstaller 兼容）；每迁一个补垫片契约测试。
+  后续继续迁移 `tts_engine` 的输出/文本处理逻辑。
 
-剩余 A4（继续拆分）、A5（引擎插件化 Engine 基类）见 ROADMAP。
+剩余 A4（继续拆分 tts_engine）、A5（引擎插件化 Engine 基类）见 ROADMAP。
 
 ## v5.2.1 (2026-09-22)
 

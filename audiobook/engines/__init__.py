@@ -3,16 +3,17 @@
 目标（阶段 1/A5）：定义统一的 `Engine` 抽象基类（list_voices / ready /
 synthesize），内置引擎（edge/local/piper/cosyvoice）与外挂引擎走同一注册表接口。
 
-迁移状态（6.0.0-dev）：抽象基类尚未落地，此处先以延迟再导出暴露现有的引擎
-就绪检查与语音枚举入口，保持功能可用；`Engine` 基类将在 A5 加入本子包。
+迁移状态（6.0.0-dev）：ASR 实现已迁入 `audiobook.engines.asr`（A4）；TTS 引擎与
+`Engine` 抽象基类仍待迁入（A4/A5）。此处以延迟再导出暴露引擎就绪检查、语音枚举
+与转录入口，保持功能可用。
 """
 
 _REEXPORT = {
     "check_engine_ready": ("tts_engine", "check_engine_ready"),
     "get_voice_list": ("tts_engine", "get_voice_list"),
     "get_registered_engines": ("tts_engine", "get_registered_engines"),
-    "check_asr_ready": ("asr_engine", "check_asr_ready"),
-    "transcribe": ("asr_engine", "transcribe"),
+    "check_asr_ready": ("audiobook.engines.asr", "check_asr_ready"),
+    "transcribe": ("audiobook.engines.asr", "transcribe"),
 }
 
 
