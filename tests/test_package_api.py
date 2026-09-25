@@ -94,6 +94,16 @@ class TestCompatShims(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIs(getattr(file_reader, name), getattr(readers, name))
 
+    def test_asr_engine_shim(self):
+        import asr_engine
+        from audiobook.engines import asr
+        for name in ("transcribe", "check_asr_ready", "unload_whisper_model",
+                     "scan_external_asr_engines", "external_asr_transcribe",
+                     "WHISPER_MODELS", "WHISPER_COMPUTE_TYPES", "WHISPER_HF_REPOS",
+                     "_format_timestamp", "_format_srt"):
+            with self.subTest(name=name):
+                self.assertIs(getattr(asr_engine, name), getattr(asr, name))
+
 
 if __name__ == "__main__":
     unittest.main()

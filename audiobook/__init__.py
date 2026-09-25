@@ -32,8 +32,8 @@ _REEXPORT = {
     "check_engine_ready": ("tts_engine", "check_engine_ready"),
     "get_voice_list": ("tts_engine", "get_voice_list"),
     # ASR
-    "transcribe": ("asr_engine", "transcribe"),
-    "check_asr_ready": ("asr_engine", "check_asr_ready"),
+    "transcribe": ("audiobook.engines.asr", "transcribe"),
+    "check_asr_ready": ("audiobook.engines.asr", "check_asr_ready"),
     # IO
     "load_file_content": ("audiobook.io.readers", "load_file_content"),
 }
