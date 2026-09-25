@@ -44,7 +44,15 @@
   现有的按引擎分发（`check_engine_ready` / `get_voice_list` / `get_voice_id` /
   `_generate_one_safe`），**纯附加、零行为变化**。
 
-剩余 A5b（各引擎实现迁入 engines/<name>.py）、A5c（分发改走注册表、删旧分发）见 ROADMAP。
+- **A5b（进行中）各引擎实现迁入 engines/<name>.py**：
+  - **本地系统语音** → `audiobook/engines/local.py`：`_local_generate` 及三个平台实现
+    （macOS say/afconvert、Windows SAPI、Linux espeak-ng）迁出，新增 `LocalEngine`
+    （Engine 子类）；`get_engine("local")` 经 `base._CONCRETE` 返回真实 `LocalEngine`，
+    未迁移引擎仍回退薄适配器。`tts_engine` 再导入 `_local_generate` 保持 local 分支不变。
+    （选本地先行：合成可在 CI 用 espeak-ng+ffmpeg 真实测试；Edge 因需联网 Bing、
+    且异步批量子系统与 convert_batch 深度耦合，留到编排层理清后再迁。）
+
+剩余 A5b（edge/piper/cosyvoice）、A5c（`_generate_one_safe`/`convert_batch` 分发改走注册表、删旧分发）见 ROADMAP。
 
 ## v5.2.1 (2026-09-22)
 
