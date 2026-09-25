@@ -72,15 +72,15 @@ class TestSubPackages(unittest.TestCase):
                     self.assertTrue(callable(value), f"{sub}.{name} 应为可调用对象")
 
     def test_ui_reexport_resolves_if_qt_present(self):
-        try:
-            import PySide6  # noqa: F401
-        except ImportError:
-            try:
-                import PyQt6  # noqa: F401
-            except ImportError:
-                self.skipTest("未安装 Qt6，跳过 audiobook.ui 再导出检查")
+        # 判据必须是"Qt 界面能否真正加载"，而非"Qt 的 Python 包是否存在"：
+        # 无头 CI 上 PySide6 包在、但其 C 扩展缺 libEGL 等系统库仍会 ImportError，
+        # 且可能回退到未安装的 PyQt6。任一情况都应跳过而非失败。
         ui = importlib.import_module("audiobook.ui")
-        self.assertTrue(callable(getattr(ui, "AudiobookConverterMain")))
+        try:
+            cls = getattr(ui, "AudiobookConverterMain")
+        except ImportError:
+            self.skipTest("Qt6 界面不可加载（未安装或缺系统库），跳过 audiobook.ui 再导出检查")
+        self.assertTrue(callable(cls))
 
 
 if __name__ == "__main__":
