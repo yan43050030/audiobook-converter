@@ -104,6 +104,17 @@ class TestCompatShims(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIs(getattr(asr_engine, name), getattr(asr, name))
 
+    def test_io_audio_reexported_by_tts_engine(self):
+        # 音频输出层已迁至 audiobook.io.audio；tts_engine 顶部再导入，
+        # 旧 `from tts_engine import merge_mp3_files, export_m4b, ...` 须为同一对象。
+        import tts_engine
+        from audiobook.io import audio
+        for name in ("_merge_mp3_files", "merge_mp3_files", "get_audio_duration",
+                     "_ffmeta_escape", "build_ffmetadata_chapters", "export_m4b",
+                     "write_id3_tags", "normalize_loudness"):
+            with self.subTest(name=name):
+                self.assertIs(getattr(tts_engine, name), getattr(audio, name))
+
     def test_core_text_reexported_by_tts_engine(self):
         # 纯文本层已迁至 audiobook.core.text；tts_engine 顶部再导入这些名字，
         # 旧 `from tts_engine import detect_chapters, ...` 必须解析为同一对象。

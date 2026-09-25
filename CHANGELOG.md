@@ -31,8 +31,14 @@
     （CHAPTER_PATTERNS / DIALOGUE_PATTERNS / SPEAKER_PATTERN / _SENTENCE_SPLIT_RE）
     共约 260 行迁出；`tts_engine` 顶部再导入这些名字，`from tts_engine import
     detect_chapters, ...` 等旧用法与内部调用保持不变（导入方向反转，非整模块搬移）。
+  - `tts_engine` 的**音频输出层** → `audiobook/io/audio.py`：`merge_mp3_files` /
+    `_merge_mp3_files` / `get_audio_duration` / `export_m4b` / `build_ffmetadata_chapters` /
+    `_ffmeta_escape` / `write_id3_tags` / `normalize_loudness`（约 206 行）。这些函数依赖
+    tts_engine 的 ffmpeg 定位/子进程助手/pydub 配置，故在函数内以 `import tts_engine as _te`
+    惰性引用同一批已配置对象——模块加载期无循环导入，行为不变；`tts_engine` 顶部再导入
+    保持旧 import 与内部调用不变。
 
-剩余 A4（`tts_engine` 输出层 mp3/m4b/ID3、引擎实现）、A5（引擎插件化 Engine 基类）见 ROADMAP。
+剩余 A4（引擎实现 edge/local/piper/cosyvoice）、A5（引擎插件化 Engine 基类）见 ROADMAP。
 
 ## v5.2.1 (2026-09-22)
 
