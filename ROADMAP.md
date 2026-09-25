@@ -11,7 +11,7 @@
 > **v6.0 立项（2026-09）**：架构跨越 + 产品形态扩展，详见文末「v6.0 大版本升级计划」。
 > 当前进度：阶段 1 进行中 —— A1/A2（删遗留与 Tkinter）、A3（包骨架）、A6（集成测试
 > 基线）已并入 main；A4（单体拆分迁移）进行中，已迁 `file_reader → io/readers`、
-> `asr_engine → engines/asr`、`tts_engine` 纯文本层 → `core/text`。
+> `asr_engine → engines/asr`、`tts_engine` 纯文本层 → `core/text`、音频输出层 → `io/audio`。
 
 ## 一、现有功能盘点
 

@@ -27,8 +27,8 @@ _REEXPORT = {
     "convert_batch": ("tts_engine", "convert_batch"),
     "generate_preview": ("tts_engine", "generate_preview"),
     "detect_chapters": ("audiobook.core.text", "detect_chapters"),
-    "export_m4b": ("tts_engine", "export_m4b"),
-    "merge_mp3_files": ("tts_engine", "merge_mp3_files"),
+    "export_m4b": ("audiobook.io.audio", "export_m4b"),
+    "merge_mp3_files": ("audiobook.io.audio", "merge_mp3_files"),
     "check_engine_ready": ("tts_engine", "check_engine_ready"),
     "get_voice_list": ("tts_engine", "get_voice_list"),
     # ASR
