@@ -52,7 +52,16 @@
     （选本地先行：合成可在 CI 用 espeak-ng+ffmpeg 真实测试；Edge 因需联网 Bing、
     且异步批量子系统与 convert_batch 深度耦合，留到编排层理清后再迁。）
 
-剩余 A5b（edge/piper/cosyvoice）、A5c（`_generate_one_safe`/`convert_batch` 分发改走注册表、删旧分发）见 ROADMAP。
+- **A5c（关键步）分发改走注册表**：`Engine` 新增单段原语 `synthesize_segment`
+  （抽象），`synthesize` 改为基类默认实现（分段+合并调用 `synthesize_segment`）。
+  `_generate_one_safe` 的按引擎 if/elif（local/piper/cosyvoice/external，约 75 行）
+  收敛为一处：`get_engine(engine).synthesize_segment` —— 注册表成为逐段合成的分发中枢，
+  分段/合并/进度/重试的编排仍留在 `_generate_one_safe`。适配器 `synthesize_segment`
+  经新增的 `tts_engine._raw_segment_synth(engine)` 解析原语，不再回调 `_generate_one_safe`
+  （消除潜在递归）。**Edge 暂保留异步批量专用路径**（`_edge_generate_multi` 单事件循环），
+  待其具体化后并入。行为不变，本地引擎经注册表分发的 convert_batch 端到端实测通过。
+
+剩余 A5b（edge/piper/cosyvoice 实现迁入 engines/<name>.py）、Edge 编排并入注册表 见 ROADMAP。
 
 ## v5.2.1 (2026-09-22)
 
