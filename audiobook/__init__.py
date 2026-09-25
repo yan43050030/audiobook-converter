@@ -35,7 +35,7 @@ _REEXPORT = {
     "transcribe": ("asr_engine", "transcribe"),
     "check_asr_ready": ("asr_engine", "check_asr_ready"),
     # IO
-    "load_file_content": ("file_reader", "load_file_content"),
+    "load_file_content": ("audiobook.io.readers", "load_file_content"),
 }
 
 
