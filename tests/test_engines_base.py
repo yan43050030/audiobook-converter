@@ -27,7 +27,7 @@ class TestEngineAbstract(unittest.TestCase):
             id = "partial"
             def is_ready(self):
                 return (True, "")
-            # 缺 list_voices / synthesize
+            # 缺 list_voices / synthesize_segment
         with self.assertRaises(TypeError):
             Partial()
 
@@ -71,7 +71,7 @@ class TestRegistry(unittest.TestCase):
                 return (True, "ok")
             def list_voices(self):
                 return {"voiceA": "a"}
-            def synthesize(self, text, voice, rate, out_path, should_stop=None):
+            def synthesize_segment(self, text, voice, rate, out_path, should_stop=None):
                 with open(out_path, "wb") as f:
                     f.write(b"x")
         stub = Stub()
@@ -89,10 +89,34 @@ class TestRegistry(unittest.TestCase):
                 return (True, "")
             def list_voices(self):
                 return {}
-            def synthesize(self, text, voice, rate, out_path, should_stop=None):
+            def synthesize_segment(self, text, voice, rate, out_path, should_stop=None):
                 pass
         with self.assertRaises(ValueError):
             register_engine(NoId())
+
+
+class TestGenerateOneSafeRouting(unittest.TestCase):
+    """A5c：_generate_one_safe 的非 edge 引擎经注册表 synthesize_segment 分发。"""
+
+    def test_routes_through_registry_synthesize_segment(self):
+        from unittest import mock
+        from audiobook.engines.local import LocalEngine
+        calls = []
+
+        class Spy(LocalEngine):
+            def synthesize_segment(self, text, voice, rate, out_path, should_stop=None):
+                calls.append(text)
+                with open(out_path, "wb") as f:
+                    f.write(b"\x00" * 16)  # 非空即视为成功
+
+        d = tempfile.mkdtemp()
+        out = os.path.join(d, "o.mp3")
+        # _generate_one_safe 在函数内 `from audiobook.engines.base import get_engine`，
+        # 故打桩该名字即可拦截分发。
+        with mock.patch("audiobook.engines.base.get_engine", return_value=Spy()):
+            tts_engine._generate_one_safe("一段短文本", "cmn", "+0%", out, engine="local")
+        self.assertTrue(calls, "synthesize_segment 未被调用（未走注册表分发）")
+        self.assertTrue(os.path.exists(out) and os.path.getsize(out) > 0)
 
 
 def _has_espeak():

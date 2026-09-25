@@ -43,14 +43,42 @@ class Engine(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def synthesize(self, text: str, voice: str, rate: str, out_path: str,
-                   should_stop=None) -> None:
-        """把 text 合成为单个音频文件写到 out_path。
+    def synthesize_segment(self, text: str, voice: str, rate: str, out_path: str,
+                           should_stop=None) -> None:
+        """把**一段**文本原样合成为单个音频文件（不做分段）。
 
-        voice 为 voice_id；rate 形如 "+0%" / "-20%"；should_stop 为可选的
-        中断回调（返回真值时应尽快抛出中断）。
+        这是分发的最小原语：编排层（`_generate_one_safe` / `convert_batch` /
+        本类的 `synthesize`）负责分段、合并、重试与进度，引擎只管把给定文本
+        合成出来。voice 为 voice_id；rate 形如 "+0%"；should_stop 为可选中断回调。
         """
         raise NotImplementedError
+
+    def synthesize(self, text: str, voice: str, rate: str, out_path: str,
+                   should_stop=None) -> None:
+        """把 text 合成为单个音频文件（超长自动分段后合并）。
+
+        默认实现基于 `synthesize_segment`：直接/库调用可用；应用内的批量生成走
+        `_generate_one_safe`（额外带重试与逐段进度）。不含重试——重试属编排层。
+        """
+        from audiobook.core.text import split_text
+        from audiobook.io.audio import _merge_mp3_files
+        import os as _os
+        import shutil as _shutil
+        import tempfile as _tempfile
+        segments = split_text(text)
+        if len(segments) == 1:
+            self.synthesize_segment(segments[0], voice, rate, out_path, should_stop=should_stop)
+            return
+        temp_dir = _tempfile.mkdtemp()
+        temp_files = []
+        try:
+            for i, seg in enumerate(segments):
+                tp = _os.path.join(temp_dir, f"seg_{i:04d}.mp3")
+                self.synthesize_segment(seg, voice, rate, tp, should_stop=should_stop)
+                temp_files.append(tp)
+            _merge_mp3_files(temp_files, out_path)
+        finally:
+            _shutil.rmtree(temp_dir, ignore_errors=True)
 
     def __repr__(self) -> str:  # pragma: no cover - 便于调试
         return f"<Engine {self.id!r} ({self.display_name})>"
@@ -72,11 +100,10 @@ class _TtsEngineAdapter(Engine):
         return {disp: _te.get_voice_id(disp, self.id)
                 for disp in _te.get_voice_list(self.id)}
 
-    def synthesize(self, text: str, voice: str, rate: str, out_path: str,
-                   should_stop=None) -> None:
+    def synthesize_segment(self, text: str, voice: str, rate: str, out_path: str,
+                           should_stop=None) -> None:
         import tts_engine as _te
-        _te._generate_one_safe(text, voice, rate, out_path,
-                               engine=self.id, should_stop=should_stop)
+        _te._raw_segment_synth(self.id)(text, voice, rate, out_path, should_stop=should_stop)
 
 
 # ================ 注册表 ================

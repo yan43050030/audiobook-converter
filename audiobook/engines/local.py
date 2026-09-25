@@ -140,22 +140,7 @@ class LocalEngine(Engine):
         return {disp: _te.get_voice_id(disp, "local")
                 for disp in _te.get_voice_list("local")}
 
-    def synthesize(self, text, voice, rate, out_path, should_stop=None):
-        # 合成编排（分段 + 合并）与 tts_engine._generate_one_safe 的 local 分支一致；
-        # 重试属编排层，仍由 _generate_one_safe / convert_batch 负责，不在引擎内。
-        from audiobook.core.text import split_text
-        from audiobook.io.audio import _merge_mp3_files
-        segments = split_text(text)
-        if len(segments) == 1:
-            _local_generate(segments[0], voice, rate, out_path, should_stop=should_stop)
-            return
-        temp_dir = tempfile.mkdtemp()
-        temp_files = []
-        try:
-            for i, seg in enumerate(segments):
-                tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
-                _local_generate(seg, voice, rate, tp, should_stop=should_stop)
-                temp_files.append(tp)
-            _merge_mp3_files(temp_files, out_path)
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+    def synthesize_segment(self, text, voice, rate, out_path, should_stop=None):
+        # 单段原语：直接调用平台合成；分段/合并/重试由编排层负责（base.synthesize
+        # 或 tts_engine._generate_one_safe）。
+        _local_generate(text, voice, rate, out_path, should_stop=should_stop)
