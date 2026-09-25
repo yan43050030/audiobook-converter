@@ -104,6 +104,21 @@ class TestCompatShims(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertIs(getattr(asr_engine, name), getattr(asr, name))
 
+    def test_core_text_reexported_by_tts_engine(self):
+        # 纯文本层已迁至 audiobook.core.text；tts_engine 顶部再导入这些名字，
+        # 旧 `from tts_engine import detect_chapters, ...` 必须解析为同一对象。
+        import tts_engine
+        from audiobook.core import text
+        for name in ("detect_chapters", "_find_source", "detect_dialogue_segments",
+                     "extract_speakers", "_resolve_segment_voice", "split_text",
+                     "_split_by_sentences", "split_by_duration",
+                     "generate_srt_from_text", "_srt_timestamp",
+                     "sanitize_filename", "estimate_duration",
+                     "CHARS_PER_SECOND_BASE", "CHAPTER_PATTERNS",
+                     "DIALOGUE_PATTERNS", "SPEAKER_PATTERN", "_SENTENCE_SPLIT_RE"):
+            with self.subTest(name=name):
+                self.assertIs(getattr(tts_engine, name), getattr(text, name))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -26,7 +26,7 @@ _REEXPORT = {
     # 核心转换
     "convert_batch": ("tts_engine", "convert_batch"),
     "generate_preview": ("tts_engine", "generate_preview"),
-    "detect_chapters": ("tts_engine", "detect_chapters"),
+    "detect_chapters": ("audiobook.core.text", "detect_chapters"),
     "export_m4b": ("tts_engine", "export_m4b"),
     "merge_mp3_files": ("tts_engine", "merge_mp3_files"),
     "check_engine_ready": ("tts_engine", "check_engine_ready"),

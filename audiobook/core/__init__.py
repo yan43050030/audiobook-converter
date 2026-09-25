@@ -2,18 +2,19 @@
 
 目标：承载与引擎/界面无关的纯逻辑，便于独立测试与复用。
 
-迁移状态（6.0.0-dev）：实现暂位于顶层 `tts_engine`，此处先以延迟再导出建立
-稳定导入路径；阶段 1/A4 会把相关纯函数迁入本子包。
+迁移状态（6.0.0-dev）：纯文本处理逻辑已迁入 `audiobook.core.text`（A4）；此处
+再导出指向该模块。`tts_engine` 顶部再导入这些名字，保持旧 import 兼容。
 """
 
 _REEXPORT = {
-    "detect_chapters": ("tts_engine", "detect_chapters"),
-    "detect_dialogue_segments": ("tts_engine", "detect_dialogue_segments"),
-    "extract_speakers": ("tts_engine", "extract_speakers"),
-    "split_text": ("tts_engine", "split_text"),
-    "split_by_duration": ("tts_engine", "split_by_duration"),
-    "sanitize_filename": ("tts_engine", "sanitize_filename"),
-    "estimate_duration": ("tts_engine", "estimate_duration"),
+    "detect_chapters": ("audiobook.core.text", "detect_chapters"),
+    "detect_dialogue_segments": ("audiobook.core.text", "detect_dialogue_segments"),
+    "extract_speakers": ("audiobook.core.text", "extract_speakers"),
+    "split_text": ("audiobook.core.text", "split_text"),
+    "split_by_duration": ("audiobook.core.text", "split_by_duration"),
+    "sanitize_filename": ("audiobook.core.text", "sanitize_filename"),
+    "estimate_duration": ("audiobook.core.text", "estimate_duration"),
+    "generate_srt_from_text": ("audiobook.core.text", "generate_srt_from_text"),
 }
 
 
