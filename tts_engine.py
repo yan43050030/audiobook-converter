@@ -88,7 +88,7 @@ from audiobook.io.audio import (  # noqa: E402,F401
 # （local.py 在函数内惰性引用 tts_engine 的助手，无模块级循环导入。）
 from audiobook.engines.local import _local_generate  # noqa: E402,F401
 
-VERSION = "6.0.0-dev"
+VERSION = "6.0.0-beta.1"
 
 # 当前平台
 _PLATFORM = platform.system()  # "Darwin" / "Windows" / "Linux"
