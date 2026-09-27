@@ -90,6 +90,11 @@ base_hidden = [
     'pygame',
 ]
 all_hidden = base_hidden + piper_hidden + onnx_hidden + pygame_hidden + _doc_hidden + [
+    # v6.0 audiobook 包（部分子模块经 importlib 惰性再导出，显式声明确保打包）
+    'audiobook', 'audiobook.core', 'audiobook.core.text',
+    'audiobook.io', 'audiobook.io.readers', 'audiobook.io.audio',
+    'audiobook.engines', 'audiobook.engines.base', 'audiobook.engines.local',
+    'audiobook.engines.asr',
     # ASR 语音转文字
     'faster_whisper', 'ctranslate2',
     # Qt6 GUI（PySide6 推荐 / PyQt6 回退）
@@ -167,7 +172,7 @@ app = BUNDLE(
         'CFBundleName': 'AudiobookConverter',
         'CFBundleDisplayName': '文字转有声读物',
         'CFBundleVersion': '6.0.0',
-        'CFBundleShortVersionString': '6.0.0-dev',
+        'CFBundleShortVersionString': '6.0.0-beta.1',
         'NSHumanReadableCopyright': 'AudiobookConverter',
         'NSHighResolutionCapable': True,
     },
