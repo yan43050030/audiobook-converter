@@ -1,3 +1,29 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "audiobook-converter"
+version = "6.0.0-beta.1"
+description = "文字转有声读物 / Text-to-Audiobook Converter"
+readme = "README.md"
+requires-python = ">=3.11"
+# 运行时依赖以 requirements.txt 为准（多为可选引擎，按需安装）；此处仅声明命令行
+# 转换所需的最小集合，保持 `pip install .` 后 CLI 即可用（GUI 另需 PySide6）。
+dependencies = [
+    "requests>=2.28.0",
+]
+
+[project.scripts]
+audiobook = "audiobook.cli:main"
+
+[tool.setuptools]
+# 扁平布局：显式声明顶层模块与 audiobook 包，避免自动发现歧义
+py-modules = ["tts_engine", "asr_engine", "file_reader", "audio_player", "gui_pyside6", "main"]
+
+[tool.setuptools.packages.find]
+include = ["audiobook*"]
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]

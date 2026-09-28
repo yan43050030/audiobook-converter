@@ -83,11 +83,30 @@ pip install PyMuPDF           # PDF 文档读取
 pip install python-docx       # Word DOCX 优化读取
 ```
 
-### 运行
+### 运行（图形界面）
 
 ```bash
 python main.py
 ```
+
+### 命令行 / 脚本调用（v6.0 新增）
+
+无需图形界面，可用命令行批量转换、脚本化：
+
+```bash
+# 直接用（在仓库目录）
+python -m audiobook engines                       # 列出引擎及就绪状态
+python -m audiobook voices --engine local         # 列出某引擎的语音
+python -m audiobook convert book.epub \           # 转成有声书
+    --engine local --split chapter --out out --m4b --srt --metadata
+python -m audiobook transcribe audio.mp3 --model base --format srt   # 语音转文字
+
+# 或安装后用 `audiobook` 命令
+pip install -e .
+audiobook convert *.txt --engine edge --voice 晓晓（女声，自然） --out out --m4b
+```
+
+也可作为库调用：`from audiobook import convert_batch, transcribe, load_file_content`。
 
 ### 打包为独立应用
 
