@@ -130,12 +130,19 @@ def _load_config() -> dict:
     try:
         if os.path.exists(CONFIG_PATH):
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                _config_cache = json.load(f) or {}
+                raw = json.load(f) or {}
         else:
-            _config_cache = {}
+            raw = {}
     except Exception as e:
         logger.warning(f"读取配置失败，使用默认值: {e}")
-        _config_cache = {}
+        raw = {}
+    # 按 schema 规范化（坏值回退默认、未知键保留）；规范化本身失败则退回原始值
+    try:
+        from audiobook.config import normalize as _normalize_config
+        _config_cache = _normalize_config(raw)
+    except Exception as e:
+        logger.warning(f"配置规范化失败，使用原始值: {e}")
+        _config_cache = raw if isinstance(raw, dict) else {}
     return _config_cache
 
 

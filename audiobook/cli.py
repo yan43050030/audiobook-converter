@@ -119,6 +119,20 @@ def cmd_convert(args):
     return 0
 
 
+def cmd_config(args):
+    import tts_engine as _te
+    from audiobook.config import SCHEMA, effective
+    cfg = effective(_te._load_config())
+    print(f"配置文件: {_te.CONFIG_PATH}")
+    for key, spec in SCHEMA.items():
+        print(f"  {key:20} = {cfg.get(key)!r:>18}   # {spec['help']}")
+    # 展示未被 schema 覆盖的未知键（前向兼容）
+    extras = {k: v for k, v in cfg.items() if k not in SCHEMA}
+    for key, val in extras.items():
+        print(f"  {key:20} = {val!r:>18}   # (未知键，原样保留)")
+    return 0
+
+
 def cmd_transcribe(args):
     import tts_engine as _te
     from audiobook.engines.asr import transcribe
@@ -169,6 +183,10 @@ def build_parser():
     v = sub.add_parser("voices", help="列出某引擎的可用语音")
     v.add_argument("--engine", default="local", help="引擎 id（默认 local）")
     v.set_defaults(func=cmd_voices)
+
+    # config
+    cf = sub.add_parser("config", help="查看生效配置及各项说明")
+    cf.set_defaults(func=cmd_config)
 
     # transcribe
     t = sub.add_parser("transcribe", help="语音转文字（ASR，需 faster-whisper）")
