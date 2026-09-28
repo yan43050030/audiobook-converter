@@ -69,6 +69,17 @@
 
 剩余 A5b（edge/piper/cosyvoice 实现迁入 engines/<name>.py）、Edge 编排并入注册表 见 ROADMAP。
 
+### 阶段 2（产品形态）— B2 命令行 / 库 API
+
+- 新增 `audiobook/cli.py` + `python -m audiobook` 入口 + 可安装的 `audiobook` 命令
+  （pyproject 声明 `[project.scripts]`）。子命令：
+  - `convert <文件...>`：多格式读取 → 章节/时长/单文件拆分 → mp3，可选 `--m4b`/`--srt`/
+    `--metadata`/`--normalize`/`--dialogue`，`--engine`/`--voice`/`--rate`/`--split` 等。
+  - `engines`：列出引擎与就绪状态；`voices --engine X`：列出语音；`transcribe`：ASR。
+- 复用 v6.0 分层实现与引擎注册表（`get_engine`/`all_engines`/`LocalEngine`），无需 GUI/Qt。
+- 新增 `test_cli`：列表命令、参数校验、本地引擎 convert 端到端（gated espeak+ffmpeg）。
+  让"可编程"形态可用且可在 CI 真实测试。
+
 ## v5.2.1 (2026-09-22)
 
 ## v5.2.1 本次升级内容（Bug 修复 + 界面打磨）
