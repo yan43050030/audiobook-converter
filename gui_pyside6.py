@@ -404,7 +404,11 @@ QTabBar::tab:selected { color: #1D1B1A; background: #F2F0EC; font-weight: bold; 
 QTabBar::tab:hover { color: #2563EB; }
 
 /* === 分割 === */
-QSplitter::handle { width: 4px; background: #D5D0C8; }
+/* 分别指定横/竖分隔条厚度：竖向分隔条（如章节/文本）的把手厚度由 height 决定，
+   只设 width 会让它塌成不可拖动的细条。 */
+QSplitter::handle { background: #D5D0C8; }
+QSplitter::handle:horizontal { width: 6px; }
+QSplitter::handle:vertical { height: 6px; }
 
 /* === 侧栏 === */
 QFrame#sidebarFrame { background: #E8E4DE; border-right: 1px solid #D5D0C8; }
@@ -548,7 +552,10 @@ QTabBar::tab:selected { color: #E0E0E0; background: #1E1E1E; font-weight: bold; 
 QTabBar::tab:hover { color: #3B82F6; }
 
 /* === 分割 === */
-QSplitter::handle { width: 4px; background: #444; }
+/* 分别指定横/竖分隔条厚度（竖向把手厚度看 height，只设 width 会不可拖动）。 */
+QSplitter::handle { background: #444; }
+QSplitter::handle:horizontal { width: 6px; }
+QSplitter::handle:vertical { height: 6px; }
 
 /* === 侧栏 === */
 QFrame#sidebarFrame { background: #151515; border-right: 1px solid #333; }
@@ -658,6 +665,9 @@ class AudiobookConverterMain(QMainWindow):
         self._chapter_tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._chapter_tree.itemSelectionChanged.connect(self._on_chapter_select)
         self._chapter_tree.itemChanged.connect(self._on_chapter_check_changed)
+        # 兜底可见高度：即便分隔条被拖到最上，章节列表也至少显示 ~7 行，
+        # 避免被压成只看得到一两条
+        self._chapter_tree.setMinimumHeight(160)
         ch_layout.addWidget(self._chapter_tree)
         left_splitter.addWidget(ch_group)
 
@@ -671,11 +681,18 @@ class AudiobookConverterMain(QMainWindow):
         text_gl.addWidget(self._text_area)
         left_splitter.addWidget(text_group)
 
-        # 初始高度分配：章节列表约 45%，文本内容约 55%（文本为主要编辑区）
-        left_splitter.setStretchFactor(0, 0)
+        # 把手加厚且不可塌陷，保证两侧都能用鼠标拖动调整高度
+        left_splitter.setHandleWidth(6)
+        left_splitter.setChildrenCollapsible(False)
+        # 初始高度分配：章节列表与文本内容都参与伸缩，章节列表拿到更充裕的初始高度
+        left_splitter.setStretchFactor(0, 1)
         left_splitter.setStretchFactor(1, 1)
-        left_splitter.setSizes([320, 380])
+        left_splitter.setSizes([360, 340])
         left_layout.addWidget(left_splitter, 1)
+        # 窗口显示后再套用一次初始比例：构造期分隔条尚无实际尺寸，此时 setSizes
+        # 常被忽略，延后到事件循环空闲时再设，初始分配才真正生效
+        self._left_splitter = left_splitter
+        QTimer.singleShot(0, lambda: left_splitter.setSizes([360, 340]))
 
         splitter.addWidget(left)
 

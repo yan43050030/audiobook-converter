@@ -8,6 +8,15 @@
 > 改动见下方「v6.0.0 大版本重构」小节。CLI/库 API、其余引擎具体化、Web UI 等在后续
 > beta/正式版推进。PyInstaller 三平台 spec 已补 `audiobook` 包 hiddenimports 以确保打包。
 
+### 界面修复 — 章节列表高度（beta.1 后）
+
+- 竖向分隔条（章节列表 / 文本内容之间）此前 QSS 只设了 `width`，而竖向把手厚度由
+  `height` 决定，导致把手塌成细条、**无法拖动调整高度**；改为按方向分别设置
+  `:horizontal{width}` / `:vertical{height}`（深浅两套 QSS），并 `setHandleWidth(6)`。
+- 章节列表易被压到只显示一两行：给章节树 `setMinimumHeight(160)`（约 7 行兜底），
+  分隔条 `setChildrenCollapsible(False)` 禁止塌陷，初始高度分配偏向章节列表，
+  并在窗口显示后再套用一次初始比例（构造期 `setSizes` 常被忽略）。
+
 ## v6.0.0 大版本重构（阶段 1 已完成，见 ROADMAP.md「v6.0 大版本升级计划」）
 
 主题：架构跨越 + 产品形态扩展。分三阶段，每阶段可独立发布。
