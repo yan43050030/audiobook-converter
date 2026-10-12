@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>文字转有声读物 · Web UI</title>
+<style>
+  :root{
+    --bg:#faf7f2; --panel:#fff; --ink:#2b2b2b; --muted:#8a8178;
+    --line:#e7e0d6; --accent:#c2703d; --accent-ink:#fff; --ok:#3f8f5b; --err:#c0392b;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#1d1b19; --panel:#26231f; --ink:#ece7e0; --muted:#a49a8d;
+      --line:#3a352f; --accent:#d1834f; --accent-ink:#1d1b19; --ok:#6bbf85; --err:#e07a6a; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.55 -apple-system,"Segoe UI",Roboto,"Noto Sans SC",sans-serif}
+  header{padding:18px 20px;border-bottom:1px solid var(--line);
+    display:flex;align-items:baseline;gap:12px}
+  header h1{font-size:18px;margin:0;font-weight:650}
+  header .v{color:var(--muted);font-size:13px}
+  main{max-width:880px;margin:0 auto;padding:20px 16px 60px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:16px 18px;margin-bottom:16px}
+  label{display:block;font-size:13px;color:var(--muted);margin:12px 0 4px}
+  input[type=text],textarea,select{width:100%;padding:9px 11px;border:1px solid var(--line);
+    border-radius:8px;background:var(--bg);color:var(--ink);font:inherit}
+  textarea{min-height:140px;resize:vertical}
+  .row{display:flex;gap:12px;flex-wrap:wrap}
+  .row > div{flex:1;min-width:150px}
+  .checks{display:flex;gap:16px;flex-wrap:wrap;margin-top:12px}
+  .checks label{display:flex;align-items:center;gap:6px;margin:0;color:var(--ink);font-size:14px}
+  .checks input{width:auto}
+  button{appearance:none;border:0;border-radius:8px;padding:10px 18px;font:inherit;
+    font-weight:600;cursor:pointer;background:var(--accent);color:var(--accent-ink)}
+  button:disabled{opacity:.55;cursor:default}
+  .muted{color:var(--muted);font-size:13px}
+  .bar{height:8px;background:var(--line);border-radius:6px;overflow:hidden;margin:8px 0}
+  .bar > i{display:block;height:100%;width:0;background:var(--accent);transition:width .3s}
+  .status{font-weight:600}
+  .status.done{color:var(--ok)} .status.error{color:var(--err)}
+  a.dl{display:inline-block;margin:4px 10px 4px 0;color:var(--accent);text-decoration:none;
+    border:1px solid var(--line);border-radius:7px;padding:5px 10px}
+  a.dl:hover{border-color:var(--accent)}
+  .pill{display:inline-block;font-size:12px;padding:1px 8px;border-radius:20px;
+    border:1px solid var(--line);color:var(--muted);margin-left:6px}
+  .pill.ok{color:var(--ok);border-color:var(--ok)}
+</style>
+</head>
+<body>
+<header>
+  <h1>文字转有声读物</h1><span class="v">Web UI · v6.0</span>
+</header>
+<main>
+  <div class="card">
+    <label>粘贴文本（或在下方上传文件，二者可并用）</label>
+    <textarea id="text" placeholder="在此粘贴要转换的文字…"></textarea>
+    <label>上传文件（可多选：txt / md / docx / epub / html / pdf）</label>
+    <input type="file" id="files" multiple>
+    <div class="row">
+      <div>
+        <label>引擎</label>
+        <select id="engine"></select>
+      </div>
+      <div>
+        <label>语音</label>
+        <select id="voice"></select>
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label>语速</label>
+        <input type="text" id="rate" value="+0%">
+      </div>
+      <div>
+        <label>拆分方式</label>
+        <select id="split">
+          <option value="chapter">按章节</option>
+          <option value="time">按时长</option>
+          <option value="single">合并单文件</option>
+        </select>
+      </div>
+      <div>
+        <label>文件名前缀 / 专辑名</label>
+        <input type="text" id="prefix" value="有声读物">
+      </div>
+    </div>
+    <div class="checks">
+      <label><input type="checkbox" id="srt"> 生成字幕(srt)</label>
+      <label><input type="checkbox" id="m4b"> 导出 m4b(章节)</label>
+      <label><input type="checkbox" id="metadata"> 写入元数据</label>
+      <label><input type="checkbox" id="dialogue"> 对话检测</label>
+      <label><input type="checkbox" id="normalize"> 响度归一化</label>
+    </div>
+    <div style="margin-top:16px">
+      <button id="go">开始转换</button>
+      <span id="hint" class="muted"></span>
+    </div>
+  </div>
+
+  <div class="card" id="jobcard" style="display:none">
+    <div>状态：<span id="jstatus" class="status">—</span>
+      <span id="jpill" class="pill" style="display:none"></span></div>
+    <div class="bar"><i id="jbar"></i></div>
+    <div class="muted" id="jprog"></div>
+    <div id="jfiles" style="margin-top:10px"></div>
+    <div class="status error" id="jerr" style="margin-top:8px"></div>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+
+async function loadEngines(){
+  const r = await fetch('/api/engines'); const d = await r.json();
+  const sel = $('engine'); sel.innerHTML = '';
+  d.engines.forEach(e => {
+    const o = document.createElement('option');
+    o.value = e.id; o.textContent = e.name + (e.ready ? ' ✓' : ' (不可用)');
+    sel.appendChild(o);
+  });
+  await loadVoices();
+}
+async function loadVoices(){
+  const eng = $('engine').value;
+  const sel = $('voice'); sel.innerHTML = '<option>加载中…</option>';
+  try{
+    const r = await fetch('/api/voices?engine=' + encodeURIComponent(eng));
+    const d = await r.json(); sel.innerHTML = '';
+    const entries = Object.entries(d.voices || {});
+    if(!entries.length){ sel.innerHTML = '<option value="">（无可用语音）</option>'; return; }
+    entries.forEach(([disp, vid]) => {
+      const o = document.createElement('option'); o.value = vid; o.textContent = disp;
+      sel.appendChild(o);
+    });
+  }catch(e){ sel.innerHTML = '<option value="">（加载失败）</option>'; }
+}
+$('engine').addEventListener('change', loadVoices);
+
+let poll = null;
+async function convert(){
+  const fd = new FormData();
+  fd.append('text', $('text').value);
+  fd.append('engine', $('engine').value);
+  fd.append('voice', $('voice').value);
+  fd.append('rate', $('rate').value);
+  fd.append('split', $('split').value);
+  fd.append('prefix', $('prefix').value);
+  ['srt','m4b','metadata','dialogue','normalize'].forEach(k => fd.append(k, $(k).checked));
+  for(const f of $('files').files) fd.append('files', f);
+
+  $('go').disabled = true; $('hint').textContent = '提交中…';
+  let d;
+  try{
+    const r = await fetch('/api/convert', {method:'POST', body:fd});
+    d = await r.json();
+    if(!r.ok){ throw new Error(d.detail || '提交失败'); }
+  }catch(e){
+    $('go').disabled = false; $('hint').textContent = '错误：' + e.message; return;
+  }
+  $('hint').textContent = '';
+  $('jobcard').style.display = 'block';
+  $('jfiles').innerHTML=''; $('jerr').textContent=''; $('jpill').style.display='none';
+  if(poll) clearInterval(poll);
+  poll = setInterval(() => track(d.job_id), 1000);
+  track(d.job_id);
+}
+
+async function track(id){
+  const r = await fetch('/api/jobs/' + id); const j = await r.json();
+  const st = $('jstatus'); st.textContent = j.status; st.className = 'status ' + j.status;
+  const p = j.progress || {cur:0,total:0};
+  const pct = p.total ? Math.round(p.cur / p.total * 100) : (j.status==='done'?100:0);
+  $('jbar').style.width = pct + '%';
+  $('jprog').textContent = p.total ? `进度 ${p.cur}/${p.total}（${pct}%）` : '';
+  if(j.status === 'done' || j.status === 'error'){
+    clearInterval(poll); poll = null; $('go').disabled = false;
+    if(j.status === 'done'){
+      const pill = $('jpill'); pill.style.display='inline-block';
+      pill.className='pill ok'; pill.textContent = j.files.length + ' 个文件';
+      $('jfiles').innerHTML = j.files.map(f =>
+        `<a class="dl" href="/api/jobs/${id}/files/${encodeURIComponent(f)}">⬇ ${f}</a>`).join('');
+    }
+    if(j.status === 'error') $('jerr').textContent = '失败：' + (j.error || '未知错误');
+  }
+}
+$('go').addEventListener('click', convert);
+loadEngines();
+</script>
+</body>
+</html>

@@ -15,7 +15,9 @@
 > A5a（`Engine` 接口 + 注册表）、A5c（分发改走注册表）已完成；A5b 进行中
 > （`LocalEngine` 已迁，edge/piper/cosyvoice 待迁）。**已发布可用版本 v6.0.0-beta.1**
 > （macOS/Windows 构建）。**阶段 2 B2（CLI + 库 API）已完成**：`audiobook convert/engines/
-> voices/transcribe`。剩余：edge/piper/cosyvoice 具体化、B3 配置 schema、B4 Web UI。
+> voices/transcribe`。**B3（配置 schema，`audiobook.config` + CLI `config`）、B4（本地
+> Web UI，FastAPI + `audiobook serve`）已完成**。剩余：edge/piper/cosyvoice 具体化（A5b 尾），
+> 以及阶段 3 旗舰（声音克隆 / 工作区重设计）。
 
 ## 一、现有功能盘点
 
