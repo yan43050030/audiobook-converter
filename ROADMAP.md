@@ -12,12 +12,13 @@
 > 当前进度：阶段 1 进行中 —— A1/A2（删遗留与 Tkinter）、A3（包骨架）、A6（集成测试
 > 基线）已并入 main；A4（单体拆分迁移）进行中，已迁 `file_reader → io/readers`、
 > `asr_engine → engines/asr`、`tts_engine` 纯文本层 → `core/text`、音频输出层 → `io/audio`。
-> A5a（`Engine` 接口 + 注册表）、A5c（分发改走注册表）已完成；A5b 进行中
-> （`LocalEngine` 已迁，edge/piper/cosyvoice 待迁）。**已发布可用版本 v6.0.0-beta.1**
-> （macOS/Windows 构建）。**阶段 2 B2（CLI + 库 API）已完成**：`audiobook convert/engines/
-> voices/transcribe`。**B3（配置 schema，`audiobook.config` + CLI `config`）、B4（本地
-> Web UI，FastAPI + `audiobook serve`）已完成**。剩余：edge/piper/cosyvoice 具体化（A5b 尾），
-> 以及阶段 3 旗舰（声音克隆 / 工作区重设计）。
+> A5a（`Engine` 接口 + 注册表）、A5c（分发改走注册表）已完成；**A5b 引擎具体化已完成**
+> —— local/edge/piper/cosyvoice 均为独立 Engine 子类（各自模块），通用适配器仅保留给
+> 外挂插件引擎（piper/cosyvoice 的重实现暂留 `tts_engine`，可后续整体迁入各自模块）。
+> **已发布可用版本 v6.0.0-beta.1**（macOS/Windows 构建）。**阶段 2 B2（CLI + 库 API）已完成**：
+> `audiobook convert/engines/voices/transcribe`。**B3（配置 schema，`audiobook.config` + CLI
+> `config`）、B4（本地 Web UI，FastAPI + `audiobook serve`）已完成**。剩余：阶段 3 旗舰
+> （声音克隆 / 工作区重设计）。
 
 ## 一、现有功能盘点
 

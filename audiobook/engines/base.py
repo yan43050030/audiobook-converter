@@ -110,10 +110,13 @@ class _TtsEngineAdapter(Engine):
 
 _REGISTRY: Dict[str, Engine] = {}
 
-# 已迁移为独立 Engine 子类的内置引擎： id -> (模块, 类名)。
-# get_engine 优先用它们，未迁移的引擎回退到 _TtsEngineAdapter。
+# 已具体化为独立 Engine 子类的内置引擎： id -> (模块, 类名)。
+# get_engine 优先用它们；只有外挂插件引擎才回退到 _TtsEngineAdapter。
 _CONCRETE: Dict[str, Tuple[str, str]] = {
     "local": ("audiobook.engines.local", "LocalEngine"),
+    "edge": ("audiobook.engines.edge", "EdgeEngine"),
+    "piper": ("audiobook.engines.piper", "PiperEngine"),
+    "cosyvoice": ("audiobook.engines.cosyvoice", "CosyVoiceEngine"),
 }
 
 
