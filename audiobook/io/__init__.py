@@ -3,7 +3,7 @@
 输入：txt / md / docx / epub / html / pdf 多格式读取。
 输出：mp3 合并 · m4b 有声书（内嵌章节）· srt 字幕 · ID3 元数据。
 
-迁移状态（6.0.0-dev）：读取实现已迁入 `audiobook.io.readers`、音频输出实现已迁入
+迁移状态（6.0.0）：读取实现已迁入 `audiobook.io.readers`、音频输出实现已迁入
 `audiobook.io.audio`（A4）；srt 字幕生成在 `audiobook.core.text`。
 """
 

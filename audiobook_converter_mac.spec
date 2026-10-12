@@ -173,7 +173,7 @@ app = BUNDLE(
         'CFBundleName': 'AudiobookConverter',
         'CFBundleDisplayName': '文字转有声读物',
         'CFBundleVersion': '6.0.0',
-        'CFBundleShortVersionString': '6.0.0-beta.1',
+        'CFBundleShortVersionString': '6.0.0',
         'NSHumanReadableCopyright': 'AudiobookConverter',
         'NSHighResolutionCapable': True,
     },

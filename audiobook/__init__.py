@@ -8,7 +8,7 @@ v6.0 重构目标结构（迁移分阶段进行，见 ROADMAP.md「v6.0 大版�
       io/        文件读取（txt/md/docx/epub/html/pdf）· 输出（mp3/m4b/srt/id3）
       ui/        PySide6/Qt6 界面
 
-当前阶段（6.0.0-dev，阶段 1/A3）：包骨架已建立，`audiobook` 暴露稳定的公共
+当前状态（6.0.0）：包骨架已建立，`audiobook` 暴露稳定的公共
 导入面，实际实现仍位于顶层 `tts_engine` / `asr_engine` / `file_reader` 模块。
 后续阶段（A4）将逐步把实现迁入子包，顶层模块保留为薄再导出以保持兼容。
 
