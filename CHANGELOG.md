@@ -89,6 +89,28 @@
 - 新增 `test_cli`：列表命令、参数校验、本地引擎 convert 端到端（gated espeak+ffmpeg）。
   让"可编程"形态可用且可在 CI 真实测试。
 
+### 阶段 2（产品形态）— B3 配置 schema
+
+- 新增 `audiobook/config.py`：`SCHEMA` 一处权威定义 config.json 各项（默认值/类型/
+  取值范围/说明），`defaults()`/`normalize()`/`effective()` 纯函数、零依赖。
+- `tts_engine._load_config` 加载后经 `normalize` 规范化：已知键坏值回退默认、未知键
+  原样保留（前向兼容）、缺失键不注入（磁盘文件形态不变）；规范化异常退回原始值。
+- CLI 新增 `config` 子命令查看生效配置。默认值与历史 `.get()` 回退逐项一致，行为不变。
+
+### 阶段 2（产品形态）— B4 本地 Web UI
+
+- 新增 `audiobook/web/`（FastAPI）：浏览器界面，可跑在 NAS/服务器批量转换，绕开
+  PyInstaller 打包。接口 `engines`/`voices`/`convert`（后台线程任务 + 进度轮询）/
+  `jobs`/下载；前端单页 `index.html`（深浅色自适应）。
+- CLI 新增 `serve` 子命令（`audiobook serve --host --port`，需 `[web]` 可选依赖）。
+- 复用 `tts_engine.convert_batch` 与引擎注册表、读取器，不重复实现转换逻辑；FastAPI 等
+  重依赖延迟导入，`import audiobook` 仍很轻。产物落在 `<存储目录>/web_output/<job>/`，
+  下载接口做了目录穿越防护。
+- `fastapi`/`uvicorn`/`python-multipart` 为可选依赖（pyproject `[project.optional-dependencies].web`）。
+- 新增 `test_web`（TestClient，打桩 convert_batch，不依赖 espeak/ffmpeg）。
+- CI 测试运行器由 `unittest discover` 改为 `pytest`，并在两腿装 `pytest`/`httpx`、full 腿
+  装 Web 依赖，使此前未被 unittest 收集的函数式用例（含 B3/B4）在 CI 真正执行。
+
 ## v5.2.1 (2026-09-22)
 
 ## v5.2.1 本次升级内容（Bug 修复 + 界面打磨）

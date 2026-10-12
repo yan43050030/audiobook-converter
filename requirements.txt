@@ -19,6 +19,13 @@ audioop-lts>=0.2.0; python_version>="3.13"
 # PySide6 GUI（推荐，LGPL 许可）
 PySide6>=6.5.0
 
+# 可选：本地 Web UI（浏览器界面，可跑在 NAS/服务器）
+#   pip install fastapi uvicorn python-multipart  —— 或 pip install "audiobook-converter[web]"
+#   启动：python -m audiobook serve --host 0.0.0.0 --port 8000
+# fastapi>=0.110
+# uvicorn>=0.23
+# python-multipart>=0.0.6
+
 # 可选：EPUB 电子书读取
 # ebooklib>=0.18
 

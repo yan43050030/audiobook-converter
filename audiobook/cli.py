@@ -133,6 +133,20 @@ def cmd_config(args):
     return 0
 
 
+def cmd_serve(args):
+    try:
+        import uvicorn
+    except ImportError:
+        print("错误：需要安装 Web 依赖：pip install \"audiobook-converter[web]\"",
+              file=sys.stderr)
+        return 2
+    from audiobook.web import create_app
+    app = create_app()
+    print(f"本地 Web UI: http://{args.host}:{args.port}  (Ctrl-C 停止)", file=sys.stderr)
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    return 0
+
+
 def cmd_transcribe(args):
     import tts_engine as _te
     from audiobook.engines.asr import transcribe
@@ -187,6 +201,12 @@ def build_parser():
     # config
     cf = sub.add_parser("config", help="查看生效配置及各项说明")
     cf.set_defaults(func=cmd_config)
+
+    # serve
+    s = sub.add_parser("serve", help="启动本地 Web UI（需 [web] 依赖）")
+    s.add_argument("--host", default="127.0.0.1", help="监听地址（默认 127.0.0.1）")
+    s.add_argument("--port", type=int, default=8000, help="监听端口（默认 8000）")
+    s.set_defaults(func=cmd_serve)
 
     # transcribe
     t = sub.add_parser("transcribe", help="语音转文字（ASR，需 faster-whisper）")
