@@ -15,10 +15,11 @@
 > A5a（`Engine` 接口 + 注册表）、A5c（分发改走注册表）已完成；**A5b 引擎具体化已完成**
 > —— local/edge/piper/cosyvoice 均为独立 Engine 子类（各自模块），通用适配器仅保留给
 > 外挂插件引擎（piper/cosyvoice 的重实现暂留 `tts_engine`，可后续整体迁入各自模块）。
-> **已发布可用版本 v6.0.0-beta.1**（macOS/Windows 构建）。**阶段 2 B2（CLI + 库 API）已完成**：
-> `audiobook convert/engines/voices/transcribe`。**B3（配置 schema，`audiobook.config` + CLI
-> `config`）、B4（本地 Web UI，FastAPI + `audiobook serve`）已完成**。剩余：阶段 3 旗舰
-> （声音克隆 / 工作区重设计）。
+> **阶段 2 全部完成**：B2（CLI + 库 API，`audiobook convert/engines/voices/transcribe`）、
+> B3（配置 schema，`audiobook.config` + CLI `config`）、B4（本地 Web UI，FastAPI +
+> `audiobook serve`）。**已定版发布 v6.0.0 正式版**（阶段 1 + 阶段 2 全落地；macOS/Windows
+> 构建）。剩余（后续大版本）：阶段 3 旗舰（声音克隆 / 工作区重设计），以及 piper/cosyvoice
+> 重实现整体迁入各自模块、Edge 异步批量编排并入注册表等内部收尾。
 
 ## 一、现有功能盘点
 

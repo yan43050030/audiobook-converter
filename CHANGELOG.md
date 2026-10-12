@@ -1,12 +1,22 @@
 # 项目情况日志 — 文字转有声读物 (Audiobook Converter)
 
-## 当前版本：v6.0.0-beta.1 (2026-09-27，可用版本)
+## 当前版本：v6.0.0 (2026-10，正式版)
 
-> **v6.0.0-beta.1 发布说明**：v6.0 阶段 1（架构重构）完成，作为可用版本发布。
-> 功能与 v5.2.1 完全一致（多引擎 TTS / ASR / m4b / srt / 对话识别等），行为不变、
-> 集成测试兜底；内部结构升级为分层 `audiobook` 包 + 引擎注册表。`_dev` 期间的所有
-> 改动见下方「v6.0.0 大版本重构」小节。CLI/库 API、其余引擎具体化、Web UI 等在后续
-> beta/正式版推进。PyInstaller 三平台 spec 已补 `audiobook` 包 hiddenimports 以确保打包。
+> **v6.0.0 正式版发布说明**：v6.0 大版本重构 + 产品形态扩展全部完成，自 beta.1 转正式版。
+> 功能与 v5.2.x 完全一致（多引擎 TTS / ASR / m4b / srt / 对话识别等），全程行为不变、
+> 集成测试兜底（172 项）。
+>
+> **本版累计交付**（beta.1 → 6.0.0）：
+> - **阶段 1 架构**：移除 Tkinter（仅 Qt6）、分层 `audiobook` 包（core/io/engines）、
+>   统一 `Engine` 抽象接口 + 注册表、`_generate_one_safe` 分发改走注册表；
+>   **A5b 全引擎具体化**——local/edge/piper/cosyvoice 均为独立 Engine 子类，通用适配器
+>   仅服务外挂插件。
+> - **阶段 2 产品形态**：`audiobook` 命令行 + 库 API（B2）、集中式配置 schema（B3，
+>   `audiobook.config` + CLI `config`）、本地 Web UI（B4，FastAPI + `audiobook serve`）。
+> - **界面修复**：章节列表可拖动调整高度（竖向分隔条把手 + 兜底高度）。
+>
+> PyInstaller 三平台 spec 已补 `audiobook` 包（含各引擎模块）hiddenimports 以确保打包。
+> 各形态详见下方分节。
 
 ### 界面修复 — 章节列表高度（beta.1 后）
 
