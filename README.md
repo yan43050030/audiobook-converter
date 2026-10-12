@@ -108,6 +108,26 @@ audiobook convert *.txt --engine edge --voice 晓晓（女声，自然） --out 
 
 也可作为库调用：`from audiobook import convert_batch, transcribe, load_file_content`。
 
+查看生效配置：`python -m audiobook config`。
+
+### 本地 Web UI（v6.0 新增，可选）
+
+无需安装 Qt，用浏览器操作，适合跑在 NAS/服务器上批量转换：
+
+```bash
+# 安装 Web 可选依赖
+pip install "audiobook-converter[web]"      # 或：pip install fastapi uvicorn python-multipart
+
+# 启动本地服务（默认 127.0.0.1:8000；对外访问用 --host 0.0.0.0）
+python -m audiobook serve --host 0.0.0.0 --port 8000
+```
+
+浏览器打开后：粘贴文本或上传文件（txt/md/docx/epub/html/pdf）→ 选引擎/语音/拆分方式 →
+开始转换，进度实时刷新，完成后直接下载 mp3 / m4b / srt。转换在后台任务执行，产物保存在
+便携存储目录的 `web_output/` 下。
+
+> 该界面定位为**本地工具**，不含鉴权；如需对公网开放请自行置于反向代理与访问控制之后。
+
 ### 打包为独立应用
 
 ```bash
