@@ -2066,9 +2066,10 @@ def _generate_one_safe_multi_voice(
 def _raw_segment_synth(engine):
     """返回指定引擎的「单段原语」合成函数：callable(text, voice, rate, out_path, should_stop=None)。
 
-    集中各引擎的逐段合成分发，供 Engine.synthesize_segment（经注册表）与
-    _generate_one_safe 复用。Edge 因异步批量子系统另行处理（见 _generate_one_safe），
-    此处的 edge 分支仅覆盖单段直调场景。
+    集中各引擎的逐段合成分发。A5b 后内置引擎（local/edge/piper/cosyvoice）均已具体化为
+    Engine 子类并各自实现 synthesize_segment，故正常路径下本函数主要服务**外挂插件**引擎
+    （经 _TtsEngineAdapter）；内置分支保留为直调场景的等价兜底。Edge 因异步批量子系统
+    另行处理（见 _generate_one_safe），此处 edge 分支仅覆盖单段直调。
     """
     if engine == "local":
         return _local_generate
@@ -2122,8 +2123,8 @@ def _generate_one_safe(text, voice, rate, output_path, engine="edge", should_sto
             logger.info(f"生成单文件 → {output_path} (尝试 {attempt + 1}, {total_segs} 段)")
 
             if engine in ("local", "piper", "cosyvoice") or _is_external_engine(engine):
-                # 经注册表分发：具体引擎（如 LocalEngine）用自身实现，其余回退适配器
-                # → _raw_segment_synth。分段/合并/进度/重试的编排仍在本函数。
+                # 经注册表分发：内置引擎（local/piper/cosyvoice）解析为各自的具体 Engine
+                # 子类，外挂引擎回退 _TtsEngineAdapter；分段/合并/进度/重试的编排仍在本函数。
                 from audiobook.engines.base import get_engine
                 seg_synth = get_engine(engine).synthesize_segment
                 if total_segs == 1:

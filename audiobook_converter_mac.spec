@@ -94,6 +94,7 @@ all_hidden = base_hidden + piper_hidden + onnx_hidden + pygame_hidden + _doc_hid
     'audiobook', 'audiobook.core', 'audiobook.core.text',
     'audiobook.io', 'audiobook.io.readers', 'audiobook.io.audio',
     'audiobook.engines', 'audiobook.engines.base', 'audiobook.engines.local',
+    'audiobook.engines.edge', 'audiobook.engines.piper', 'audiobook.engines.cosyvoice',
     'audiobook.engines.asr',
     # ASR 语音转文字
     'faster_whisper', 'ctranslate2',

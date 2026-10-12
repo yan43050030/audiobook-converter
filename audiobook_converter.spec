@@ -11,6 +11,7 @@ a = Analysis(
                    'faster_whisper', 'ebooklib', 'fitz', 'pdfplumber', 'torch', 'cosyvoice', 'soundfile', 'librosa',
                    'audiobook', 'audiobook.core', 'audiobook.core.text', 'audiobook.io', 'audiobook.io.readers',
                    'audiobook.io.audio', 'audiobook.engines', 'audiobook.engines.base', 'audiobook.engines.local',
+                   'audiobook.engines.edge', 'audiobook.engines.piper', 'audiobook.engines.cosyvoice',
                    'audiobook.engines.asr'],
     hookspath=[],
     hooksconfig={},

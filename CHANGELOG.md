@@ -59,13 +59,21 @@
   现有的按引擎分发（`check_engine_ready` / `get_voice_list` / `get_voice_id` /
   `_generate_one_safe`），**纯附加、零行为变化**。
 
-- **A5b（进行中）各引擎实现迁入 engines/<name>.py**：
+- **A5b 引擎具体化（已完成）各引擎成为独立 Engine 子类**：
   - **本地系统语音** → `audiobook/engines/local.py`：`_local_generate` 及三个平台实现
     （macOS say/afconvert、Windows SAPI、Linux espeak-ng）迁出，新增 `LocalEngine`
-    （Engine 子类）；`get_engine("local")` 经 `base._CONCRETE` 返回真实 `LocalEngine`，
-    未迁移引擎仍回退薄适配器。`tts_engine` 再导入 `_local_generate` 保持 local 分支不变。
-    （选本地先行：合成可在 CI 用 espeak-ng+ffmpeg 真实测试；Edge 因需联网 Bing、
-    且异步批量子系统与 convert_batch 深度耦合，留到编排层理清后再迁。）
+    （Engine 子类）；`get_engine("local")` 经 `base._CONCRETE` 返回真实 `LocalEngine`。
+    `tts_engine` 再导入 `_local_generate` 保持 local 分支不变。
+  - **Edge / Piper / CosyVoice 具体化** → `audiobook/engines/{edge,piper,cosyvoice}.py`：
+    新增 `EdgeEngine` / `PiperEngine` / `CosyVoiceEngine`，`is_ready` / `list_voices`
+    沿用 `tts_engine` 既有分发，`synthesize_segment` 委托各自的现有合成函数
+    （`_edge_generate` / `_piper_generate_safe` / `_cosyvoice_generate_safe`）。三者
+    登记进 `base._CONCRETE`，`get_engine()` 返回具体子类，**通用 `_TtsEngineAdapter`
+    自此只服务外挂插件引擎**。`display_name` 与注册表 name 一致，CLI/界面文案不变；
+    piper/cosyvoice 的重实现（模型缓存、CLI/Python 双后端等）暂留 `tts_engine`，可后续
+    整体迁入各自模块。Edge 的异步批量路径仍在 `_generate_one_safe`（编排层，不变）。
+    三个新模块加入三份 PyInstaller spec 的 hiddenimports（懒加载需显式声明）。
+    新增 `tests/test_engines_concrete.py`（解析为具体类、display_name、委托、外挂仍走适配器）。
 
 - **A5c（关键步）分发改走注册表**：`Engine` 新增单段原语 `synthesize_segment`
   （抽象），`synthesize` 改为基类默认实现（分段+合并调用 `synthesize_segment`）。
@@ -76,7 +84,7 @@
   （消除潜在递归）。**Edge 暂保留异步批量专用路径**（`_edge_generate_multi` 单事件循环），
   待其具体化后并入。行为不变，本地引擎经注册表分发的 convert_batch 端到端实测通过。
 
-剩余 A5b（edge/piper/cosyvoice 实现迁入 engines/<name>.py）、Edge 编排并入注册表 见 ROADMAP。
+剩余：piper/cosyvoice 重实现整体迁入各自模块、Edge 异步批量编排并入注册表 见 ROADMAP。
 
 ### 阶段 2（产品形态）— B2 命令行 / 库 API
 
