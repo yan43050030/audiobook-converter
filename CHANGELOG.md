@@ -2,6 +2,24 @@
 
 ## 未发布 — 阶段 3 / C2 工作区重设计（进行中）
 
+### U3 生成队列可视化
+
+- 新增「生成队列」页：逐章显示 等待 / 生成中 / 完成 / 失败 / 未勾选，失败行显示错误原因并带
+  「重试」按钮，另有「重试全部失败项」与「打开输出目录」；标签页标题实时显示进度
+  （如「生成队列 (12/20) · 失败 2」）。开始生成时自动切到该页，底部暂停 / 继续条保留可用
+  （仅「语音转文字」页隐藏）。完成弹窗与状态行会提示失败数量。
+- `convert_batch` 新增可选参数：`item_callback(event, data)` 推送逐章事件
+  （init / running / done / error / pending / final，覆盖 Edge 异步、Piper 并行、同步三条分发路径；
+  回调异常不影响生成）；`only_indices` 配合 `resume=True` 只重跑指定条目，其余未完成条目本次暂挂、
+  状态不变（临时标记不写入进度文件）。重试时清掉该条目上次的错误信息。不传则行为与之前完全一致。
+- 续传 / 重试沿用本次生成的文件名前缀（此前续传固定用「有声读物」，写入元数据时专辑名会变）。
+- **修复（既有缺陷）**：Edge 批量生成结束时停止监视任务抛出的 `asyncio.CancelledError`
+  （Python 3.8+ 继承 `BaseException`）未被 `except Exception` 捕获，会逃逸出 `convert_batch`：
+  界面收不到完成信号、srt 字幕 / ID3 元数据 / 响度归一化后处理不执行、进度文件不清理。
+  因 Edge 需联网，此前在 CI / 容器里没有端到端覆盖，本次用打桩的 Edge 合成补上回归测试。
+- 新增 `tests/test_generation_queue.py`（10 项）与 `tests/test_gui_queue.py`（3 项，offscreen 驱动
+  真实主窗口；无 Qt 环境自动跳过）。
+
 ### U1 模型管理器
 
 - 新增 `audiobook/models.py`：统一盘点 Piper 语音包（`piper-models/` + 外部模型文件夹）、

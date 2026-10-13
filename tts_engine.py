@@ -1919,8 +1919,8 @@ async def _interruptible_asleep(seconds: float, stop_event: "asyncio.Event") -> 
         return False
 
 
-async def _generate_one_item(item, voice, rate, output_dir, semaphore, stop_event):
-    """生成单个章节，由信号量控制并发（支持暂停）"""
+async def _generate_one_item(item, voice, rate, output_dir, semaphore, stop_event, on_start=None):
+    """生成单个章节，由信号量控制并发（支持暂停）。on_start 在真正拿到并发名额时调用。"""
     if stop_event.is_set():
         return
     out_path = os.path.join(output_dir, item["filename"])
@@ -1929,6 +1929,8 @@ async def _generate_one_item(item, voice, rate, output_dir, semaphore, stop_even
     async with semaphore:
         if stop_event.is_set():
             return
+        if on_start:
+            on_start()
         for attempt in range(MAX_RETRIES + 1):
             if stop_event.is_set():
                 return
@@ -1964,9 +1966,10 @@ async def _generate_one_item(item, voice, rate, output_dir, semaphore, stop_even
                     item["error"] = str(e)
 
 
-async def _edge_batch_generate(items, voice, rate, output_dir, progress_callback, should_stop):
+async def _edge_batch_generate(items, voice, rate, output_dir, progress_callback, should_stop,
+                               item_callback=None):
     """并发批量生成，支持暂停（stop_event 即时传播）"""
-    pending_items = [it for it in items if it["status"] not in ("done", "skipped")]
+    pending_items = [(i, it) for i, it in enumerate(items) if _is_active(it)]
     total_active = len(pending_items)
     done_count = 0
 
@@ -1981,9 +1984,18 @@ async def _edge_batch_generate(items, voice, rate, output_dir, progress_callback
                 return
             await asyncio.sleep(0.2)
 
-    async def _process_item(item):
+    async def _process_item(idx, item):
         nonlocal done_count
-        await _generate_one_item(item, voice, rate, output_dir, semaphore, stop_event)
+        started = []
+
+        def _on_start():
+            item.pop("error", None)  # 重试时清掉上次的错误信息
+            started.append(True)
+            _emit_item(item_callback, "running", index=idx)
+
+        await _generate_one_item(item, voice, rate, output_dir, semaphore, stop_event,
+                                 on_start=_on_start)
+        _emit_item_result(item_callback, idx, item, bool(started))
         done_count += 1
         if progress_callback:
             try:
@@ -1993,7 +2005,7 @@ async def _edge_batch_generate(items, voice, rate, output_dir, progress_callback
         save_progress(output_dir, items)
 
     watcher = asyncio.create_task(_watch_stop())
-    tasks = [asyncio.create_task(_process_item(item)) for item in pending_items]
+    tasks = [asyncio.create_task(_process_item(i, item)) for i, item in pending_items]
 
     try:
         if tasks:
@@ -2003,6 +2015,11 @@ async def _edge_batch_generate(items, voice, rate, output_dir, progress_callback
         watcher.cancel()
         try:
             await watcher
+        except asyncio.CancelledError:
+            # Python 3.8+ 中 CancelledError 继承 BaseException，`except Exception` 接不住：
+            # 此前每次 Edge 批量结束都会把它抛出 convert_batch，导致界面收不到完成信号、
+            # 字幕/元数据/归一化后处理不执行、进度文件不清理。
+            pass
         except Exception:
             pass
 
@@ -2174,8 +2191,48 @@ def _generate_one_safe(text, voice, rate, output_path, engine="edge", should_sto
 
 def save_progress(output_dir, items):
     path = os.path.join(output_dir, PROGRESS_FILENAME)
+    # 以下划线开头的键是单次运行内的临时标记（如 _hold），不落盘
+    clean = [{k: v for k, v in it.items() if not str(k).startswith("_")}
+             if isinstance(it, dict) else it for it in items]
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(items, f, ensure_ascii=False, indent=2)
+        json.dump(clean, f, ensure_ascii=False, indent=2)
+
+
+# ======== 生成队列事件（供界面逐章展示状态） ========
+
+def _is_active(item) -> bool:
+    """本次运行需要处理的条目：未完成、未跳过，且未被 only_indices 暂挂。"""
+    return item["status"] not in ("done", "skipped") and not item.get("_hold")
+
+
+def _queue_snapshot(items) -> list:
+    return [{"index": i, "title": it.get("title", ""), "filename": it.get("filename", ""),
+             "status": it.get("status", "pending"), "error": it.get("error", "")}
+            for i, it in enumerate(items)]
+
+
+def _emit_item(item_callback, event: str, **data) -> None:
+    """向 item_callback(event, data) 推送逐章事件；回调异常不影响生成。
+
+    事件：init / final（data["items"] 为全量快照）、running、done、error（含 error）、
+    pending（已开始但被暂停，回到等待）。
+    """
+    if not item_callback:
+        return
+    try:
+        item_callback(event, data)
+    except Exception as e:
+        logger.debug(f"item_callback 异常（已忽略）: {e}")
+
+
+def _emit_item_result(item_callback, index: int, item, started: bool) -> None:
+    status = item.get("status")
+    if status == "done":
+        _emit_item(item_callback, "done", index=index)
+    elif status == "error":
+        _emit_item(item_callback, "error", index=index, error=item.get("error", ""))
+    elif started:
+        _emit_item(item_callback, "pending", index=index)
 
 
 def load_progress(output_dir):
@@ -2235,7 +2292,15 @@ def convert_batch(
     generate_subtitles: bool = False,
     write_metadata: bool = False,
     album_title: str = "",
+    item_callback=None,
+    only_indices=None,
 ):
+    """批量生成有声书。
+
+    item_callback(event, data)：可选的逐章事件回调（生成队列可视化用），见 _emit_item。
+    only_indices：可选，仅处理这些条目下标（配合 resume=True 实现单项 / 失败项重试），
+    其余未完成条目本次保持原状态不动。
+    """
     os.makedirs(output_dir, exist_ok=True)
 
     # 构建任务列表
@@ -2331,14 +2396,25 @@ def convert_batch(
                 item["voice_map"] = voice_map
         save_progress(output_dir, items)
 
-    logger.info(f"批量生成开始: {sum(1 for it in items if it['status'] not in ('done','skipped'))} 个待处理, 引擎={engine}")
+    # 单项 / 失败项重试：只处理 only_indices，其余未完成条目本次暂挂（状态不变、不落盘）
+    for it in items:
+        it.pop("_hold", None)
+    if only_indices is not None:
+        only = set(only_indices)
+        for i, it in enumerate(items):
+            if i not in only and it["status"] not in ("done", "skipped"):
+                it["_hold"] = True
+
+    logger.info(f"批量生成开始: {sum(1 for it in items if _is_active(it))} 个待处理, 引擎={engine}")
+    _emit_item(item_callback, "init", items=_queue_snapshot(items))
 
     if engine == "edge":
         if not EDGE_TTS_AVAILABLE:
             raise RuntimeError("Edge TTS 未安装。请运行: pip install edge-tts，"
                                "或切换到离线引擎（系统语音 / Piper / CosyVoice）。")
         # 用单一事件循环批量生成
-        asyncio.run(_edge_batch_generate(items, voice, rate, output_dir, progress_callback, should_stop))
+        asyncio.run(_edge_batch_generate(items, voice, rate, output_dir, progress_callback, should_stop,
+                                         item_callback=item_callback))
     elif engine in ("local", "piper", "cosyvoice") or _is_external_engine(engine):
         # Piper：用 ThreadPoolExecutor 并行处理。
         # CLI 模式靠子进程隔离；Python 模式每个工作线程持有独立模型实例（线程本地缓存）。
@@ -2351,8 +2427,7 @@ def convert_batch(
                 logger.warning(f"Piper 模式检测失败，改用串行路径: {e}")
             if piper_mode in (PIPER_MODE_CLI, PIPER_MODE_PYTHON):
                 from concurrent.futures import ThreadPoolExecutor, as_completed
-                pending = [(i, it) for i, it in enumerate(items)
-                           if it["status"] not in ("done", "skipped")]
+                pending = [(i, it) for i, it in enumerate(items) if _is_active(it)]
                 total_active = len(pending)
                 done_count = 0
 
@@ -2363,7 +2438,9 @@ def convert_batch(
                             if should_stop and should_stop():
                                 logger.info("用户暂停生成")
                                 break
-                            def _piper_one(it=item):
+                            def _piper_one(it=item, i=idx):
+                                it.pop("error", None)  # 重试时清掉上次的错误信息
+                                _emit_item(item_callback, "running", index=i)
                                 p = os.path.join(output_dir, it["filename"])
                                 _generate_one_safe(it["text"], voice, rate, p,
                                                    engine="piper", should_stop=should_stop,
@@ -2377,14 +2454,17 @@ def convert_batch(
                             idx = fut_map[future]
                             try:
                                 future.result()
+                                _emit_item(item_callback, "done", index=idx)
                             except StopRequested:
                                 logger.info(f"用户暂停：[{items[idx]['title']}] 未完成")
+                                _emit_item(item_callback, "pending", index=idx)
                                 executor.shutdown(wait=False, cancel_futures=True)
                                 break
                             except Exception as e:
                                 items[idx]["status"] = "error"
                                 items[idx]["error"] = str(e)
                                 logger.error(f"Piper生成失败 [{items[idx]['title']}]: {e}")
+                                _emit_item(item_callback, "error", index=idx, error=str(e))
 
                             save_progress(output_dir, items)
                             done_count += 1
@@ -2400,17 +2480,19 @@ def convert_batch(
         if not _parallel_piper_done:
             # 本地/外部引擎同步逐个生成（支持暂停）
             done_count = 0
-            total_active = sum(1 for it in items if it["status"] not in ("done", "skipped"))
+            total_active = sum(1 for it in items if _is_active(it))
 
             try:
-                for item in items:
-                    if item["status"] in ("done", "skipped"):
+                for idx, item in enumerate(items):
+                    if not _is_active(item):
                         continue
                     if should_stop and should_stop():
                         logger.info("用户暂停生成")
                         break
 
                     out_path = os.path.join(output_dir, item["filename"])
+                    item.pop("error", None)  # 重试时清掉上次的错误信息
+                    _emit_item(item_callback, "running", index=idx)
                     try:
                         # 把段级进度并入主进度回调（携带章节标题）
                         def _seg_cb(cur, total, _t=item.get("title", "")):
@@ -2433,14 +2515,17 @@ def convert_batch(
                                            voice_map=item.get("voice_map"),
                                            dialogue_segments=item.get("segments"))
                         item["status"] = "done"
+                        _emit_item(item_callback, "done", index=idx)
                     except StopRequested:
                         logger.info(f"用户暂停：[{item['title']}] 未完成")
+                        _emit_item(item_callback, "pending", index=idx)
                         save_progress(output_dir, items)
                         break
                     except Exception as e:
                         item["status"] = "error"
                         item["error"] = str(e)
                         logger.error(f"{engine}引擎生成失败 [{item['title']}]: {e}")
+                        _emit_item(item_callback, "error", index=idx, error=str(e))
 
                     save_progress(output_dir, items)
                     done_count += 1
@@ -2456,6 +2541,12 @@ def convert_batch(
                     _unload_cosyvoice_model()
     else:
         raise ValueError(f"不支持的引擎类型: {engine}")
+
+    # 生成阶段结束：解除暂挂标记，推送全量快照让界面与真实状态对齐
+    # （并行 / 暂停等路径下个别逐项事件可能缺失，以 final 为准）
+    for it in items:
+        it.pop("_hold", None)
+    _emit_item(item_callback, "final", items=_queue_snapshot(items))
 
     # 收集结果
     output_files = [os.path.join(output_dir, it["filename"])
