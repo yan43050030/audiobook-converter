@@ -78,28 +78,33 @@ class _BaseWorker(QThread):
 class ConvertWorker(_BaseWorker):
     """批量转换工作线程"""
     progress_update = Signal(int, int)  # current, total
+    item_event = Signal(str, object)    # 生成队列逐章事件 (event, data)，见 tts_engine._emit_item
 
     def setup(self, text, voice, rate, output_dir, split_mode, time_minutes,
               file_prefix, selected_indices, engine, normalize_audio,
               dialogue_detection, voice_map, resume,
-              generate_subtitles=False, write_metadata=False):
+              generate_subtitles=False, write_metadata=False, only_indices=None):
         self._params = (text, voice, rate, output_dir, split_mode, time_minutes,
                         file_prefix, selected_indices, engine, normalize_audio,
                         dialogue_detection, voice_map, resume,
-                        generate_subtitles, write_metadata)
+                        generate_subtitles, write_metadata, only_indices)
 
     def run(self):
         try:
             (text, voice, rate, output_dir, split_mode, time_minutes,
              file_prefix, selected_indices, engine, normalize_audio,
              dialogue_detection, voice_map, resume,
-             generate_subtitles, write_metadata) = self._params
+             generate_subtitles, write_metadata, only_indices) = self._params
 
             def progress_cb(current, total, **kw):
                 self.progress_update.emit(current, total)
 
             def stop_cb():
                 return self._should_stop
+
+            def item_cb(event, data):
+                # 可能来自 Piper 线程池 / asyncio：经 Qt 信号跨线程投递到界面线程
+                self.item_event.emit(event, data)
 
             files = convert_batch(
                 text=text, voice=voice, rate=rate, output_dir=output_dir,
@@ -110,6 +115,7 @@ class ConvertWorker(_BaseWorker):
                 normalize_audio=normalize_audio,
                 dialogue_detection=dialogue_detection, voice_map=voice_map,
                 generate_subtitles=generate_subtitles, write_metadata=write_metadata,
+                item_callback=item_cb, only_indices=only_indices,
             )
             self.finished_ok.emit(files)
         except Exception as e:
@@ -576,6 +582,8 @@ class AudiobookConverterMain(QMainWindow):
         self._single_file_path = None
         self.is_converting = False
         self._last_output_dir = None
+        self._last_prefix = None          # 上次生成的文件名前缀（续传 / 重试沿用，保持专辑名一致）
+        self._queue_items: list = []      # 生成队列快照（与 convert_batch 的条目下标一致）
         self._convert_start_time = None
         self._preview_state = "idle"
         self._theme = "light"
@@ -616,8 +624,10 @@ class AudiobookConverterMain(QMainWindow):
         # Tabs
         self._tab_widget = QTabWidget()
         self._tts_tab = QWidget()
+        self._queue_tab = QWidget()
         self._asr_tab = QWidget()
         self._tab_widget.addTab(self._tts_tab, "文字转语音")
+        self._tab_widget.addTab(self._queue_tab, "生成队列")
         self._tab_widget.addTab(self._asr_tab, "语音转文字")
         root.addWidget(self._tab_widget, 1)
 
@@ -717,6 +727,8 @@ class AudiobookConverterMain(QMainWindow):
         splitter.setStretchFactor(1, 0)
 
         # === ASR Tab ===
+        self._build_queue_tab()
+
         self._build_asr_tab()
         self._refresh_asr_engines()
 
@@ -759,8 +771,8 @@ class AudiobookConverterMain(QMainWindow):
 
 
     def _on_main_tab_changed(self, index):
-        """主标签切换：ASR 页隐藏 TTS 专用的底部操作条与状态行。"""
-        is_tts = (self._tab_widget.widget(index) is self._tts_tab)
+        """主标签切换：ASR 页隐藏 TTS 专用的底部操作条与状态行（生成队列页保留，便于暂停/继续）。"""
+        is_tts = (self._tab_widget.widget(index) is not self._asr_tab)
         if hasattr(self, "_quickbar_widget"):
             self._quickbar_widget.setVisible(is_tts)
         if hasattr(self, "_status_label"):
@@ -1096,6 +1108,155 @@ class AudiobookConverterMain(QMainWindow):
     # 状态栏已合并进底部单一状态行（见 _update_statusbar）
 
     # ================ ASR Tab ================
+
+    # ================ 生成队列（逐章状态 / 失败重试） ================
+
+    _QUEUE_STATUS = {
+        # status: (显示文字, 颜色)
+        "pending": ("⏳ 等待", "#888888"),
+        "running": ("🔊 生成中", "#2563EB"),
+        "done": ("✅ 完成", "#2E7D32"),
+        "error": ("❌ 失败", "#C62828"),
+        "skipped": ("— 未勾选", "#AAAAAA"),
+    }
+
+    def _build_queue_tab(self):
+        layout = QVBoxLayout(self._queue_tab)
+        layout.setSpacing(8)
+
+        top = QHBoxLayout()
+        self._queue_summary = QLabel("尚未开始生成。开始转换后，这里会逐章显示状态；失败的章节可单独重试。")
+        self._queue_summary.setWordWrap(True)
+        top.addWidget(self._queue_summary, 1)
+        self._queue_retry_all_btn = QPushButton("🔁 重试全部失败项")
+        self._queue_retry_all_btn.clicked.connect(self._queue_retry_failed)
+        top.addWidget(self._queue_retry_all_btn)
+        self._queue_open_btn = QPushButton("📂 打开输出目录")
+        self._queue_open_btn.clicked.connect(
+            lambda: self._last_output_dir and self._open_path(self._last_output_dir))
+        top.addWidget(self._queue_open_btn)
+        layout.addLayout(top)
+
+        t = QTableWidget(0, 5)
+        t.setHorizontalHeaderLabels(["#", "章节", "状态", "说明", ""])
+        t.verticalHeader().setVisible(False)
+        t.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        t.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        t.setWordWrap(False)
+        h = t.horizontalHeader()
+        h.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        h.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        t.setColumnWidth(1, 280)
+        t.verticalHeader().setDefaultSectionSize(32)
+        self._queue_table = t
+        layout.addWidget(t, 1)
+        self._queue_refresh_actions()
+
+    def _on_queue_event(self, event, data):
+        """处理 convert_batch 推送的逐章事件（经 ConvertWorker.item_event 投递到界面线程）。"""
+        if event in ("init", "final"):
+            self._queue_items = [dict(it) for it in data.get("items", [])]
+            self._queue_rebuild()
+            return
+        idx = data.get("index", -1)
+        if not (0 <= idx < len(self._queue_items)):
+            return
+        it = self._queue_items[idx]
+        if event == "running":
+            it["status"], it["error"] = "running", ""
+        elif event == "done":
+            it["status"], it["error"] = "done", ""
+        elif event == "error":
+            it["status"], it["error"] = "error", data.get("error", "")
+        elif event == "pending":
+            it["status"] = "pending"
+        self._queue_set_row(idx)
+        self._queue_refresh_actions()
+
+    def _queue_rebuild(self):
+        self._queue_table.setRowCount(len(self._queue_items))
+        for i in range(len(self._queue_items)):
+            self._queue_set_row(i)
+        self._queue_refresh_actions()
+
+    def _queue_set_row(self, i):
+        it = self._queue_items[i]
+        status = it.get("status", "pending")
+        label, color = self._QUEUE_STATUS.get(status, (status, "#888888"))
+        cells = [str(i + 1), it.get("title") or it.get("filename", ""), label, ""]
+        if status == "error":
+            cells[3] = it.get("error", "")
+        elif status == "done":
+            cells[3] = it.get("filename", "")
+        for col, text in enumerate(cells):
+            cell = QTableWidgetItem(text)
+            if col == 2:
+                cell.setForeground(QColor(color))
+            if col == 3 and status == "error":
+                cell.setForeground(QColor(color))
+                cell.setToolTip(text)
+            elif col == 1:
+                cell.setToolTip(it.get("filename", ""))
+            self._queue_table.setItem(i, col, cell)
+        if status == "error":
+            btn = QPushButton("重试")
+            # 全局按钮样式（min-height 32 + 上下 padding）放进表格行会溢出；行内用紧凑样式
+            btn.setStyleSheet("padding:1px 14px; min-height:0px; font-size:13px;")
+            btn.setEnabled(not self.is_converting)
+            btn.clicked.connect(lambda _=False, idx=i: self._queue_retry([idx]))
+            self._queue_table.setCellWidget(i, 4, btn)
+        else:
+            self._queue_table.removeCellWidget(i, 4)
+
+    def _queue_refresh_actions(self):
+        """刷新汇总行、标签页标题与重试按钮可用状态。"""
+        items = self._queue_items
+        counts = {}
+        for it in items:
+            counts[it.get("status")] = counts.get(it.get("status"), 0) + 1
+        active = len(items) - counts.get("skipped", 0)
+        done, failed = counts.get("done", 0), counts.get("error", 0)
+        if items:
+            parts = [f"共 {active} 项", f"完成 {done}"]
+            if counts.get("running"):
+                parts.append(f"生成中 {counts['running']}")
+            if counts.get("pending"):
+                parts.append(f"等待 {counts['pending']}")
+            if failed:
+                parts.append(f"<span style='color:#C62828'>失败 {failed}</span>")
+            if counts.get("skipped"):
+                parts.append(f"未勾选 {counts['skipped']}")
+            self._queue_summary.setText(" · ".join(parts))
+            tab_text = f"生成队列 ({done}/{active})" + (f" · 失败 {failed}" if failed else "")
+        else:
+            tab_text = "生成队列"
+        idx = self._tab_widget.indexOf(self._queue_tab)
+        if idx >= 0:
+            self._tab_widget.setTabText(idx, tab_text)
+
+        can_retry = bool(failed) and not self.is_converting
+        self._queue_retry_all_btn.setEnabled(can_retry)
+        self._queue_open_btn.setEnabled(bool(self._last_output_dir))
+        for i, it in enumerate(items):
+            w = self._queue_table.cellWidget(i, 4)
+            if w is not None:
+                w.setEnabled(not self.is_converting)
+
+    def _queue_retry(self, indices):
+        if self.is_converting or not indices:
+            return
+        if not self._last_output_dir or not load_progress(self._last_output_dir):
+            QMessageBox.information(self, "无法重试",
+                                    "找不到本次生成的进度文件（可能已被删除或目录已移动），请重新开始转换。")
+            return
+        self._run_convert(self._last_output_dir, self._last_prefix or "有声读物", None,
+                          resume=True, only_indices=set(indices))
+
+    def _queue_retry_failed(self):
+        self._queue_retry([i for i, it in enumerate(self._queue_items) if it.get("status") == "error"])
 
     def _build_asr_tab(self):
         layout = QVBoxLayout(self._asr_tab)
@@ -2020,8 +2181,12 @@ class AudiobookConverterMain(QMainWindow):
             return
         self._run_convert(output_dir, "有声读物", None, resume=True)
 
-    def _run_convert(self, output_dir, file_prefix, selected_indices, resume):
+    def _run_convert(self, output_dir, file_prefix, selected_indices, resume, only_indices=None):
         self.is_converting = True
+        if not resume:
+            self._last_prefix = file_prefix
+        elif output_dir != self._last_output_dir:
+            self._last_prefix = None  # 续传另一个目录：原前缀未知
         self._last_output_dir = output_dir
         self._convert_start_time = time.time()
         self._progress_bar.setVisible(True)
@@ -2058,11 +2223,16 @@ class AudiobookConverterMain(QMainWindow):
             dialogue_detection=dia_enabled, voice_map=voice_map, resume=resume,
             generate_subtitles=self._subtitle_cb.isChecked(),
             write_metadata=self._metadata_cb.isChecked(),
+            only_indices=only_indices,
         )
+        self._convert_worker.item_event.connect(self._on_queue_event)
         self._convert_worker.progress_update.connect(self._on_convert_progress)
         self._convert_worker.finished_ok.connect(lambda files: self._on_convert_done(output_dir, files))
         self._convert_worker.error_occurred.connect(self._on_convert_error)
         self._convert_worker.finished.connect(self._on_convert_finished)
+        self._queue_refresh_actions()
+        # 生成期间编辑区用处不大，切到生成队列看逐章进度（底部暂停/继续按钮仍可用）
+        self._tab_widget.setCurrentWidget(self._queue_tab)
         self._convert_worker.start()
 
     def _on_convert_progress(self, current, total):
@@ -2097,8 +2267,12 @@ class AudiobookConverterMain(QMainWindow):
             return
         names = "\n".join(os.path.basename(f) for f in files[:8])
         tail = f"\n  ... 等共 {count} 个文件" if count > 8 else ""
+        failed = sum(1 for it in self._queue_items if it.get("status") == "error")
+        fail_note = f"\n\n⚠ 另有 {failed} 个章节失败，可在「生成队列」页单独重试。" if failed else ""
+        if failed:
+            self._status_label.setText(f"完成 {count} 个，失败 {failed} 个（见「生成队列」）{elapsed}")
         if QMessageBox.question(self, "完成",
-                                f"已生成 {count} 个MP3文件 {elapsed}:\n{names}{tail}\n\n是否打开文件夹？") == QMessageBox.StandardButton.Yes:
+                                f"已生成 {count} 个MP3文件 {elapsed}:\n{names}{tail}{fail_note}\n\n是否打开文件夹？") == QMessageBox.StandardButton.Yes:
             if platform.system() == "Darwin":
                 subprocess.Popen(["open", output_dir])
             elif platform.system() == "Windows":
@@ -2116,6 +2290,7 @@ class AudiobookConverterMain(QMainWindow):
         self._qb_pause.setEnabled(False)
         self._qb_resume.setEnabled(False)
         self._set_controls_enabled(True)
+        self._queue_refresh_actions()
 
     def _pause_convert(self):
         if self._convert_worker:
@@ -2128,7 +2303,7 @@ class AudiobookConverterMain(QMainWindow):
         if self._last_output_dir:
             items = load_progress(self._last_output_dir)
             if items:
-                self._run_convert(self._last_output_dir, "有声读物", None, resume=True)
+                self._run_convert(self._last_output_dir, self._last_prefix or "有声读物", None, resume=True)
                 return
         self._resume_convert()
 
