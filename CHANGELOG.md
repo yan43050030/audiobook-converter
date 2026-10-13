@@ -1,5 +1,23 @@
 # 项目情况日志 — 文字转有声读物 (Audiobook Converter)
 
+## 未发布 — 阶段 3 / C2 工作区重设计（进行中）
+
+### U1 模型管理器
+
+- 新增 `audiobook/models.py`：统一盘点 Piper 语音包（`piper-models/` + 外部模型文件夹）、
+  CosyVoice 模型（`cosyvoice-models/`）、Whisper 模型（预下载布局与 faster-whisper HF 缓存布局），
+  给出类型 / 名称 / 占用空间 / 位置；`delete_model()` 删除前先卸载内存中的模型实例、删除后刷新
+  语音列表；`downloadable()` / `download()` 统一分发到既有下载实现（首次运行向导将复用）。
+- 安全边界：只有真实路径位于便携存储目录内的模型才可删；「添加模型文件夹」的外部目录只读展示，
+  符号链接指向存储目录外的同样拒删；未下载完整的 Whisper 目录单独标注、不计为已安装。
+- 界面：存储面板原先分散的「下载 Piper 模型 / 更多语音包… / 下载 CosyVoice 模型」三个按钮收进
+  一个「🗂 模型管理器」对话框——按类型分组显示占用小计与总占用，可删除、打开所在文件夹、下载
+  常用模型（含 Whisper 各规格），并可进入 Piper 多语言语音包目录；生成进行中禁止删除模型。
+  依赖检测面板新增「模型总占用」一行。
+- CLI：`audiobook models list | available | get | rm`。
+- PyInstaller 三份 spec 补 `audiobook.config` / `audiobook.models` hiddenimports。
+- 新增 `tests/test_models.py`（21 项：盘点各布局、外部/符号链接拒删、删除副作用、下载分发、CLI）。
+
 ## 当前版本：v6.0.0 (2026-10，正式版)
 
 > **v6.0.0 正式版发布说明**：v6.0 大版本重构 + 产品形态扩展全部完成，自 beta.1 转正式版。

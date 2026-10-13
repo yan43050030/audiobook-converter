@@ -18,8 +18,9 @@
 > **阶段 2 全部完成**：B2（CLI + 库 API，`audiobook convert/engines/voices/transcribe`）、
 > B3（配置 schema，`audiobook.config` + CLI `config`）、B4（本地 Web UI，FastAPI +
 > `audiobook serve`）。**已定版发布 v6.0.0 正式版**（阶段 1 + 阶段 2 全落地；macOS/Windows
-> 构建）。剩余（后续大版本）：阶段 3 旗舰（声音克隆 / 工作区重设计），以及 piper/cosyvoice
-> 重实现整体迁入各自模块、Edge 异步批量编排并入注册表等内部收尾。
+> 构建）。**阶段 3 进行中**：C2 工作区重设计按 U1 模型管理器 → U3 生成队列可视化 → U2 首次运行
+> 向导推进，**U1 已完成**（`audiobook.models` + GUI 模型管理器 + CLI `models`）。其余：C1 声音克隆，
+> 以及 piper/cosyvoice 重实现整体迁入各自模块、Edge 异步批量编排并入注册表等内部收尾。
 
 ## 一、现有功能盘点
 

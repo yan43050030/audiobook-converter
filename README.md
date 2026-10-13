@@ -32,6 +32,7 @@
 - 章节搜索过滤
 - 窗口位置记忆
 - 依赖检测面板
+- 模型管理器：统一查看 Piper / CosyVoice / Whisper 模型的占用空间，一处下载与删除
 - 实时进度显示
 
 ## 界面预览
@@ -109,6 +110,15 @@ audiobook convert *.txt --engine edge --voice 晓晓（女声，自然） --out 
 也可作为库调用：`from audiobook import convert_batch, transcribe, load_file_content`。
 
 查看生效配置：`python -m audiobook config`。
+
+模型管理（无界面服务器上也能预先备好模型）：
+
+```bash
+python -m audiobook models list                    # 已安装模型及占用空间
+python -m audiobook models available               # 常用可下载模型（✓ 为已安装）
+python -m audiobook models get whisper base        # 下载（Piper 也可填官方目录中的语音 key）
+python -m audiobook models rm cosyvoice CosyVoice-300M-SFT   # 删除（仅限存储目录内的模型）
+```
 
 ### 本地 Web UI（v6.0 新增，可选）
 
