@@ -49,6 +49,16 @@ SCHEMA: Dict[str, Dict[str, Any]] = {
         "default": "",
         "help": "窗口位置/大小记忆（由界面维护）",
     },
+    "default_engine": {
+        "type": str,
+        "default": "",
+        "help": "启动时默认选中的引擎（记住上次使用的；空=列表第一个）",
+    },
+    "wizard_completed": {
+        "type": bool,
+        "default": False,
+        "help": "是否已完成首次运行向导",
+    },
 }
 
 
@@ -69,9 +79,21 @@ def _coerce(key: str, value: Any) -> Any:
     target = spec["type"]
     fallback = _default_value(spec)
     try:
-        if target is int:
+        if target is bool:
+            # 先于 int 判断（bool 是 int 子类）；兼容手改配置写成的 "true"/"1" 等
+            if isinstance(value, bool):
+                coerced: Any = value
+            elif isinstance(value, (int, float)):
+                coerced = bool(value)
+            elif isinstance(value, str) and value.strip().lower() in ("1", "true", "yes", "on"):
+                coerced = True
+            elif isinstance(value, str) and value.strip().lower() in ("0", "false", "no", "off", ""):
+                coerced = False
+            else:
+                return fallback
+        elif target is int:
             # 允许 "5" 这类字符串数字；bool 是 int 子类，原样通过
-            coerced: Any = int(value)
+            coerced = int(value)
         elif target is str:
             coerced = value if isinstance(value, str) else str(value)
         elif target is list:

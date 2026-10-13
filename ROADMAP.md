@@ -20,7 +20,8 @@
 > `audiobook serve`）。**已定版发布 v6.0.0 正式版**（阶段 1 + 阶段 2 全落地；macOS/Windows
 > 构建）。**阶段 3 进行中**：C2 工作区重设计按 U1 模型管理器 → U3 生成队列可视化 → U2 首次运行
 > 向导推进，**U1 已完成**（`audiobook.models` + GUI 模型管理器 + CLI `models`），**U3 已完成**（生成队列页：
-> 逐章状态 / 错误原因 / 单项与失败项重试；`convert_batch` 新增 `item_callback` / `only_indices`）。其余：C1 声音克隆，
+> 逐章状态 / 错误原因 / 单项与失败项重试；`convert_batch` 新增 `item_callback` / `only_indices`），**U2 已完成**
+> （首次运行向导：选场景 → 备模型 → 试听，记住引擎）——**C2 工作区重设计全部完成**。其余：C1 声音克隆，
 > 以及 piper/cosyvoice 重实现整体迁入各自模块、Edge 异步批量编排并入注册表等内部收尾。
 
 ## 一、现有功能盘点
