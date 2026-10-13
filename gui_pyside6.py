@@ -218,29 +218,21 @@ class AsrWorker(_BaseWorker):
             self.error_occurred.emit(str(e))
 
 
-class DownloadWorker(_BaseWorker):
-    """模型下载工作线程"""
-    progress_text = Signal(str)
+class _ModelDownloadWorker(_BaseWorker):
+    """模型下载线程（Piper / CosyVoice / Whisper 统一经 audiobook.models.download；
+    字节进度经全局下载监听器推送到主窗口底部进度条）"""
 
-    def setup(self, download_type, model_key=None):
-        self._params = (download_type, model_key)
+    def setup(self, kind, model_id):
+        self._params = (kind, model_id)
 
     def run(self):
         try:
-            dtype, model_key = self._params
-            if dtype == "piper":
-                # 只下载内置默认语音；目录中的其他语音走「更多语音包」对话框
-                from tts_engine import PIPER_BUILTIN_VOICES
-                for v in list(PIPER_BUILTIN_VOICES.values()):
-                    _ensure_piper_model(v, should_stop=self._check_stop)
-                self.finished_ok.emit("piper")
-            elif dtype == "cosyvoice":
-                models = list(COSYVOICE_MODEL_URLS.keys())
-                for mk in models:
-                    _ensure_cosyvoice_model(mk, should_stop=self._check_stop)
-                self.finished_ok.emit("cosyvoice")
+            from audiobook.models import download
+            kind, model_id = self._params
+            download(kind, model_id, should_stop=self._check_stop)
+            self.finished_ok.emit(self._params)
         except Exception as e:
-            logger.error(f"下载失败: {e}")
+            logger.error(f"模型下载失败: {e}")
             self.error_occurred.emit(str(e))
 
 
@@ -600,7 +592,7 @@ class AudiobookConverterMain(QMainWindow):
         self._preview_worker: Optional[PreviewWorker] = None
         self._stream_worker: Optional[StreamPreviewWorker] = None
         self._asr_worker: Optional[AsrWorker] = None
-        self._download_worker: Optional[DownloadWorker] = None
+        self._model_dl_worker: Optional[_ModelDownloadWorker] = None
 
         self._build_ui()
         self._wire_signals()
@@ -1008,12 +1000,14 @@ class AudiobookConverterMain(QMainWindow):
         self._deps_text.setMaximumHeight(200)
         self._deps_text.setFont(QFont("Helvetica", 11))
         dps.addWidget(self._deps_text)
+        # 模型的下载 / 删除 / 占用统一收进「模型管理器」，取代原先分散的下载按钮
+        btn_models = QPushButton("🗂 模型管理器（下载 / 删除 / 占用）")
+        btn_models.setMinimumHeight(34)
+        btn_models.clicked.connect(self._open_model_manager)
+        dps.addWidget(btn_models)
         br1 = QHBoxLayout()
         br1.addWidget(QPushButton("⚙ 重新扫描", clicked=self._refresh_deps))
-        br1.addWidget(QPushButton("⬇ 下载 Piper 模型", clicked=self._download_piper_models))
-        br1.addWidget(QPushButton("🌐 更多语音包…", clicked=self._open_voice_catalog))
         dps.addLayout(br1)
-        dps.addWidget(QPushButton("⬇ 下载 CosyVoice 模型", clicked=self._download_cosyvoice_models))
         br3 = QHBoxLayout()
         br3.addWidget(QPushButton("📁 添加模型文件夹", clicked=self._add_model_folder))
         br3.addWidget(QPushButton("📁 添加程序文件夹", clicked=self._add_binary_folder))
@@ -1506,7 +1500,10 @@ class AudiobookConverterMain(QMainWindow):
         self._refresh_deps()
 
     def _open_storage(self):
-        path = get_storage_dir()
+        self._open_path(get_storage_dir())
+
+    def _open_path(self, path):
+        """用系统文件管理器打开目录"""
         try:
             if platform.system() == "Darwin":
                 subprocess.Popen(["open", path])
@@ -1558,6 +1555,14 @@ class AudiobookConverterMain(QMainWindow):
         except Exception:
             lines.append("○ CosyVoice: 检测失败")
 
+        try:
+            from audiobook import models as _M
+            _entries = _M.list_installed()
+            lines.append(f"模型总占用: {_M.format_size(_M.total_size(_entries))}"
+                         f"（{len(_entries)} 个，详见「模型管理器」）")
+        except Exception:
+            pass
+
         if info["missing"]:
             lines.append("")
             lines.append("缺少:")
@@ -1584,30 +1589,179 @@ class AudiobookConverterMain(QMainWindow):
         self._deps_text.setPlainText("\n".join(lines))
         self._rebuild_engine_buttons()
 
-    def _download_piper_models(self):
-        if QMessageBox.question(self, "下载 Piper 模型",
-                                "将下载中文语音模型到便携存储目录。继续？") != QMessageBox.StandardButton.Yes:
-            return
-        self._status_label.setText("开始下载 Piper 模型...")
-        self._download_worker = DownloadWorker()
-        self._download_worker.setup("piper")
-        self._download_worker.finished_ok.connect(lambda r: (
-            self._status_label.setText("Piper 模型下载完成"), self._refresh_deps()))
-        self._download_worker.error_occurred.connect(lambda e: QMessageBox.critical(self, "下载失败", e))
-        self._download_worker.start()
+    def _open_model_manager(self):
+        """模型管理器：统一查看 Piper / CosyVoice / Whisper 模型的占用，下载与删除。"""
+        from audiobook import models as M
 
-    def _download_cosyvoice_models(self):
-        # 模型下载无需 Python 包，只需网络连接。合成时才需要 cosyvoice 包。
-        if QMessageBox.question(self, "下载 CosyVoice 模型",
-                                "将下载 CosyVoice 模型到便携存储目录（≈600MB）。继续？") != QMessageBox.StandardButton.Yes:
-            return
-        self._status_label.setText("开始下载 CosyVoice 模型...")
-        self._download_worker = DownloadWorker()
-        self._download_worker.setup("cosyvoice")
-        self._download_worker.finished_ok.connect(lambda r: (
-            self._status_label.setText("CosyVoice 模型下载完成"), self._refresh_deps(), self._on_engine_change()))
-        self._download_worker.error_occurred.connect(lambda e: QMessageBox.critical(self, "下载失败", e))
-        self._download_worker.start()
+        dlg = QDialog(self)
+        dlg.setWindowTitle("模型管理器")
+        dlg.resize(780, 660)
+        v = QVBoxLayout(dlg)
+
+        summary = QLabel()
+        summary.setWordWrap(True)
+        v.addWidget(summary)
+
+        tree = QTreeWidget()
+        tree.setHeaderLabels(["名称", "大小", "位置"])
+        tree.setRootIsDecorated(True)
+        tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        tree.header().setStretchLastSection(True)
+        tree.setColumnWidth(0, 300)
+        tree.setColumnWidth(1, 90)
+        tree.setMinimumHeight(300)
+        v.addWidget(tree, 1)
+
+        act_row = QHBoxLayout()
+        btn_refresh = QPushButton("🔄 刷新")
+        btn_delete = QPushButton("🗑 删除选中")
+        btn_delete.setEnabled(False)
+        btn_open = QPushButton("📂 打开所在文件夹")
+        btn_open.setEnabled(False)
+        for b in (btn_refresh, btn_delete, btn_open):
+            act_row.addWidget(b)
+        act_row.addStretch()
+        v.addLayout(act_row)
+
+        dl_box = QGroupBox("下载模型")
+        dl_l = QVBoxLayout(dl_box)
+        dl_row = QHBoxLayout()
+        dl_combo = QComboBox()
+        dl_row.addWidget(dl_combo, 1)
+        btn_dl = QPushButton("⬇ 下载")
+        dl_row.addWidget(btn_dl)
+        dl_l.addLayout(dl_row)
+        cat_row = QHBoxLayout()
+        cat_row.addWidget(QLabel("更多多语言 Piper 语音包："))
+        btn_catalog = QPushButton("🌐 Piper 语音包目录…")
+        cat_row.addWidget(btn_catalog)
+        cat_row.addStretch()
+        dl_l.addLayout(cat_row)
+        v.addWidget(dl_box)
+
+        status = QLabel("")
+        status.setStyleSheet("color:gray")
+        v.addWidget(status)
+        close_row = QHBoxLayout()
+        close_row.addStretch()
+        btn_close = QPushButton("关闭")
+        btn_close.clicked.connect(dlg.close)
+        close_row.addWidget(btn_close)
+        v.addLayout(close_row)
+
+        ENTRY_ROLE = Qt.ItemDataRole.UserRole
+
+        def _populate():
+            tree.clear()
+            entries = M.list_installed()
+            for kind in M.KIND_ORDER:
+                group = [e for e in entries if e.kind == kind]
+                top = QTreeWidgetItem([f"{M.KIND_LABELS[kind]}（{len(group)}）",
+                                       M.format_size(M.total_size(group)), ""])
+                f = top.font(0)
+                f.setBold(True)
+                top.setFont(0, f)
+                top.setFlags(top.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+                tree.addTopLevelItem(top)
+                for e in group:
+                    child = QTreeWidgetItem([e.name, M.format_size(e.size_bytes), e.location])
+                    child.setData(0, ENTRY_ROLE, e)
+                    if not e.managed:
+                        child.setText(0, f"{e.name}  [外部·只读]")
+                        child.setForeground(0, QColor("gray"))
+                        child.setToolTip(0, "来自「添加模型文件夹」的外部目录，为安全起见不在此删除")
+                    top.addChild(child)
+                if not group:
+                    hint = QTreeWidgetItem(["（未安装）", "", ""])
+                    hint.setForeground(0, QColor("gray"))
+                    hint.setFlags(hint.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+                    top.addChild(hint)
+                top.setExpanded(True)
+            summary.setText(
+                f"已安装 <b>{len(entries)}</b> 个模型，共占用 <b>{M.format_size(M.total_size(entries))}</b>"
+                f"　·　存储目录：{get_storage_dir()}")
+
+            dl_combo.clear()
+            for it in M.downloadable():
+                mark = "✓ 已安装 · " if it.installed else ""
+                dl_combo.addItem(f"{mark}{M.KIND_LABELS[it.kind]} — {it.label}", (it.kind, it.id))
+            _on_select()
+
+        def _selected_entry():
+            item = tree.currentItem()
+            return item.data(0, ENTRY_ROLE) if item is not None else None
+
+        def _on_select():
+            e = _selected_entry()
+            btn_delete.setEnabled(bool(e) and e.managed)
+            btn_open.setEnabled(bool(e))
+
+        def _after_change():
+            # 语音列表 / 引擎就绪状态随模型增删变化
+            _populate()
+            self._refresh_deps()
+            self._on_engine_change()
+
+        def _delete():
+            e = _selected_entry()
+            if not e:
+                return
+            if self._convert_worker is not None and self._convert_worker.isRunning():
+                QMessageBox.warning(dlg, "正在生成", "生成进行中，暂不能删除模型。请先停止或等待完成。")
+                return
+            if QMessageBox.question(
+                    dlg, "删除模型",
+                    f"删除「{e.name}」？\n将释放 {M.format_size(e.size_bytes)}，删除后需重新下载才能使用。"
+            ) != QMessageBox.StandardButton.Yes:
+                return
+            try:
+                M.delete_model(e)
+            except Exception as ex:
+                QMessageBox.critical(dlg, "删除失败", str(ex))
+                return
+            status.setText(f"已删除 {e.name}，释放 {M.format_size(e.size_bytes)}")
+            _after_change()
+
+        def _open_location():
+            e = _selected_entry()
+            if e:
+                self._open_path(e.location)
+
+        def _download():
+            data = dl_combo.currentData()
+            if not data:
+                return
+            kind, model_id = data
+            status.setText(f"正在下载 {model_id}…（进度见主窗口底部）")
+            btn_dl.setEnabled(False)
+            self._model_dl_worker = _ModelDownloadWorker()
+            self._model_dl_worker.setup(kind, model_id)
+
+            def _done(_r):
+                status.setText(f"{model_id} 下载完成")
+                btn_dl.setEnabled(True)
+                _after_change()
+
+            def _fail(err):
+                status.setText(f"下载失败: {err}")
+                btn_dl.setEnabled(True)
+
+            self._model_dl_worker.finished_ok.connect(_done)
+            self._model_dl_worker.error_occurred.connect(_fail)
+            self._model_dl_worker.start()
+
+        def _catalog():
+            self._open_voice_catalog()
+            _populate()  # 目录对话框关闭后刷新清单
+
+        tree.itemSelectionChanged.connect(_on_select)
+        btn_refresh.clicked.connect(_populate)
+        btn_delete.clicked.connect(_delete)
+        btn_open.clicked.connect(_open_location)
+        btn_dl.clicked.connect(_download)
+        btn_catalog.clicked.connect(_catalog)
+        _populate()
+        dlg.exec()
 
     def _open_voice_catalog(self):
         """打开 Piper 语音包目录对话框：拉取官方 voices.json，按语言筛选下载"""
@@ -2248,7 +2402,8 @@ class AudiobookConverterMain(QMainWindow):
             pass
         # 停止所有后台 QThread，避免退出时 "QThread: Destroyed while thread is still running" 导致 abort()
         for attr in ("_convert_worker", "_preview_worker", "_stream_worker",
-                     "_asr_worker", "_download_worker"):
+                     "_asr_worker", "_model_dl_worker", "_voice_dl_worker",
+                     "_catalog_worker"):
             w = getattr(self, attr, None)
             if w is None:
                 continue

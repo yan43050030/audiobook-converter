@@ -7,6 +7,7 @@
     audiobook engines                      列出引擎及就绪状态
     audiobook voices   [--engine X]        列出某引擎的可用语音
     audiobook transcribe <音频> [选项]     语音转文字（ASR）
+    audiobook models list|available|get|rm  模型管理（查看占用 / 下载 / 删除）
 
 入口：`python -m audiobook ...` 或安装后的 `audiobook ...`。
 """
@@ -147,6 +148,56 @@ def cmd_serve(args):
     return 0
 
 
+def cmd_models(args):
+    from audiobook import models as M
+
+    if args.action == "list":
+        entries = M.list_installed()
+        if not entries:
+            print("（尚未安装任何模型）")
+        for e in entries:
+            flag = "" if e.managed else "  [外部·只读]"
+            print(f"{e.kind:10} {e.id:44} {M.format_size(e.size_bytes):>9}{flag}")
+        print(f"合计 {len(entries)} 个，占用 {M.format_size(M.total_size(entries))}")
+        return 0
+
+    if args.action == "available":
+        for it in M.downloadable():
+            print(f"{'✓' if it.installed else ' '} {it.kind:10} {it.id:24} {it.label}")
+        return 0
+
+    if args.action == "get":
+        import tts_engine as _te
+
+        def _progress(desc, cur, total):
+            if total > 0:
+                print(f"\r下载 {desc}: {cur / 1048576:.1f}/{total / 1048576:.1f} MB",
+                      end="", file=sys.stderr, flush=True)
+
+        _te.add_download_listener(_progress)
+        try:
+            M.download(args.kind, args.id)
+        finally:
+            _te.remove_download_listener(_progress)
+            print(file=sys.stderr)
+        print(f"已下载: {args.kind} {args.id}")
+        return 0
+
+    # rm
+    entry = M.find(args.kind, args.id)
+    if entry is None:
+        print(f"未找到已安装模型: {args.kind} {args.id}（见 audiobook models list）", file=sys.stderr)
+        return 1
+    if not args.yes:
+        ans = input(f"删除 {entry.name}（{M.format_size(entry.size_bytes)}）？[y/N] ")
+        if ans.strip().lower() not in ("y", "yes"):
+            print("已取消")
+            return 0
+    M.delete_model(entry)
+    print(f"已删除: {entry.name}，释放 {M.format_size(entry.size_bytes)}")
+    return 0
+
+
 def cmd_transcribe(args):
     import tts_engine as _te
     from audiobook.engines.asr import transcribe
@@ -207,6 +258,21 @@ def build_parser():
     s.add_argument("--host", default="127.0.0.1", help="监听地址（默认 127.0.0.1）")
     s.add_argument("--port", type=int, default=8000, help="监听端口（默认 8000）")
     s.set_defaults(func=cmd_serve)
+
+    # models
+    kinds = ["piper", "cosyvoice", "whisper"]
+    m = sub.add_parser("models", help="模型管理：查看占用 / 下载 / 删除")
+    msub = m.add_subparsers(dest="action", required=True)
+    msub.add_parser("list", help="列出已安装模型及占用空间")
+    msub.add_parser("available", help="列出常用可下载模型（✓ 为已安装）")
+    mg = msub.add_parser("get", help="下载模型（Piper 也可填官方目录中的语音 key）")
+    mg.add_argument("kind", choices=kinds)
+    mg.add_argument("id", help="模型标识，如 zh_CN-huayan-medium / CosyVoice-300M-SFT / base")
+    mr = msub.add_parser("rm", help="删除已安装模型（仅限存储目录内）")
+    mr.add_argument("kind", choices=kinds)
+    mr.add_argument("id", help="见 audiobook models list 的第二列")
+    mr.add_argument("-y", "--yes", action="store_true", help="不询问直接删除")
+    m.set_defaults(func=cmd_models)
 
     # transcribe
     t = sub.add_parser("transcribe", help="语音转文字（ASR，需 faster-whisper）")
