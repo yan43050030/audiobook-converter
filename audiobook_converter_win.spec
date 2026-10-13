@@ -76,7 +76,7 @@ base_hidden = [
 ]
 all_hidden = base_hidden + piper_hidden + onnx_hidden + pygame_hidden + _doc_hidden + [
     # v6.0 audiobook 包（部分子模块经 importlib 惰性再导出，显式声明确保打包）
-    'audiobook', 'audiobook.config', 'audiobook.models', 'audiobook.core', 'audiobook.core.text',
+    'audiobook', 'audiobook.config', 'audiobook.models', 'audiobook.onboarding', 'audiobook.core', 'audiobook.core.text',
     'audiobook.io', 'audiobook.io.readers', 'audiobook.io.audio',
     'audiobook.engines', 'audiobook.engines.base', 'audiobook.engines.local',
     'audiobook.engines.edge', 'audiobook.engines.piper', 'audiobook.engines.cosyvoice',

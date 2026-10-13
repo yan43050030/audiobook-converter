@@ -242,6 +242,45 @@ class _ModelDownloadWorker(_BaseWorker):
             self.error_occurred.emit(str(e))
 
 
+class _WizardDownloadWorker(_BaseWorker):
+    """首次运行向导：依次下载多个模型并逐项汇报。
+
+    全局下载监听器在下载线程里被调用，这里转成 Qt 信号再回到界面线程更新进度条。
+    finished_ok 发出失败个数。
+    """
+    item_started = Signal(int)
+    item_done = Signal(int)
+    item_failed = Signal(int, str)
+    bytes_progress = Signal(str, int, int)
+
+    def setup(self, items):
+        self._items = list(items)  # [(kind, model_id), ...]
+
+    def run(self):
+        from audiobook.models import download
+
+        def _listener(desc, cur, total):
+            self.bytes_progress.emit(desc, int(cur), int(total))
+
+        add_download_listener(_listener)
+        failed = 0
+        try:
+            for i, (kind, model_id) in enumerate(self._items):
+                if self._should_stop:
+                    break
+                self.item_started.emit(i)
+                try:
+                    download(kind, model_id, should_stop=self._check_stop)
+                    self.item_done.emit(i)
+                except Exception as e:
+                    failed += 1
+                    logger.error(f"向导下载失败 {kind}/{model_id}: {e}")
+                    self.item_failed.emit(i, str(e))
+        finally:
+            remove_download_listener(_listener)
+        self.finished_ok.emit(failed)
+
+
 class _CatalogWorker(_BaseWorker):
     """Piper 语音目录获取线程"""
 
@@ -798,6 +837,7 @@ class AudiobookConverterMain(QMainWindow):
         self._engine_grid.setSpacing(6)
         self._engine_card_layout.addLayout(self._engine_grid)
         self._engine_group.buttonClicked.connect(self._on_engine_change)
+        self._engine_group.buttonClicked.connect(self._remember_engine)
         layout.addWidget(engine_card)
 
         voice_card = QGroupBox("语音参数")
@@ -1017,6 +1057,9 @@ class AudiobookConverterMain(QMainWindow):
         btn_models.setMinimumHeight(34)
         btn_models.clicked.connect(self._open_model_manager)
         dps.addWidget(btn_models)
+        btn_wizard = QPushButton("🧭 首次运行向导（选场景 / 备模型 / 试听）")
+        btn_wizard.clicked.connect(self._open_first_run_wizard)
+        dps.addWidget(btn_wizard)
         br1 = QHBoxLayout()
         br1.addWidget(QPushButton("⚙ 重新扫描", clicked=self._refresh_deps))
         dps.addLayout(br1)
@@ -1344,7 +1387,23 @@ class AudiobookConverterMain(QMainWindow):
     # ================ Engine Management ================
 
     def _rebuild_engine_buttons(self):
-        """从注册表动态重建所有引擎按钮"""
+        """从注册表动态重建所有引擎按钮。
+
+        重建后保持原选中的引擎（依赖刷新 / 模型增删都会触发重建，此前总会跳回第一个
+        引擎）；首次构建时选中配置里记住的 default_engine，没有则选第一个。
+        """
+        prev = None
+        checked = self._engine_group.checkedButton()
+        for _eid, _btn, _n in self._engine_btns:
+            if _btn is checked:
+                prev = _eid
+        if prev is None:
+            try:
+                from tts_engine import _load_config
+                prev = _load_config().get("default_engine") or None
+            except Exception:
+                prev = None
+
         # 清除旧的
         for _bid, btn, _name in self._engine_btns:
             self._engine_group.removeButton(btn)
@@ -1379,9 +1438,31 @@ class AudiobookConverterMain(QMainWindow):
             if first_btn is None:
                 first_btn = btn
 
-        if first_btn:
-            first_btn.setChecked(True)
+        target = next((b for eid, b, _n in self._engine_btns if eid == prev), first_btn)
+        if target:
+            target.setChecked(True)
         self._on_engine_change()
+
+    def _select_engine(self, engine_id):
+        """程序化选中某引擎（向导完成时用）。找不到返回 False。"""
+        for eid, btn, _name in self._engine_btns:
+            if eid == engine_id:
+                btn.setChecked(True)
+                self._on_engine_change()
+                return True
+        return False
+
+    def _remember_engine(self, _btn=None):
+        """用户手动切换引擎时记住，下次启动默认选中。"""
+        try:
+            from tts_engine import _load_config, _save_config
+            eid = self._get_current_engine()
+            cfg = _load_config()
+            if eid and cfg.get("default_engine") != eid:
+                cfg["default_engine"] = eid
+                _save_config(cfg)
+        except Exception:
+            pass
 
     def _on_engine_change(self):
         engine = self._engine_group.checkedButton()
@@ -1923,6 +2004,327 @@ class AudiobookConverterMain(QMainWindow):
         btn_catalog.clicked.connect(_catalog)
         _populate()
         dlg.exec()
+
+    # ================ 首次运行向导 ================
+
+    def maybe_show_first_run_wizard(self):
+        """启动后由 main.py 调用：首次使用时自动打开向导（判定见 audiobook.onboarding.should_show）。"""
+        try:
+            from audiobook import onboarding
+            if onboarding.should_show():
+                self._open_first_run_wizard()
+        except Exception as e:
+            logger.warning(f"首次运行向导启动失败: {e}")
+
+    def _open_first_run_wizard(self):
+        self._build_first_run_wizard().exec()
+
+    def _build_first_run_wizard(self):
+        """构建首次运行向导：选场景 → 下载该场景缺的模型 → 试听验证 → 记住引擎。
+
+        任何方式关闭都会记为「已完成」，不再自动弹出；只有点「完成」才会同时设定默认引擎。
+        """
+        from audiobook import onboarding as OB
+        from audiobook import models as M
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("首次运行向导")
+        dlg.resize(680, 560)
+        root = QVBoxLayout(dlg)
+        step_label = QLabel()
+        step_label.setStyleSheet("color:gray")
+        root.addWidget(step_label)
+        stack = QStackedWidget()
+        stack.setObjectName("wizardStack")
+        root.addWidget(stack, 1)
+        nav = QHBoxLayout()
+        btn_skip = QPushButton("跳过向导")
+        btn_skip.setObjectName("wizardSkip")
+        btn_back = QPushButton("← 上一步")
+        btn_back.setObjectName("wizardBack")
+        btn_next = QPushButton("下一步 →")
+        btn_next.setObjectName("wizardNext")
+        nav.addWidget(btn_skip)
+        nav.addStretch()
+        nav.addWidget(btn_back)
+        nav.addWidget(btn_next)
+        root.addLayout(nav)
+
+        st = {"scenario": None, "items": [], "labels": [], "todo": [], "failed_idx": [],
+              "downloading": False, "finished": False}
+        ENGINE_NAMES = {"edge": "Edge 在线语音", "piper": "Piper 离线语音", "local": "系统语音"}
+        STEPS = ["第 1 步 / 共 3 步 · 选择使用场景", "第 2 步 / 共 3 步 · 准备模型",
+                 "第 3 步 / 共 3 步 · 试听验证"]
+
+        # ---------- 第 1 步：选择使用场景 ----------
+        p1 = QWidget()
+        l1 = QVBoxLayout(p1)
+        l1.addWidget(QLabel("<h2>欢迎使用文字转有声读物</h2>"))
+        intro = QLabel("先选一个使用场景，向导会帮你备好需要的东西。"
+                       "之后可在「存储与依赖」面板随时重新运行本向导。")
+        intro.setWordWrap(True)
+        intro.setStyleSheet("color:gray")
+        l1.addWidget(intro)
+        sc_group = QButtonGroup(dlg)
+        sc_buttons = {}
+        rec = OB.recommend()
+        for sc in OB.SCENARIOS:
+            ok, why = OB.availability(sc)
+            pending = OB.pending_downloads(sc) if ok else []
+            if not ok:
+                extra = f"不可用：{why}"
+            elif pending:
+                extra = f"需下载 {sc.size_hint}"
+            elif sc.models:
+                extra = "模型已就绪"
+            else:
+                extra = sc.size_hint
+            tag = "推荐 · " if sc.id == rec else ""
+            rb = QRadioButton(f"{sc.title}　（{tag}{extra}）")
+            rb.setObjectName(f"wizardScenario_{sc.id}")
+            rb.setStyleSheet("font-weight:bold")
+            rb.setEnabled(ok)
+            sc_group.addButton(rb)
+            sc_buttons[sc.id] = rb
+            l1.addWidget(rb)
+            desc = QLabel(sc.description)
+            desc.setWordWrap(True)
+            desc.setStyleSheet("color:gray; margin-left:24px; margin-bottom:6px")
+            l1.addWidget(desc)
+        if rec in sc_buttons and sc_buttons[rec].isEnabled():
+            sc_buttons[rec].setChecked(True)
+        l1.addStretch()
+        stack.addWidget(p1)
+
+        # ---------- 第 2 步：准备模型 ----------
+        p2 = QWidget()
+        l2 = QVBoxLayout(p2)
+        l2.addWidget(QLabel("<h3>准备模型</h3>"))
+        dl_intro = QLabel()
+        dl_intro.setWordWrap(True)
+        l2.addWidget(dl_intro)
+        dl_list = QListWidget()
+        dl_list.setObjectName("wizardDownloadList")
+        l2.addWidget(dl_list, 1)
+        dl_bar = QProgressBar()
+        dl_bar.setVisible(False)
+        l2.addWidget(dl_bar)
+        dl_status = QLabel("")
+        dl_status.setObjectName("wizardDownloadStatus")
+        dl_status.setWordWrap(True)
+        dl_status.setStyleSheet("color:gray")
+        l2.addWidget(dl_status)
+        btn_retry = QPushButton("🔁 重试失败项")
+        btn_retry.setObjectName("wizardRetry")
+        btn_retry.setVisible(False)
+        l2.addWidget(btn_retry, 0, Qt.AlignmentFlag.AlignLeft)
+        stack.addWidget(p2)
+
+        # ---------- 第 3 步：试听验证 ----------
+        p3 = QWidget()
+        l3 = QVBoxLayout(p3)
+        l3.addWidget(QLabel("<h3>试听验证</h3>"))
+        ready_label = QLabel()
+        ready_label.setWordWrap(True)
+        l3.addWidget(ready_label)
+        sample = QLineEdit("你好，欢迎使用文字转有声读物。祝你听书愉快！")
+        l3.addWidget(sample)
+        listen_row = QHBoxLayout()
+        btn_listen = QPushButton("▶ 试听")
+        btn_listen.setObjectName("wizardListen")
+        listen_row.addWidget(btn_listen)
+        listen_row.addStretch()
+        l3.addLayout(listen_row)
+        listen_status = QLabel("")
+        listen_status.setObjectName("wizardListenStatus")
+        listen_status.setWordWrap(True)
+        l3.addWidget(listen_status)
+        hint = QLabel("听到声音就说明一切就绪。点「完成」后默认使用该引擎，之后仍可在右侧面板随时切换。")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:gray")
+        l3.addWidget(hint)
+        l3.addStretch()
+        stack.addWidget(p3)
+
+        # ---------- 逻辑 ----------
+        def _scenario_choice():
+            for sid, rb in sc_buttons.items():
+                if rb.isChecked():
+                    return OB.get(sid)
+            return None
+
+        def _update_nav():
+            i = stack.currentIndex()
+            step_label.setText(STEPS[i])
+            btn_back.setVisible(i > 0)
+            btn_back.setEnabled(not st["downloading"])
+            btn_next.setText("完成 ✓" if i == 2 else "下一步 →")
+            if i == 0:
+                btn_next.setEnabled(_scenario_choice() is not None)
+            elif i == 1:
+                btn_next.setEnabled(not st["downloading"])
+            else:
+                btn_next.setEnabled(True)
+
+        def _set_row(i, status):
+            item = dl_list.item(i)
+            if item is not None:
+                item.setText(f"{st['labels'][i]}　—　{status}")
+
+        def _on_bytes(desc, cur, total):
+            if total > 0:
+                dl_bar.setRange(0, total)
+                dl_bar.setValue(min(cur, total))
+                dl_status.setText(f"{desc}：{cur / 1048576:.1f} / {total / 1048576:.1f} MB")
+            else:
+                dl_bar.setRange(0, 0)
+
+        def _on_failed(k, err):
+            i = st["todo"][k]
+            st["failed_idx"].append(i)
+            _set_row(i, f"✗ 失败：{err}")
+
+        def _on_dl_finished(failed):
+            st["downloading"] = False
+            dl_bar.setVisible(False)
+            if failed:
+                dl_status.setText(f"有 {failed} 项下载失败。可以重试，也可以先继续"
+                                  f"（之后在「模型管理器」里也能下载）。")
+                btn_retry.setVisible(True)
+            else:
+                dl_status.setText("✓ 全部就绪")
+            self._refresh_deps()
+            _update_nav()
+
+        def _start_downloads(indices):
+            st["downloading"] = True
+            st["todo"] = list(indices)
+            st["failed_idx"] = []
+            btn_retry.setVisible(False)
+            dl_bar.setVisible(True)
+            dl_bar.setRange(0, 0)
+            dl_status.setText("正在下载…")
+            for i in indices:
+                _set_row(i, "等待")
+            w = _WizardDownloadWorker()
+            w.setup([st["items"][i] for i in indices])
+            w.item_started.connect(lambda k: _set_row(st["todo"][k], "⬇ 下载中…"))
+            w.item_done.connect(lambda k: _set_row(st["todo"][k], "✓ 完成"))
+            w.item_failed.connect(_on_failed)
+            w.bytes_progress.connect(_on_bytes)
+            w.finished_ok.connect(_on_dl_finished)
+            self._wizard_dl_worker = w
+            w.start()
+            _update_nav()
+
+        def _enter_downloads():
+            sc = st["scenario"]
+            pending = OB.pending_downloads(sc)
+            st["items"] = [(it.kind, it.id) for it in pending]
+            st["labels"] = [f"{M.KIND_LABELS[it.kind]} · {it.label}" for it in pending]
+            dl_list.clear()
+            btn_retry.setVisible(False)
+            if not pending:
+                dl_intro.setText(f"「{sc.title}」所需模型已全部就绪。")
+                dl_status.setText("✓ 全部就绪")
+                return
+            for lab in st["labels"]:
+                dl_list.addItem(f"{lab}　—　等待")
+            dl_intro.setText(f"「{sc.title}」需要下载以下模型（{sc.size_hint}）。下载完成后点「下一步」试听。")
+            _start_downloads(list(range(len(pending))))
+
+        def _enter_listen():
+            sc = st["scenario"]
+            ok, why = OB.availability(sc)
+            text = f"已选择：<b>{sc.title}</b>（引擎：{ENGINE_NAMES.get(sc.engine, sc.engine)}）"
+            if not ok:
+                text += f"<br><span style='color:#C62828'>引擎不可用：{why}</span>"
+            ready_label.setText(text)
+            btn_listen.setEnabled(ok)
+            listen_status.setText("")
+
+        def _goto(i):
+            stack.setCurrentIndex(i)
+            if i == 1:
+                _enter_downloads()
+            elif i == 2:
+                _enter_listen()
+            _update_nav()
+
+        def _listen():
+            sc = st["scenario"]
+            voices = get_voice_list(sc.engine)
+            if not voices:
+                listen_status.setText("✗ 该引擎没有可用语音。")
+                return
+            voice = get_voice_id(voices[0], sc.engine)
+            btn_listen.setEnabled(False)
+            listen_status.setText("正在生成试听…（Piper 首次使用需要几秒加载模型）")
+            w = PreviewWorker()
+            w.setup(sample.text().strip() or "你好", voice, "+0%", sc.engine)
+
+            def _ok(path):
+                btn_listen.setEnabled(True)
+                try:
+                    self.player.play(path)
+                    listen_status.setText("✓ 正在播放。听到声音就说明一切就绪。")
+                except Exception as e:
+                    listen_status.setText(f"试听已生成，但播放失败：{e}")
+
+            def _err(e):
+                btn_listen.setEnabled(True)
+                listen_status.setText(f"✗ 试听失败：{e}")
+
+            w.finished_ok.connect(_ok)
+            w.error_occurred.connect(_err)
+            self._wizard_preview_worker = w
+            w.start()
+
+        def _finish():
+            sc = st["scenario"]
+            st["finished"] = True
+            usable = OB.availability(sc)[0]
+            OB.mark_completed(sc.engine if usable else None)
+            self._refresh_deps()          # 先刷新（会重建引擎按钮），再选中
+            if usable:
+                self._select_engine(sc.engine)
+            dlg.accept()
+
+        def _next():
+            i = stack.currentIndex()
+            if i == 0:
+                st["scenario"] = _scenario_choice()
+                if st["scenario"] is None:
+                    return
+                # 没有要下载的就直接跳到试听
+                _goto(1 if OB.pending_downloads(st["scenario"]) else 2)
+            elif i == 1:
+                _goto(2)
+            else:
+                _finish()
+
+        def _back():
+            # 回到场景选择（下载步骤做完后再进入会是空列表，没有意义）
+            if stack.currentIndex() > 0 and not st["downloading"]:
+                _goto(0)
+
+        def _on_closed(_result):
+            w = getattr(self, "_wizard_dl_worker", None)
+            if w is not None and w.isRunning():
+                w.request_stop()
+            if not st["finished"]:
+                OB.mark_completed(None)   # 跳过 / 关闭：不再自动弹出
+
+        sc_group.buttonClicked.connect(lambda _b: _update_nav())
+        btn_next.clicked.connect(_next)
+        btn_back.clicked.connect(_back)
+        btn_skip.clicked.connect(dlg.reject)
+        btn_retry.clicked.connect(lambda: _start_downloads(list(st["failed_idx"])))
+        btn_listen.clicked.connect(_listen)
+        dlg.finished.connect(_on_closed)
+        stack.setCurrentIndex(0)
+        _update_nav()
+        return dlg
 
     def _open_voice_catalog(self):
         """打开 Piper 语音包目录对话框：拉取官方 voices.json，按语言筛选下载"""
@@ -2578,7 +2980,7 @@ class AudiobookConverterMain(QMainWindow):
         # 停止所有后台 QThread，避免退出时 "QThread: Destroyed while thread is still running" 导致 abort()
         for attr in ("_convert_worker", "_preview_worker", "_stream_worker",
                      "_asr_worker", "_model_dl_worker", "_voice_dl_worker",
-                     "_catalog_worker"):
+                     "_catalog_worker", "_wizard_dl_worker", "_wizard_preview_worker"):
             w = getattr(self, attr, None)
             if w is None:
                 continue

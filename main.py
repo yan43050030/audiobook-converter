@@ -85,6 +85,8 @@ def _run_qt(backend, prefix):
         window.setMaximumSize(16777215, 16777215)  # QWIDGETSIZE_MAX，表示无上限
 
     QTimer.singleShot(0, _enable_resize)
+    # 首次使用：窗口显示后弹出首次运行向导（老用户 / 已完成过的不弹）
+    QTimer.singleShot(300, window.maybe_show_first_run_wizard)
 
     sys.exit(app.exec())
 
