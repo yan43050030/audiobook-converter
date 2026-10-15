@@ -8,6 +8,7 @@
     audiobook voices   [--engine X]        列出某引擎的可用语音
     audiobook transcribe <音频> [选项]     语音转文字（ASR）
     audiobook models list|available|get|rm  模型管理（查看占用 / 下载 / 删除）
+    audiobook clone list|add|rm|check|say  声音克隆（CosyVoice 零样本复刻音色）
 
 入口：`python -m audiobook ...` 或安装后的 `audiobook ...`。
 """
@@ -122,7 +123,19 @@ def cmd_convert(args):
 
 def cmd_config(args):
     import tts_engine as _te
-    from audiobook.config import SCHEMA, effective
+    from audiobook.config import SCHEMA, effective, normalize
+    if getattr(args, "set", None):
+        raw = _te._load_config()
+        for item in args.set:
+            key, sep, value = item.partition("=")
+            key = key.strip()
+            if not sep or key not in SCHEMA:
+                print(f"错误：无效的设置 {item!r}（格式 KEY=VALUE，KEY 见 audiobook config）", file=sys.stderr)
+                return 2
+            raw[key] = value.strip()
+            raw[key] = normalize({key: raw[key]})[key]  # 按 schema 校正类型（如 true → True）
+        _te._save_config(raw)
+        print("已保存：" + ", ".join(i.partition("=")[0].strip() for i in args.set))
     cfg = effective(_te._load_config())
     print(f"配置文件: {_te.CONFIG_PATH}")
     for key, spec in SCHEMA.items():
@@ -198,6 +211,68 @@ def cmd_models(args):
     return 0
 
 
+def cmd_clone(args):
+    from audiobook.cloning import profiles as P
+    from audiobook.cloning import client as C
+
+    if args.action == "list":
+        items = P.list_profiles()
+        if not items:
+            print("（还没有克隆音色，用 audiobook clone add <名字> <参考音频> 创建）")
+        for p in items:
+            text = (p.prompt_text[:24] + "…") if len(p.prompt_text) > 24 else (p.prompt_text or "（无文字稿）")
+            print(f"{p.id:20} {p.name:16} {p.duration:5.1f}s  {text}")
+        return 0
+
+    if args.action == "add":
+        p = P.create_profile(args.name, args.audio, prompt_text=args.text or "")
+        print(f"已创建克隆音色：{p.name}（ID {p.id}，{p.duration:.1f} 秒）")
+        if not p.prompt_text:
+            print("提示：填写参考音频的文字稿（--text）能明显提升复刻效果。", file=sys.stderr)
+        return 0
+
+    if args.action == "rm":
+        pid = P.parse_voice_id(args.id) or args.id
+        prof = P.get_profile(pid)
+        if prof is None:
+            print(f"未找到克隆音色：{args.id}", file=sys.stderr)
+            return 1
+        if not args.yes and input(f"删除克隆音色「{prof.name}」？[y/N] ").strip().lower() not in ("y", "yes"):
+            print("已取消")
+            return 0
+        P.delete_profile(pid)
+        print(f"已删除：{prof.name}")
+        return 0
+
+    if args.action == "check":
+        rep = C.check(load=args.load)
+        ok, msg = C.readiness()
+        print(f"Python 解释器: {rep['python'] or '（未配置）'}")
+        print(f"CosyVoice 仓库: {rep['repo'] or '（未配置，依赖解释器自身的 PYTHONPATH）'}")
+        print(f"模型目录: {rep['model_dir'] or '（未找到）'}" + (f"  [{rep['model_type']}]" if rep['model_type'] else ""))
+        print(f"克隆音色: {len(P.list_profiles())} 个")
+        if rep["ping"]:
+            pg = rep["ping"]
+            print(f"桥接进程: Python {pg.get('python')}，cosyvoice "
+                  + ("可导入 ✓" if pg.get("cosyvoice") else f"无法导入 ✗（{pg.get('import_error')}）"))
+        if rep["load"]:
+            print(f"模型加载: {rep['load'].get('model_type')}，采样率 {rep['load'].get('sample_rate')} ✓")
+        if rep["error"]:
+            print(f"错误: {rep['error']}", file=sys.stderr)
+        print(("✓ " if ok else "✗ ") + msg)
+        return 0 if ok and not rep["error"] and (rep["ping"] or {}).get("cosyvoice") else 1
+
+    # say
+    from audiobook.engines.base import get_engine
+    pid = P.parse_voice_id(args.id) or args.id
+    if P.get_profile(pid) is None:
+        print(f"未找到克隆音色：{args.id}", file=sys.stderr)
+        return 1
+    get_engine("clone").synthesize_segment(args.text, P.VOICE_PREFIX + pid, args.rate, args.out)
+    print(args.out)
+    return 0
+
+
 def cmd_transcribe(args):
     import tts_engine as _te
     from audiobook.engines.asr import transcribe
@@ -250,7 +325,9 @@ def build_parser():
     v.set_defaults(func=cmd_voices)
 
     # config
-    cf = sub.add_parser("config", help="查看生效配置及各项说明")
+    cf = sub.add_parser("config", help="查看 / 修改配置（--set KEY=VALUE，可多次）")
+    cf.add_argument("--set", action="append", metavar="KEY=VALUE",
+                    help="修改一项配置，如 --set cosyvoice_python=/path/to/python")
     cf.set_defaults(func=cmd_config)
 
     # serve
@@ -273,6 +350,26 @@ def build_parser():
     mr.add_argument("id", help="见 audiobook models list 的第二列")
     mr.add_argument("-y", "--yes", action="store_true", help="不询问直接删除")
     m.set_defaults(func=cmd_models)
+
+    # clone
+    cl = sub.add_parser("clone", help="声音克隆：用一段参考音频复刻音色（需 CosyVoice 环境）")
+    csub = cl.add_subparsers(dest="action", required=True)
+    csub.add_parser("list", help="列出克隆音色")
+    ca = csub.add_parser("add", help="从参考音频创建克隆音色（建议 5–15 秒清晰人声）")
+    ca.add_argument("name", help="音色名字")
+    ca.add_argument("audio", help="参考音频（wav/mp3/m4a/...）")
+    ca.add_argument("--text", default="", help="参考音频的文字稿（强烈建议填写）")
+    cr = csub.add_parser("rm", help="删除克隆音色")
+    cr.add_argument("id", help="音色 ID（见 audiobook clone list）")
+    cr.add_argument("-y", "--yes", action="store_true", help="不询问直接删除")
+    cc = csub.add_parser("check", help="检查 CosyVoice 环境（解释器 / 仓库 / 模型）")
+    cc.add_argument("--load", action="store_true", help="同时实际加载一次模型（较慢）")
+    cs = csub.add_parser("say", help="用克隆音色合成一句话")
+    cs.add_argument("id", help="音色 ID")
+    cs.add_argument("text", help="要合成的文本")
+    cs.add_argument("-o", "--out", default="clone_sample.mp3", help="输出文件（默认 clone_sample.mp3）")
+    cs.add_argument("--rate", default="+0%", help="语速，如 +0% / -20%")
+    cl.set_defaults(func=cmd_clone)
 
     # transcribe
     t = sub.add_parser("transcribe", help="语音转文字（ASR，需 faster-whisper）")

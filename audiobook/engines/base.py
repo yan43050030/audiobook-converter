@@ -117,6 +117,7 @@ _CONCRETE: Dict[str, Tuple[str, str]] = {
     "edge": ("audiobook.engines.edge", "EdgeEngine"),
     "piper": ("audiobook.engines.piper", "PiperEngine"),
     "cosyvoice": ("audiobook.engines.cosyvoice", "CosyVoiceEngine"),
+    "clone": ("audiobook.engines.clone", "CloneEngine"),
 }
 
 

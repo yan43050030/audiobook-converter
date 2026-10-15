@@ -225,6 +225,11 @@ def delete_model(entry: ModelEntry, storage_dir: Optional[str] = None) -> None:
         _te._unload_piper_model(entry.id)
     elif entry.kind == KIND_COSYVOICE:
         _te._unload_cosyvoice_model()
+        try:  # 声音克隆的桥接进程可能正加载着该模型
+            from audiobook.cloning import client as _clone
+            _clone.shutdown()
+        except Exception:
+            pass
     elif entry.kind == KIND_WHISPER:
         from audiobook.engines.asr import unload_whisper_model
         unload_whisper_model()

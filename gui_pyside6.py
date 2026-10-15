@@ -1417,6 +1417,7 @@ class AudiobookConverterMain(QMainWindow):
             "local": ("本地", "离线 · 系统内置"),
             "piper": ("Piper", "离线高质量"),
             "cosyvoice": ("CosyVoice", "离线神经网络"),
+            "clone": ("声音克隆", "复刻你的音色"),
         }
 
         first_btn = None

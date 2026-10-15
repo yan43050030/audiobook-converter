@@ -1,5 +1,31 @@
 # 项目情况日志 — 文字转有声读物 (Audiobook Converter)
 
+## 未发布 — 阶段 3 / C1 声音克隆（进行中）
+
+### C1-1 声音克隆核心（后端 + CLI）
+
+- **音色档案**（`audiobook/cloning/profiles.py`）：参考音频经 ffmpeg 规整为 16 kHz 单声道 WAV，
+  短于 3 秒拒收、超过 30 秒截取前 30 秒；保存文字稿；增删改查，ID 校验防路径穿越；重名音色自动区分。
+- **桥接子进程**（`bridge_worker.py` + `client.py`）：CosyVoice 依赖 torch、以 git 仓库方式安装，
+  打包版的冻结 Python 无法直接 import，因此在用户自己的 CosyVoice 环境里常驻一个桥接进程（模型只加载
+  一次，逐行 JSON 协议）。按官方当前接口实现：`AutoModel` 自动识别 CosyVoice / CosyVoice2 / CosyVoice3；
+  有文字稿走 `inference_zero_shot`、无文字稿走 `inference_cross_lingual`；CosyVoice3 自动加
+  `<|endofprompt|>` 系统前缀；同一音色用 `add_zero_shot_spk` 只提取一次说话人特征（文字稿修改后自动
+  重新登记）；老版本「提示音频须为张量」的接口自动回退。暂停时立即结束推理进程，下次自动重启；
+  进程崩溃 / 超时给出带日志尾部的错误；库的输出导到日志，不污染协议。
+- **clone 引擎**：注册为内置引擎「声音克隆（CosyVoice）」，语音即克隆音色（`clone:<id>`），走注册表
+  同步分发，批量生成 / 生成队列 / 续传均可用。模型目录自动在 `cosyvoice-models/` 下找
+  CosyVoice3 > CosyVoice2 > CosyVoice（排除不支持复刻的 SFT / Instruct）。
+- **配置**：新增 `cosyvoice_python` / `cosyvoice_repo` / `clone_model_dir`；`audiobook config --set KEY=VALUE`
+  可直接修改配置（按 schema 校正类型）。
+- **CLI**：`audiobook clone list | add | rm | check [--load] | say`；`convert --engine clone --voice <音色>`。
+- 打包：三份 spec 以数据文件形式附带 `bridge_worker.py`（它由外部 Python 执行，必须是真实 .py 文件）
+  并补 hiddenimports；模型管理器删除 CosyVoice 模型时一并结束桥接进程。
+- **测试**（`tests/test_clone.py`，25 项）：真实 CosyVoice 无法在 CI 运行，测试用一个仿官方接口的替身
+  `cosyvoice` 包真实启动桥接子进程端到端验证协议与调用参数（前缀、说话人缓存、跨语种、旧接口回退、
+  错误 / 崩溃 / 暂停恢复），并跑通 `convert_batch(engine="clone")` 与全部 CLI。
+  **真实模型的出声效果需在装好 CosyVoice 的机器上验证。**
+
 ## 未发布 — 阶段 3 / C2 工作区重设计（U1 / U3 / U2 均已完成）
 
 ### U2 首次运行向导
