@@ -59,6 +59,21 @@ SCHEMA: Dict[str, Dict[str, Any]] = {
         "default": False,
         "help": "是否已完成首次运行向导",
     },
+    "cosyvoice_python": {
+        "type": str,
+        "default": "",
+        "help": "声音克隆：装好 CosyVoice 的 Python 解释器路径（空=源码运行时用当前解释器）",
+    },
+    "cosyvoice_repo": {
+        "type": str,
+        "default": "",
+        "help": "声音克隆：CosyVoice 仓库路径（git clone 的目录，自动加入 PYTHONPATH）",
+    },
+    "clone_model_dir": {
+        "type": str,
+        "default": "",
+        "help": "声音克隆：模型目录（空=在 cosyvoice-models/ 下自动找 CosyVoice3/2）",
+    },
 }
 
 

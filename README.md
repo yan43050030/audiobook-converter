@@ -33,6 +33,7 @@
 - 窗口位置记忆
 - 依赖检测面板
 - 模型管理器：统一查看 Piper / CosyVoice / Whisper 模型的占用空间，一处下载与删除
+- 声音克隆（实验性）：用 5–15 秒参考音频复刻音色朗读整本书（基于 CosyVoice，需单独安装）
 - 首次运行向导：选使用场景（联网 / 完全离线 / 离线 + 语音转文字 / 系统语音）→ 自动备好所需模型 → 试听确认；记住上次使用的引擎
 - 实时进度显示；「生成队列」页逐章显示状态与失败原因，失败章节可单独重试
 
@@ -138,6 +139,41 @@ python -m audiobook serve --host 0.0.0.0 --port 8000
 便携存储目录的 `web_output/` 下。
 
 > 该界面定位为**本地工具**，不含鉴权；如需对公网开放请自行置于反向代理与访问控制之后。
+
+### 声音克隆（实验性）
+
+用一段 5–15 秒的清晰人声，复刻出一个音色来朗读整本书。底层是阿里开源的
+[CosyVoice](https://github.com/FunAudioLLM/CosyVoice)（推荐 Fun-CosyVoice3-0.5B，也支持 CosyVoice2-0.5B）的零样本复刻。
+
+> ⚠️ 请只克隆**你本人**或**已获明确授权**的声音。
+>
+> 性能：强烈建议 NVIDIA 显卡；纯 CPU 也能跑，但一本书可能要数小时以上。
+
+CosyVoice 依赖 torch，需要单独装在它自己的 Python 环境里；本程序以子进程方式调用它
+（打包版 / 源码版通用，模型只加载一次）：
+
+```bash
+# 1. 安装 CosyVoice（按官方说明）
+git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git
+cd CosyVoice
+conda create -n cosyvoice python=3.10 -y && conda activate cosyvoice
+pip install -r requirements.txt
+
+# 2. 下载模型到本程序存储目录的 cosyvoice-models/ 下（国内可把 huggingface_hub 换成 modelscope）
+python -c "from huggingface_hub import snapshot_download; snapshot_download('FunAudioLLM/Fun-CosyVoice3-0.5B-2512', local_dir='<存储目录>/cosyvoice-models/Fun-CosyVoice3-0.5B')"
+
+# 3. 告诉本程序用哪个 Python、仓库在哪（打包版必须设置）
+python -m audiobook config --set cosyvoice_python=<conda 环境里的 python 路径> \
+                           --set cosyvoice_repo=<CosyVoice 仓库路径>
+python -m audiobook clone check --load          # 自检：解释器 / 仓库 / 模型都 ✓ 即可
+
+# 4. 创建音色并使用（--text 填参考音频里说的话，能明显提升效果）
+python -m audiobook clone add 小明 sample.wav --text "参考音频里说的那句话"
+python -m audiobook clone say <音色ID> "你好，这是我的克隆声音。" -o hello.mp3
+python -m audiobook convert book.txt --engine clone --voice 小明 --out out --m4b
+```
+
+图形界面里，「声音克隆」会作为一个引擎出现，语音下拉框里就是你创建的音色（音色管理界面将在后续版本加入）。
 
 ### 打包为独立应用
 

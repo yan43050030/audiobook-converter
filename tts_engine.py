@@ -943,6 +943,7 @@ def refresh_cosyvoice_voices() -> None:
 refresh_cosyvoice_voices()
 # CosyVoice 始终注册为 builtin（未安装时 UI 显示"需安装"）
 register_builtin_engine("cosyvoice", "CosyVoice（离线神经）")
+register_builtin_engine("clone", "声音克隆（CosyVoice）")
 
 
 # CosyVoice 模型下载 URL（HuggingFace，hf-mirror 自动回退）
@@ -1195,6 +1196,9 @@ def get_voice_list(engine="edge"):
         return list(PIPER_VOICES.keys())
     elif engine == "cosyvoice":
         return list(COSYVOICE_VOICES.keys())
+    elif engine == "clone":
+        from audiobook.cloning.profiles import voice_map
+        return list(voice_map().keys())
     # 外部引擎
     ext_engines = _scan_external_engines()
     if engine in ext_engines:
@@ -1211,6 +1215,12 @@ def get_voice_id(display_name, engine="edge"):
         return PIPER_VOICES.get(display_name, PIPER_DEFAULT_VOICE)
     elif engine == "cosyvoice":
         return COSYVOICE_VOICES.get(display_name, COSYVOICE_DEFAULT_VOICE)
+    elif engine == "clone":
+        from audiobook.cloning.profiles import voice_map, VOICE_PREFIX
+        if isinstance(display_name, str) and display_name.startswith(VOICE_PREFIX):
+            return display_name  # 已是 voice_id
+        vm = voice_map()
+        return vm.get(display_name) or next(iter(vm.values()), "")
     # 外部引擎：display_name 本身就是 voice ID
     ext_engines = _scan_external_engines()
     if engine in ext_engines:
@@ -1267,6 +1277,10 @@ def check_engine_ready(engine="edge"):
         if _ffmpeg_path() is None:
             return False, "ffmpeg 未安装（Piper 需要 ffmpeg 转换音频）。\n" + _ffmpeg_install_hint()
         return True, "Piper 可用（首次使用将自动下载语音模型）"
+
+    if engine == "clone":
+        from audiobook.cloning.client import readiness
+        return readiness()
 
     if engine == "cosyvoice":
         if COSYVOICE_PYTHON_AVAILABLE:
@@ -2080,6 +2094,10 @@ def _generate_one_safe_multi_voice(
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
+# 经注册表逐段同步合成的内置引擎（Edge 走异步批量专用路径，不在此列）
+_REGISTRY_SYNC_ENGINES = ("local", "piper", "cosyvoice", "clone")
+
+
 def _raw_segment_synth(engine):
     """返回指定引擎的「单段原语」合成函数：callable(text, voice, rate, out_path, should_stop=None)。
 
@@ -2139,7 +2157,7 @@ def _generate_one_safe(text, voice, rate, output_path, engine="edge", should_sto
         try:
             logger.info(f"生成单文件 → {output_path} (尝试 {attempt + 1}, {total_segs} 段)")
 
-            if engine in ("local", "piper", "cosyvoice") or _is_external_engine(engine):
+            if engine in _REGISTRY_SYNC_ENGINES or _is_external_engine(engine):
                 # 经注册表分发：内置引擎（local/piper/cosyvoice）解析为各自的具体 Engine
                 # 子类，外挂引擎回退 _TtsEngineAdapter；分段/合并/进度/重试的编排仍在本函数。
                 from audiobook.engines.base import get_engine
@@ -2415,7 +2433,7 @@ def convert_batch(
         # 用单一事件循环批量生成
         asyncio.run(_edge_batch_generate(items, voice, rate, output_dir, progress_callback, should_stop,
                                          item_callback=item_callback))
-    elif engine in ("local", "piper", "cosyvoice") or _is_external_engine(engine):
+    elif engine in _REGISTRY_SYNC_ENGINES or _is_external_engine(engine):
         # Piper：用 ThreadPoolExecutor 并行处理。
         # CLI 模式靠子进程隔离；Python 模式每个工作线程持有独立模型实例（线程本地缓存）。
         _parallel_piper_done = False

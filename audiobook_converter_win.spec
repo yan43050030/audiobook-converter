@@ -59,7 +59,9 @@ for _mn in ("docx", "ebooklib", "fitz", "pdfplumber"):
     _doc_datas += d
     _doc_hidden += h
 
-base_datas = [('icon.png', '.'), ('icon.ico', '.')]
+base_datas = [('icon.png', '.'), ('icon.ico', '.'),
+              # 声音克隆桥接脚本由外部 Python 执行，必须以真实 .py 文件随包分发
+              ('audiobook/cloning/bridge_worker.py', 'audiobook/cloning')]
 all_datas = base_datas + piper_datas + onnx_datas + pygame_datas + _doc_datas
 all_bins = piper_manual_bins + onnx_bins + pygame_bins
 
@@ -79,7 +81,7 @@ all_hidden = base_hidden + piper_hidden + onnx_hidden + pygame_hidden + _doc_hid
     'audiobook', 'audiobook.config', 'audiobook.models', 'audiobook.onboarding', 'audiobook.core', 'audiobook.core.text',
     'audiobook.io', 'audiobook.io.readers', 'audiobook.io.audio',
     'audiobook.engines', 'audiobook.engines.base', 'audiobook.engines.local',
-    'audiobook.engines.edge', 'audiobook.engines.piper', 'audiobook.engines.cosyvoice',
+    'audiobook.engines.edge', 'audiobook.engines.piper', 'audiobook.engines.cosyvoice', 'audiobook.engines.clone', 'audiobook.cloning', 'audiobook.cloning.profiles', 'audiobook.cloning.client',
     'audiobook.engines.asr',
     # ASR 语音转文字
     'faster_whisper', 'ctranslate2',
