@@ -13,6 +13,7 @@ try:
         QLineEdit, QFileDialog, QMessageBox, QFrame, QSizePolicy,
         QHeaderView, QAbstractItemView, QApplication, QScrollArea, QLayout,
         QTableWidget, QTableWidgetItem, QDialog, QListWidget, QListWidgetItem,
+        QInputDialog,
     )
     from PySide6.QtCore import (
         Qt, Signal, Slot, QThread, QTimer, QSize, QRect,
@@ -30,6 +31,7 @@ except ImportError:
         QLineEdit, QFileDialog, QMessageBox, QFrame, QSizePolicy,
         QHeaderView, QAbstractItemView, QApplication, QScrollArea, QLayout,
         QTableWidget, QTableWidgetItem, QDialog, QListWidget, QListWidgetItem,
+        QInputDialog,
     )
     from PyQt6.QtCore import (
         Qt, QThread, QTimer, QSize, QRect, pyqtSignal as Signal, pyqtSlot as Slot,
@@ -279,6 +281,52 @@ class _WizardDownloadWorker(_BaseWorker):
         finally:
             remove_download_listener(_listener)
         self.finished_ok.emit(failed)
+
+
+class _CloneCheckWorker(_BaseWorker):
+    """声音克隆：检测 CosyVoice 环境（可选实际加载模型）"""
+
+    def setup(self, load=True):
+        self._load = load
+
+    def run(self):
+        try:
+            from audiobook.cloning import client as C
+            self.finished_ok.emit(C.check(load=self._load))
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+
+
+class _ClonePreviewWorker(_BaseWorker):
+    """声音克隆：用某个音色合成一句试听"""
+
+    def setup(self, voice_id, text):
+        self._voice, self._text = voice_id, text
+
+    def run(self):
+        try:
+            from audiobook.engines.base import get_engine
+            out = os.path.join(tempfile.mkdtemp(prefix="clone_preview_"), "preview.mp3")
+            get_engine("clone").synthesize_segment(self._text, self._voice, "+0%", out,
+                                                   should_stop=self._check_stop)
+            self.finished_ok.emit(out)
+        except Exception as e:
+            self.error_occurred.emit(str(e))
+
+
+class _CloneTranscribeWorker(_BaseWorker):
+    """声音克隆：用 Whisper 识别参考音频的文字稿"""
+
+    def setup(self, wav_path):
+        self._wav = wav_path
+
+    def run(self):
+        try:
+            text = transcribe(self._wav, get_storage_dir(), model_size="base", language="auto",
+                              output_format="txt", should_stop=self._check_stop)
+            self.finished_ok.emit((text or "").strip())
+        except Exception as e:
+            self.error_occurred.emit(str(e))
 
 
 class _CatalogWorker(_BaseWorker):
@@ -860,6 +908,10 @@ class AudiobookConverterMain(QMainWindow):
         btn_refresh = QPushButton("刷新")
         btn_refresh.clicked.connect(self._refresh_voices)
         btn_row.addWidget(btn_refresh)
+        btn_clone = QPushButton("🎙 克隆音色…")
+        btn_clone.setToolTip("用一段 5–15 秒的人声复刻音色（基于 CosyVoice）")
+        btn_clone.clicked.connect(self._open_clone_dialog)
+        btn_row.addWidget(btn_clone)
         vc_layout.addLayout(btn_row)
         layout.addWidget(voice_card)
 
@@ -2006,6 +2058,469 @@ class AudiobookConverterMain(QMainWindow):
         _populate()
         dlg.exec()
 
+    # ================ 声音克隆 ================
+
+    def _open_clone_dialog(self):
+        self._build_clone_dialog().exec()
+
+    def _after_clone_change(self):
+        """音色 / 环境变化后刷新引擎卡片（就绪状态）与语音列表（选中的引擎会保持）。"""
+        self._refresh_deps()
+
+    def _build_clone_dialog(self):
+        """声音克隆：音色管理（新建 / 文字稿 / 重命名 / 删除 / 试听）+ CosyVoice 环境设置与检测。"""
+        from audiobook.cloning import profiles as P
+        from audiobook.cloning import client as C
+        from tts_engine import _load_config, _save_config
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("声音克隆")
+        dlg.resize(780, 620)
+        root = QVBoxLayout(dlg)
+        tabs = QTabWidget()
+        tabs.setObjectName("cloneTabs")
+        root.addWidget(tabs, 1)
+        consent = QLabel("⚠ 请只克隆你本人或已获明确授权的声音。")
+        consent.setStyleSheet("color:#B45309")
+        root.addWidget(consent)
+        status = QLabel("")
+        status.setObjectName("cloneStatus")
+        status.setWordWrap(True)
+        root.addWidget(status)
+        close_row = QHBoxLayout()
+        close_row.addStretch()
+        btn_close = QPushButton("关闭")
+        btn_close.clicked.connect(dlg.close)
+        close_row.addWidget(btn_close)
+        root.addLayout(close_row)
+
+        # ---------- 音色页 ----------
+        pv = QWidget()
+        lv = QVBoxLayout(pv)
+        tbl = QTableWidget(0, 3)
+        tbl.setObjectName("cloneTable")
+        tbl.setHorizontalHeaderLabels(["名称", "时长", "文字稿"])
+        tbl.verticalHeader().setVisible(False)
+        tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        tbl.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        tbl.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        hh = tbl.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        tbl.setColumnWidth(0, 180)
+        lv.addWidget(tbl, 1)
+        ops = QHBoxLayout()
+        btn_new = QPushButton("＋ 新建音色…")
+        btn_new.setObjectName("cloneNew")
+        btn_text = QPushButton("编辑文字稿")
+        btn_text.setObjectName("cloneEditText")
+        btn_rename = QPushButton("重命名")
+        btn_rename.setObjectName("cloneRename")
+        btn_del = QPushButton("删除")
+        btn_del.setObjectName("cloneDelete")
+        for b in (btn_new, btn_text, btn_rename, btn_del):
+            ops.addWidget(b)
+        ops.addStretch()
+        lv.addLayout(ops)
+        listen = QHBoxLayout()
+        sample = QLineEdit("你好，这是用我的声音朗读的有声书。")
+        sample.setObjectName("cloneSampleText")
+        listen.addWidget(sample, 1)
+        btn_listen = QPushButton("▶ 试听所选音色")
+        btn_listen.setObjectName("cloneListen")
+        listen.addWidget(btn_listen)
+        lv.addLayout(listen)
+        tip = QLabel("首次试听需要加载模型（GPU 约十几秒，CPU 可能一分钟以上），之后会快很多。")
+        tip.setWordWrap(True)
+        tip.setStyleSheet("color:gray")
+        lv.addWidget(tip)
+        tabs.addTab(pv, "音色")
+
+        # ---------- 环境设置页 ----------
+        pe = QWidget()
+        le = QVBoxLayout(pe)
+        intro = QLabel(
+            "声音克隆基于开源的 CosyVoice（依赖 torch，建议 NVIDIA 显卡），需要单独安装：<ol>"
+            "<li>按官方说明 <code>git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git</code> "
+            "并在独立的 conda / venv 环境里安装依赖；</li>"
+            "<li>下载 <b>Fun-CosyVoice3-0.5B</b>（或 CosyVoice2-0.5B）模型到存储目录的 "
+            "<code>cosyvoice-models/</code> 下；</li>"
+            "<li>在下面填写该环境的 Python 与仓库路径，点「检测环境」。</li></ol>"
+            "详细命令见 README「声音克隆」一节。")
+        intro.setWordWrap(True)
+        intro.setTextFormat(Qt.TextFormat.RichText)
+        le.addWidget(intro)
+        cfg = _load_config()
+        grid = QGridLayout()
+        py_edit = QLineEdit(cfg.get("cosyvoice_python", ""))
+        py_edit.setObjectName("clonePython")
+        default_py = C.resolve_python() if not cfg.get("cosyvoice_python") else ""
+        py_edit.setPlaceholderText(f"留空 = 当前解释器（{default_py}）" if default_py
+                                   else "必填：CosyVoice 环境里的 python，如 …/envs/cosyvoice/bin/python")
+        repo_edit = QLineEdit(cfg.get("cosyvoice_repo", ""))
+        repo_edit.setObjectName("cloneRepo")
+        repo_edit.setPlaceholderText("CosyVoice 仓库目录（git clone 下来的文件夹）")
+        model_edit = QLineEdit(cfg.get("clone_model_dir", ""))
+        model_edit.setObjectName("cloneModelDir")
+        auto_md = C.resolve_model_dir() if not cfg.get("clone_model_dir") else ""
+        model_edit.setPlaceholderText(f"留空 = 自动：{auto_md}" if auto_md
+                                      else "留空 = 自动在 cosyvoice-models/ 下查找（当前未找到）")
+
+        def _browse_file(edit):
+            path, _ = QFileDialog.getOpenFileName(dlg, "选择 Python 解释器")
+            if path:
+                edit.setText(path)
+
+        def _browse_dir(edit, title):
+            path = QFileDialog.getExistingDirectory(dlg, title)
+            if path:
+                edit.setText(path)
+
+        for row, (label, edit, browse) in enumerate((
+                ("Python 解释器", py_edit, lambda: _browse_file(py_edit)),
+                ("CosyVoice 仓库", repo_edit, lambda: _browse_dir(repo_edit, "选择 CosyVoice 仓库目录")),
+                ("模型目录", model_edit, lambda: _browse_dir(model_edit, "选择 CosyVoice 模型目录")))):
+            grid.addWidget(QLabel(label), row, 0)
+            grid.addWidget(edit, row, 1)
+            b = QPushButton("浏览…")
+            b.clicked.connect(browse)
+            grid.addWidget(b, row, 2)
+        le.addLayout(grid)
+        env_ops = QHBoxLayout()
+        btn_save = QPushButton("保存设置")
+        btn_save.setObjectName("cloneSave")
+        btn_check = QPushButton("🔍 检测环境（会实际加载一次模型）")
+        btn_check.setObjectName("cloneCheck")
+        env_ops.addWidget(btn_save)
+        env_ops.addWidget(btn_check)
+        env_ops.addStretch()
+        le.addLayout(env_ops)
+        report = QPlainTextEdit()
+        report.setObjectName("cloneReport")
+        report.setReadOnly(True)
+        report.setPlaceholderText("检测结果会显示在这里。")
+        le.addWidget(report, 1)
+        tabs.addTab(pe, "环境设置")
+
+        # ---------- 逻辑 ----------
+        ID_ROLE = Qt.ItemDataRole.UserRole
+
+        def _update_status():
+            ok, msg = C.readiness()
+            status.setText(("✓ " if ok else "○ ") + msg.replace("\n", " "))
+            status.setStyleSheet("color:#2E7D32" if ok else "color:gray")
+
+        def _selected():
+            r = tbl.currentRow()
+            item = tbl.item(r, 0) if r >= 0 else None
+            return P.get_profile(item.data(ID_ROLE)) if item is not None else None
+
+        def _update_buttons():
+            has = _selected() is not None
+            for b in (btn_text, btn_rename, btn_del, btn_listen):
+                b.setEnabled(has)
+
+        def _refresh(select_id=None):
+            items = P.list_profiles()
+            tbl.setRowCount(len(items))
+            for r, p in enumerate(items):
+                name = QTableWidgetItem(p.name)
+                name.setData(ID_ROLE, p.id)
+                tbl.setItem(r, 0, name)
+                tbl.setItem(r, 1, QTableWidgetItem(f"{p.duration:.1f} 秒"))
+                text = QTableWidgetItem(p.prompt_text or "（无文字稿 · 效果会差一些）")
+                if not p.prompt_text:
+                    text.setForeground(QColor("gray"))
+                text.setToolTip(p.prompt_text)
+                tbl.setItem(r, 2, text)
+                if p.id == select_id:
+                    tbl.selectRow(r)
+            if select_id is None and items and tbl.currentRow() < 0:
+                tbl.selectRow(0)
+            _update_buttons()
+            _update_status()
+
+        def _changed(select_id=None):
+            _refresh(select_id)
+            self._after_clone_change()
+
+        def _new():
+            nd = self._build_clone_new_dialog(dlg)
+            if nd.exec() == QDialog.DialogCode.Accepted and nd.created is not None:
+                _changed(nd.created.id)
+                status.setText(f"已创建音色「{nd.created.name}」。")
+
+        def _edit_text():
+            p = _selected()
+            if not p:
+                return
+            text, ok = QInputDialog.getMultiLineText(dlg, "编辑文字稿", "参考音频里说的话（逐字填写效果更好）：",
+                                                     p.prompt_text)
+            if ok:
+                P.update_profile(p.id, prompt_text=text)
+                _changed(p.id)
+
+        def _rename():
+            p = _selected()
+            if not p:
+                return
+            name, ok = QInputDialog.getText(dlg, "重命名", "音色名称：", text=p.name)
+            if ok and name.strip():
+                P.update_profile(p.id, name=name)
+                _changed(p.id)
+
+        def _delete():
+            p = _selected()
+            if not p:
+                return
+            if QMessageBox.question(dlg, "删除音色", f"删除克隆音色「{p.name}」？") \
+                    != QMessageBox.StandardButton.Yes:
+                return
+            P.delete_profile(p.id)
+            _changed()
+
+        def _listen():
+            p = _selected()
+            if not p:
+                return
+            ok, msg = C.readiness()
+            if not ok:
+                status.setText("○ " + msg.replace("\n", " "))
+                tabs.setCurrentIndex(1)
+                return
+            btn_listen.setEnabled(False)
+            status.setText(f"正在用「{p.name}」合成试听…")
+            w = _ClonePreviewWorker()
+            w.setup(p.voice_id, sample.text().strip() or "你好")
+
+            def _ok(path):
+                _update_buttons()
+                try:
+                    self.player.play(path)
+                    status.setText(f"✓ 正在播放「{p.name}」的试听。")
+                except Exception as e:
+                    status.setText(f"试听已生成，但播放失败：{e}")
+
+            def _err(e):
+                _update_buttons()
+                status.setText(f"✗ 试听失败：{e}")
+
+            w.finished_ok.connect(_ok)
+            w.error_occurred.connect(_err)
+            self._clone_preview_worker = w
+            w.start()
+
+        def _save():
+            cfg = _load_config()
+            cfg["cosyvoice_python"] = py_edit.text().strip()
+            cfg["cosyvoice_repo"] = repo_edit.text().strip()
+            cfg["clone_model_dir"] = model_edit.text().strip()
+            _save_config(cfg)
+            C.shutdown()  # 解释器 / 仓库可能变了：下次按新配置重启桥接进程
+            _update_status()
+            self._after_clone_change()
+
+        def _check():
+            _save()
+            btn_check.setEnabled(False)
+            report.setPlainText("正在检测：启动 CosyVoice 环境并加载模型，可能需要一两分钟…")
+            w = _CloneCheckWorker()
+            w.setup(load=True)
+
+            def _done(rep):
+                btn_check.setEnabled(True)
+                lines = [f"Python 解释器：{rep.get('python') or '（未配置）'}",
+                         f"CosyVoice 仓库：{rep.get('repo') or '（未配置）'}",
+                         f"模型目录：{rep.get('model_dir') or '（未找到）'}"
+                         + (f"  [{rep['model_type']}]" if rep.get("model_type") else "")]
+                pg = rep.get("ping") or {}
+                if pg:
+                    lines.append(f"桥接进程：Python {pg.get('python')}，cosyvoice "
+                                 + ("可导入 ✓" if pg.get("cosyvoice")
+                                    else f"无法导入 ✗\n  {pg.get('import_error')}"))
+                ld = rep.get("load") or {}
+                if ld:
+                    lines.append(f"模型加载：{ld.get('model_type')}，采样率 {ld.get('sample_rate')} ✓")
+                if rep.get("error"):
+                    lines.append(f"\n错误：{rep['error']}")
+                good = bool(pg.get("cosyvoice")) and bool(ld) and not rep.get("error")
+                lines.append("\n✓ 环境可用" if good else "\n✗ 环境未就绪，请按上面的提示检查")
+                report.setPlainText("\n".join(lines))
+                _update_status()
+
+            def _fail(e):
+                btn_check.setEnabled(True)
+                report.setPlainText(f"检测失败：{e}")
+
+            w.finished_ok.connect(_done)
+            w.error_occurred.connect(_fail)
+            self._clone_check_worker = w
+            w.start()
+
+        tbl.itemSelectionChanged.connect(_update_buttons)
+        btn_new.clicked.connect(_new)
+        btn_text.clicked.connect(_edit_text)
+        btn_rename.clicked.connect(_rename)
+        btn_del.clicked.connect(_delete)
+        btn_listen.clicked.connect(_listen)
+        btn_save.clicked.connect(_save)
+        btn_check.clicked.connect(_check)
+        _refresh()
+        # 环境还没配好时先打开「环境设置」页
+        if not C.resolve_python() or not C.resolve_model_dir():
+            tabs.setCurrentIndex(1)
+        return dlg
+
+    def _build_clone_new_dialog(self, parent):
+        """新建克隆音色：选参考音频 →（可选）自动识别文字稿 → 命名 → 创建。成功后 dlg.created 为新档案。"""
+        from audiobook.cloning import profiles as P
+
+        d = QDialog(parent)
+        d.setWindowTitle("新建克隆音色")
+        d.resize(580, 460)
+        d.created = None
+        st = {"src": None, "tmp": None, "dur": 0.0}
+        v = QVBoxLayout(d)
+        v.addWidget(QLabel("名称"))
+        name_edit = QLineEdit()
+        name_edit.setObjectName("cloneNewName")
+        name_edit.setPlaceholderText("例如：我的声音")
+        v.addWidget(name_edit)
+        v.addWidget(QLabel("参考音频"))
+        frow = QHBoxLayout()
+        file_label = QLabel("未选择")
+        file_label.setObjectName("cloneNewFile")
+        file_label.setWordWrap(True)
+        frow.addWidget(file_label, 1)
+        btn_pick = QPushButton("选择参考音频…")
+        btn_pick.setObjectName("cloneNewPick")
+        frow.addWidget(btn_pick)
+        v.addLayout(frow)
+        hint = QLabel(f"建议 5–15 秒、单人、无背景音乐的清晰人声；短于 {P.MIN_SECONDS:.0f} 秒无法使用，"
+                      f"超过 {P.MAX_SECONDS:.0f} 秒只取前 {P.MAX_SECONDS:.0f} 秒。")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:gray")
+        v.addWidget(hint)
+        trow = QHBoxLayout()
+        trow.addWidget(QLabel("文字稿（参考音频里说的话）"))
+        trow.addStretch()
+        btn_asr = QPushButton("🎧 自动识别（Whisper）")
+        btn_asr.setObjectName("cloneNewAsr")
+        btn_asr.setEnabled(False)
+        trow.addWidget(btn_asr)
+        v.addLayout(trow)
+        text_edit = QPlainTextEdit()
+        text_edit.setObjectName("cloneNewText")
+        text_edit.setPlaceholderText("逐字填写效果明显更好；留空也能用（只取音色）。")
+        v.addWidget(text_edit, 1)
+        msg = QLabel("")
+        msg.setObjectName("cloneNewMsg")
+        msg.setWordWrap(True)
+        v.addWidget(msg)
+        brow = QHBoxLayout()
+        brow.addStretch()
+        btn_cancel = QPushButton("取消")
+        btn_ok = QPushButton("创建")
+        btn_ok.setObjectName("cloneNewCreate")
+        btn_ok.setEnabled(False)
+        brow.addWidget(btn_cancel)
+        brow.addWidget(btn_ok)
+        v.addLayout(brow)
+
+        try:
+            asr_ok = check_asr_ready(get_storage_dir())[0]
+        except Exception:
+            asr_ok = False
+        if not asr_ok:
+            btn_asr.setToolTip("需要安装 faster-whisper（语音转文字）才能自动识别")
+
+        def _cleanup_tmp():
+            if st["tmp"]:
+                shutil.rmtree(os.path.dirname(st["tmp"]), ignore_errors=True)
+                st["tmp"] = None
+
+        def _update_ok():
+            usable = st["src"] is not None and st["dur"] >= P.MIN_SECONDS
+            btn_ok.setEnabled(usable and bool(name_edit.text().strip()))
+
+        def _pick():
+            path, _ = QFileDialog.getOpenFileName(
+                d, "选择参考音频", "",
+                "音频 (*.wav *.mp3 *.m4a *.flac *.ogg *.aac *.wma *.opus);;所有文件 (*)")
+            if not path:
+                return
+            _cleanup_tmp()
+            st["src"], st["dur"] = None, 0.0
+            try:
+                tmp, dur = P.prepare_reference(path)
+            except Exception as e:
+                file_label.setText("未选择")
+                msg.setStyleSheet("color:#C62828")
+                msg.setText(f"✗ {e}")
+                btn_asr.setEnabled(False)
+                _update_ok()
+                return
+            st.update(src=path, tmp=tmp, dur=dur)
+            trimmed = "（已截取前 30 秒）" if dur >= P.MAX_SECONDS - 0.05 else ""
+            file_label.setText(f"{os.path.basename(path)}　{dur:.1f} 秒{trimmed}")
+            if dur < P.MIN_SECONDS:
+                msg.setStyleSheet("color:#C62828")
+                msg.setText(f"✗ 太短（{dur:.1f} 秒），至少需要 {P.MIN_SECONDS:.0f} 秒。")
+            else:
+                msg.setStyleSheet("color:gray")
+                msg.setText("✓ 音频可用。" + ("" if text_edit.toPlainText().strip()
+                                              else "建议填写或自动识别文字稿。"))
+            if not name_edit.text().strip():
+                name_edit.setText(os.path.splitext(os.path.basename(path))[0])
+            btn_asr.setEnabled(asr_ok and dur >= P.MIN_SECONDS)
+            _update_ok()
+
+        def _asr():
+            if not st["tmp"]:
+                return
+            btn_asr.setEnabled(False)
+            msg.setStyleSheet("color:gray")
+            msg.setText("正在识别文字稿…（首次使用会下载 Whisper base 模型）")
+            w = _CloneTranscribeWorker()
+            w.setup(st["tmp"])
+
+            def _ok(text):
+                btn_asr.setEnabled(True)
+                if text:
+                    text_edit.setPlainText(text)
+                    msg.setText("✓ 已识别，请核对后再创建（错字会影响效果）。")
+                else:
+                    msg.setText("没有识别到文字，请手动填写。")
+
+            def _err(e):
+                btn_asr.setEnabled(True)
+                msg.setStyleSheet("color:#C62828")
+                msg.setText(f"✗ 识别失败：{e}")
+
+            w.finished_ok.connect(_ok)
+            w.error_occurred.connect(_err)
+            self._clone_asr_worker = w
+            w.start()
+
+        def _create():
+            try:
+                d.created = P.create_profile(name_edit.text(), st["src"],
+                                             prompt_text=text_edit.toPlainText())
+            except Exception as e:
+                msg.setStyleSheet("color:#C62828")
+                msg.setText(f"✗ {e}")
+                return
+            d.accept()
+
+        btn_pick.clicked.connect(_pick)
+        btn_asr.clicked.connect(_asr)
+        btn_ok.clicked.connect(_create)
+        btn_cancel.clicked.connect(d.reject)
+        name_edit.textChanged.connect(lambda _t: _update_ok())
+        d.finished.connect(lambda _r: _cleanup_tmp())
+        return d
+
     # ================ 首次运行向导 ================
 
     def maybe_show_first_run_wizard(self):
@@ -2981,7 +3496,8 @@ class AudiobookConverterMain(QMainWindow):
         # 停止所有后台 QThread，避免退出时 "QThread: Destroyed while thread is still running" 导致 abort()
         for attr in ("_convert_worker", "_preview_worker", "_stream_worker",
                      "_asr_worker", "_model_dl_worker", "_voice_dl_worker",
-                     "_catalog_worker", "_wizard_dl_worker", "_wizard_preview_worker"):
+                     "_catalog_worker", "_wizard_dl_worker", "_wizard_preview_worker",
+                     "_clone_check_worker", "_clone_preview_worker", "_clone_asr_worker"):
             w = getattr(self, attr, None)
             if w is None:
                 continue

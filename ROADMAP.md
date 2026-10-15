@@ -22,7 +22,8 @@
 > 向导推进，**U1 已完成**（`audiobook.models` + GUI 模型管理器 + CLI `models`），**U3 已完成**（生成队列页：
 > 逐章状态 / 错误原因 / 单项与失败项重试；`convert_batch` 新增 `item_callback` / `only_indices`），**U2 已完成**
 > （首次运行向导：选场景 → 备模型 → 试听，记住引擎）——**C2 工作区重设计全部完成**。**C1 声音克隆进行中**：
-> 核心（音色档案 + CosyVoice 常驻桥接进程 + clone 引擎 + CLI）已完成，界面（环境设置 / 音色管理 / 试听）待做。其余：
+> 核心（音色档案 + CosyVoice 常驻桥接进程 + clone 引擎 + CLI）与界面（环境设置 / 音色管理 / 试听）均已完成；
+> 可选后续：应用内下载 CosyVoice3 模型、旧 cosyvoice 引擎改走桥接。其余：
 > piper/cosyvoice 重实现整体迁入各自模块、Edge 异步批量编排并入注册表等内部收尾。
 
 ## 一、现有功能盘点

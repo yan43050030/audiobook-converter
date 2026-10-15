@@ -12,11 +12,12 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 import uuid
 import wave
 from dataclasses import dataclass, asdict
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 PROFILE_DIRNAME = "voice-profiles"
 VOICE_PREFIX = "clone:"
@@ -150,6 +151,24 @@ def _normalize_audio(src: str, dst: str) -> None:
     if r.returncode != 0 or not os.path.isfile(dst):
         err = r.stderr.decode("utf-8", errors="replace").strip()
         raise ProfileError(f"无法读取参考音频（格式不支持或文件损坏）：{err[:200]}")
+
+
+def prepare_reference(audio_path: str) -> Tuple[str, float]:
+    """按建档时完全相同的方式把参考音频规整到临时 WAV，返回 (路径, 时长)。
+
+    界面用它在建档前显示实际会用到的时长，并对这段（≤30 秒）音频做自动识别文字稿，
+    保证文字稿与实际使用的音频一致。调用方负责删除返回路径所在的临时目录。
+    """
+    if not audio_path or not os.path.isfile(audio_path):
+        raise ProfileError(f"参考音频不存在: {audio_path}")
+    d = tempfile.mkdtemp(prefix="clone_ref_")
+    wav = os.path.join(d, "prompt.wav")
+    try:
+        _normalize_audio(audio_path, wav)
+        return wav, _wav_duration(wav)
+    except Exception:
+        shutil.rmtree(d, ignore_errors=True)
+        raise
 
 
 # ---------------- 增删改 ----------------
