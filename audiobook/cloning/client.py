@@ -78,8 +78,9 @@ def resolve_model_dir(storage_dir: Optional[str] = None) -> str:
     root = os.path.join(storage_dir or _te.get_storage_dir(), "cosyvoice-models")
     if not os.path.isdir(root):
         return ""
+    # 跳过隐藏目录（含未下载完的 .<名>.partial）
     candidates = [os.path.join(root, d) for d in sorted(os.listdir(root))
-                  if os.path.isdir(os.path.join(root, d))]
+                  if not d.startswith(".") and os.path.isdir(os.path.join(root, d))]
     for marker, _kind in _MODEL_MARKERS:
         for c in candidates:
             if os.path.isfile(os.path.join(c, marker)) and _cloning_capable(c):
@@ -99,7 +100,9 @@ def readiness(storage_dir: Optional[str] = None) -> Tuple[bool, str]:
     md = resolve_model_dir(storage_dir)
     if not md:
         return False, ("未找到可用于克隆的 CosyVoice 模型（Fun-CosyVoice3-0.5B / CosyVoice2-0.5B）。\n"
-                       "请把模型放到存储目录的 cosyvoice-models/ 下，或在设置里指定模型目录。")
+                       "可在「声音克隆 → 环境设置」点「下载」获取（或命令行 "
+                       "audiobook models get cosyvoice Fun-CosyVoice3-0.5B），"
+                       "也可自行放到存储目录的 cosyvoice-models/ 下，或在设置里指定模型目录。")
     n = len(profiles.list_profiles(storage_dir))
     if n == 0:
         return False, "还没有克隆音色：先用一段 5–15 秒的清晰人声创建一个。"

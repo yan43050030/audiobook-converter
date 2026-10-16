@@ -9,7 +9,7 @@ a = Analysis(
     datas=[('icon.png', '.'), ('icon.ico', '.'), ('audiobook/cloning/bridge_worker.py', 'audiobook/cloning')],
     hiddenimports=['edge_tts', 'aiohttp', 'aiosignal', 'frozenlist', 'multidict', 'yarl', 'propcache', 'attr', 'attrs', 'certifi',
                    'faster_whisper', 'ebooklib', 'fitz', 'pdfplumber', 'torch', 'cosyvoice', 'soundfile', 'librosa',
-                   'audiobook', 'audiobook.config', 'audiobook.models', 'audiobook.onboarding', 'audiobook.core', 'audiobook.core.text', 'audiobook.io', 'audiobook.io.readers',
+                   'audiobook', 'audiobook.config', 'audiobook.models', 'audiobook.io.hub', 'audiobook.onboarding', 'audiobook.core', 'audiobook.core.text', 'audiobook.io', 'audiobook.io.readers',
                    'audiobook.io.audio', 'audiobook.engines', 'audiobook.engines.base', 'audiobook.engines.local',
                    'audiobook.engines.edge', 'audiobook.engines.piper', 'audiobook.engines.cosyvoice', 'audiobook.engines.clone', 'audiobook.cloning', 'audiobook.cloning.profiles', 'audiobook.cloning.client',
                    'audiobook.engines.asr'],

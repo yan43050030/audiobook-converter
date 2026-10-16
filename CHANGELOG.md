@@ -1,6 +1,22 @@
 # 项目情况日志 — 文字转有声读物 (Audiobook Converter)
 
-## 未发布 — 阶段 3 / C1 声音克隆（进行中）
+## 未发布 — 阶段 3 / C1 声音克隆（核心 + 界面已完成）
+
+### 应用内下载 CosyVoice 模型
+
+- 新增 `audiobook.io.hub`：纯 HTTP 的模型仓库整库下载（等同官方说明里的 `snapshot_download`，不依赖
+  huggingface_hub / modelscope SDK）。按 HuggingFace → hf-mirror → ModelScope 魔搭 顺序取文件清单，
+  单个文件失败时自动换源；先下到隐藏的 `.<名>.partial/`，全部完成才改名为正式目录（半成品不会被当成
+  可用模型）；中断 / 暂停后再次下载跳过已完成文件、未完成的断点续传；下载前检查磁盘空间；校验文件大小；
+  拒绝清单中的不安全路径。
+- CosyVoice 模型清单改为官方仓库：**Fun-CosyVoice3-0.5B**（克隆推荐）、**CosyVoice2-0.5B**、
+  CosyVoice-300M-SFT。原先的 300M-SFT 单文件 `.tar.gz` 地址官方并不提供，已移除。
+- 「声音克隆 → 环境设置」页新增「下载模型」：选择型号、进度条、暂停（关闭对话框也会暂停，可续传）；
+  下载完成后自动识别模型目录并刷新就绪状态。模型管理器与 `audiobook models get cosyvoice <名>` 同样可用。
+- 模型管理器列出未下载完的半成品（「未下载完整，再次下载可续传」），可删除释放空间；克隆模型自动查找
+  与 CosyVoice 语音列表都会跳过半成品目录。
+- 新增 `tests/test_hub.py`（本地 HTTP 服务模拟 HF / ModelScope 接口，覆盖换源、续传、大小校验、
+  磁盘空间、路径安全）及模型管理器 / 克隆 / 界面相关用例。
 
 ### C1-2 声音克隆界面
 

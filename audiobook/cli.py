@@ -344,7 +344,7 @@ def build_parser():
     msub.add_parser("available", help="列出常用可下载模型（✓ 为已安装）")
     mg = msub.add_parser("get", help="下载模型（Piper 也可填官方目录中的语音 key）")
     mg.add_argument("kind", choices=kinds)
-    mg.add_argument("id", help="模型标识，如 zh_CN-huayan-medium / CosyVoice-300M-SFT / base")
+    mg.add_argument("id", help="模型标识，如 zh_CN-huayan-medium / Fun-CosyVoice3-0.5B / base")
     mr = msub.add_parser("rm", help="删除已安装模型（仅限存储目录内）")
     mr.add_argument("kind", choices=kinds)
     mr.add_argument("id", help="见 audiobook models list 的第二列")
