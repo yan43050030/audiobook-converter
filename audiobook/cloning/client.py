@@ -5,6 +5,8 @@
   下自动找 CosyVoice3 / CosyVoice2 模型）。
 * `CloneBridge`：常驻子进程，模型只加载一次；逐行 JSON 请求/响应，按 id 配对；超时 / 进程退出 /
   用户暂停时终止子进程（下次调用自动重启）。子进程的 stderr 写入日志文件，避免管道写满卡死。
+* 「CosyVoice」引擎（预置说话人，CosyVoice-300M-SFT）共用同一套环境与桥接进程：
+  `resolve_sft_model_dir()` / `sft_readiness()` / `synthesize_sft()`。
 """
 
 import atexit
@@ -88,15 +90,37 @@ def resolve_model_dir(storage_dir: Optional[str] = None) -> str:
     return ""
 
 
+def resolve_sft_model_dir(storage_dir: Optional[str] = None) -> str:
+    """「CosyVoice」引擎用的预置说话人模型：cosyvoice-models/ 下名字含 SFT 的 CosyVoice 1 模型。"""
+    import tts_engine as _te
+    root = os.path.join(storage_dir or _te.get_storage_dir(), "cosyvoice-models")
+    if not os.path.isdir(root):
+        return ""
+    for d in sorted(os.listdir(root)):
+        p = os.path.join(root, d)
+        if (not d.startswith(".") and "sft" in d.lower() and os.path.isdir(p)
+                and model_type(p) == "CosyVoice"):
+            return p
+    return ""
+
+
+def _python_problem() -> str:
+    """解释器配置问题（空串 = 没问题）。"""
+    py = resolve_python()
+    if not py:
+        return ("尚未配置 CosyVoice 的 Python 解释器。\n"
+                "请在「🎙 克隆音色… → 环境设置」里指定装好 CosyVoice 的 python（conda / venv 中的 python）。")
+    if os.path.isabs(py) and not os.path.isfile(py):
+        return f"配置的 Python 解释器不存在：{py}"
+    return ""
+
+
 def readiness(storage_dir: Optional[str] = None) -> Tuple[bool, str]:
     """静态检查（不启动子进程）：解释器、模型、音色档案是否都有。"""
     from audiobook.cloning import profiles
-    py = resolve_python()
-    if not py:
-        return False, ("尚未配置 CosyVoice 的 Python 解释器。\n"
-                       "请在「声音克隆」设置里指定装好 CosyVoice 的 python（conda / venv 中的 python）。")
-    if os.path.isabs(py) and not os.path.isfile(py):
-        return False, f"配置的 Python 解释器不存在：{py}"
+    problem = _python_problem()
+    if problem:
+        return False, problem
     md = resolve_model_dir(storage_dir)
     if not md:
         return False, ("未找到可用于克隆的 CosyVoice 模型（Fun-CosyVoice3-0.5B / CosyVoice2-0.5B）。\n"
@@ -107,6 +131,18 @@ def readiness(storage_dir: Optional[str] = None) -> Tuple[bool, str]:
     if n == 0:
         return False, "还没有克隆音色：先用一段 5–15 秒的清晰人声创建一个。"
     return True, f"声音克隆可用（{model_type(md)}，{n} 个音色）"
+
+
+def sft_readiness(storage_dir: Optional[str] = None) -> Tuple[bool, str]:
+    """「CosyVoice」引擎（预置说话人）的静态检查：解释器 + SFT 模型。"""
+    problem = _python_problem()
+    if problem:
+        return False, problem
+    md = resolve_sft_model_dir(storage_dir)
+    if not md:
+        return False, ("未找到 CosyVoice-300M-SFT 模型（预置中文男女声等）。\n"
+                       "可在「模型管理」下载，或命令行 audiobook models get cosyvoice CosyVoice-300M-SFT。")
+    return True, f"CosyVoice 可用（预置说话人，{os.path.basename(md)}）"
 
 
 # ---------------- 桥接进程 ----------------
@@ -286,6 +322,16 @@ def synthesize(profile, text: str, out_wav: str, speed: float = 1.0, should_stop
         model_dir=md, text=text, prompt_wav=profile.wav, prompt_text=profile.prompt_text,
         # 文字稿改动后 mtime 变化 → 换一个 key，桥接端会重新登记说话人
         speaker_key=f"{profile.id}@{stamp}", speed=float(speed), out=out_wav)
+
+
+def synthesize_sft(spk_id: str, text: str, out_wav: str, speed: float = 1.0,
+                   should_stop=None) -> dict:
+    """用预置说话人（CosyVoice-300M-SFT）合成一段文本到 WAV。"""
+    md = resolve_sft_model_dir()
+    if not md:
+        raise CloneBridgeError(sft_readiness()[1])
+    return get_bridge().request("tts", TTS_TIMEOUT, should_stop, model_dir=md, text=text,
+                                spk_id=spk_id, speed=float(speed), out=out_wav)
 
 
 def check(load: bool = False) -> dict:

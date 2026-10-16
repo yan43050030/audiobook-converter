@@ -173,6 +173,9 @@ python -m audiobook clone say <音色ID> "你好，这是我的克隆声音。" 
 python -m audiobook convert book.txt --engine clone --voice 小明 --out out --m4b
 ```
 
+同一套环境也驱动「CosyVoice」引擎（预置中文男女声、粤语、英文、日语、韩语，不需要参考音频）：
+再下载 `CosyVoice-300M-SFT` 即可（`python -m audiobook models get cosyvoice CosyVoice-300M-SFT`）。
+
 图形界面：点语音参数面板的「🎙 克隆音色…」——「环境设置」页可直接下载模型（带进度，可暂停 / 续传），填 Python / 仓库路径并一键检测（会实际加载模型）；「音色」页新建音色（选参考音频，可用 Whisper 自动识别文字稿）、编辑文字稿、重命名、删除、试听。之后在引擎里选「声音克隆」，语音下拉框就是你的音色，生成方式与其他引擎完全相同。
 
 ### 打包为独立应用
@@ -199,7 +202,7 @@ pyinstaller audiobook_converter.spec
 | Edge | 在线云端 | ★★★★★ | 快 | 需要 | 全平台 |
 | 本地系统 | 离线系统 | ★★★ | 快 | 不需要 | macOS/Win/Linux |
 | Piper | 离线神经网络 | ★★★★ | 中 | 不需要 | 全平台（需模型） |
-| CosyVoice | 离线神经网络 | ★★★★★ | 慢 | 不需要 | 全平台（实验性） |
+| CosyVoice | 离线神经网络（预置说话人，需单独安装，见「声音克隆」） | ★★★★★ | 慢 | 不需要 | 全平台（实验性） |
 | 外挂引擎 | 外部程序 | 可变 | 可变 | 可变 | 全平台 |
 
 ### Piper 语音包

@@ -78,6 +78,16 @@ FAKE_COSYVOICE = textwrap.dedent('''
             _log(event="cross", text=tts_text, prompt_wav=prompt_wav, speed=speed)
             return self._speech(tts_text, 1200)
 
+        # 预置说话人：只有 SFT 模型的 spk2info 里有
+        def list_available_spks(self):
+            if "SFT" in os.path.basename(self.model_dir):
+                return ["中文女", "中文男", "日语男", "粤语女", "英文女", "英文男", "韩语女"]
+            return []
+
+        def inference_sft(self, tts_text, spk_id, stream=False, speed=1.0, text_frontend=True):
+            _log(event="sft", text=tts_text, spk=spk_id, speed=speed, model=os.path.basename(self.model_dir))
+            return self._speech(tts_text, 900)
+
     class CosyVoice2(CosyVoice):
         pass
 
@@ -407,6 +417,75 @@ class TestBridge(_Env):
         with self.assertRaises(C.CloneBridgeError) as cm:
             self.synth()
         self.assertIn("无法启动", str(cm.exception))
+
+
+# ======================= CosyVoice 引擎（预置说话人，共用桥接进程） =======================
+
+@unittest.skipUnless(_HAS_NUMPY, "需要 numpy")
+class TestSftBridge(_Env):
+    def setUp(self):
+        super().setUp()
+        self.configure_bridge()
+
+    def test_resolve_sft_model_dir_and_readiness(self):
+        ok, msg = C.sft_readiness()
+        self.assertFalse(ok)
+        self.assertIn("CosyVoice-300M-SFT", msg)
+        self.model()                                              # v3 不是预置说话人模型
+        self.model(".CosyVoice-300M-SFT.partial", "cosyvoice.yaml")  # 半成品跳过
+        self.assertEqual(C.resolve_sft_model_dir(), "")
+        sft = self.model("CosyVoice-300M-SFT", "cosyvoice.yaml")
+        self.assertEqual(C.resolve_sft_model_dir(), sft)
+        ok, msg = C.sft_readiness()
+        self.assertTrue(ok, msg)
+        self.assertTrue(tts_engine.check_engine_ready("cosyvoice")[0])
+
+    @unittest.skipUnless(_HAS_FFMPEG, "需要 ffmpeg")
+    def test_sft_synthesis_and_model_switch(self):
+        self.model("CosyVoice-300M-SFT", "cosyvoice.yaml")
+        out = os.path.join(self.tmp, "sft.wav")
+        resp = C.synthesize_sft("粤语女", "你好", out, speed=0.8)
+        self.assertEqual(resp["mode"], "sft")
+        with wave.open(out, "rb") as w:
+            self.assertEqual((w.getframerate(), w.getnframes()), (24000, 1800))
+        self.assertEqual(self.calls("sft")[-1]["spk"], "粤语女")
+        self.assertAlmostEqual(self.calls("sft")[-1]["speed"], 0.8)
+        rep = C.get_bridge().request("speakers", C.PING_TIMEOUT, model_dir=C.resolve_sft_model_dir())
+        self.assertIn("中文男", rep["speakers"])
+
+        with self.assertRaises(C.CloneBridgeError) as cm:
+            C.synthesize_sft("不存在的人", "你好", out)
+        self.assertIn("可用：中文女", str(cm.exception))
+
+        # 与克隆模型交替使用：桥接端切换模型（同一时间只保留一个），两边都能继续工作
+        self.model()
+        prof = self.profile()
+        C.synthesize(prof, "克隆一句", os.path.join(self.tmp, "c.wav"))
+        C.synthesize_sft("中文男", "再来一句", out)
+        self.assertEqual(len(self.calls("load")), 3, "SFT → v3 → SFT 各加载一次")
+
+    def test_non_sft_model_has_no_speakers(self):
+        v3 = self.model()
+        with mock.patch.object(C, "resolve_sft_model_dir", return_value=v3):
+            with self.assertRaises(C.CloneBridgeError) as cm:
+                C.synthesize_sft("中文女", "你好", os.path.join(self.tmp, "x.wav"))
+        self.assertIn("没有预置说话人", str(cm.exception))
+
+    @unittest.skipUnless(_HAS_FFMPEG, "需要 ffmpeg")
+    def test_engine_convert_batch_end_to_end(self):
+        self.model("CosyVoice-300M-SFT", "cosyvoice.yaml")
+        out = os.path.join(self.tmp, "book")
+        files = tts_engine.convert_batch(
+            text="第一章 甲\n内容一。\n\n第二章 乙\n内容二。\n",
+            voice=tts_engine.get_voice_id("英文男声", "cosyvoice"),
+            rate="+20%", output_dir=out, engine="cosyvoice")
+        self.assertEqual(len(files), 2)
+        for f in files:
+            self.assertTrue(f.endswith(".mp3") and os.path.getsize(f) > 0)
+        sft = self.calls("sft")
+        self.assertEqual({c["spk"] for c in sft}, {"英文男"})
+        self.assertAlmostEqual(sft[-1]["speed"], 1.2)
+        self.assertEqual(len(self.calls("load")), 1, "整本书只加载一次模型")
 
 
 # ======================= 引擎 / 批量 / CLI =======================
