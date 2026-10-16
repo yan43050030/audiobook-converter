@@ -275,6 +275,9 @@ class TestResolution(_Env):
         self.assertEqual(C.resolve_model_dir(), v2)
         v3 = self.model()
         self.assertEqual(C.resolve_model_dir(), v3)
+        # 未下载完的整库下载目录（.<名>.partial）即使已有 yaml 也不能被选中
+        self.model(".Fun-CosyVoice3-0.5B.partial", "cosyvoice3.yaml")
+        self.assertEqual(C.resolve_model_dir(), v3)
         self.set_cfg(clone_model_dir=v2)
         self.assertEqual(C.resolve_model_dir(), v2, "显式配置优先")
         self.set_cfg(clone_model_dir=os.path.join(self.tmp, "missing"))

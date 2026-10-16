@@ -142,10 +142,16 @@ def _list_cosyvoice(storage: str) -> List[ModelEntry]:
         return out
     for entry in sorted(os.listdir(root)):
         p = os.path.join(root, entry)
-        if entry.startswith(".") or not os.path.isdir(p) or not os.listdir(p):
+        if not os.path.isdir(p) or not os.listdir(p):
             continue
+        name = entry
+        if entry.startswith("."):
+            # 未下载完的整库下载目录（.<名>.partial）也列出：占空间，可续传也可删
+            if not (entry.endswith(".partial") and len(entry) > len("..partial")):
+                continue
+            name = f"{entry[1:-len('.partial')]}（未下载完整，再次下载可续传）"
         out.append(ModelEntry(
-            kind=KIND_COSYVOICE, id=entry, name=entry, paths=[p],
+            kind=KIND_COSYVOICE, id=entry, name=name, paths=[p],
             size_bytes=_path_size(p), managed=_is_within(p, storage), location=root,
         ))
     return out
@@ -264,7 +270,7 @@ def downloadable(storage_dir: Optional[str] = None) -> List[DownloadItem]:
     items: List[DownloadItem] = []
     for label, vid in _te.PIPER_BUILTIN_VOICES.items():
         items.append(DownloadItem(KIND_PIPER, vid, label, (KIND_PIPER, vid) in installed))
-    for key, meta in _te.COSYVOICE_MODEL_URLS.items():
+    for key, meta in _te.COSYVOICE_MODELS.items():
         items.append(DownloadItem(KIND_COSYVOICE, key, meta.get("description", key),
                                   (KIND_COSYVOICE, key) in installed))
     for size, label in WHISPER_MODELS.items():

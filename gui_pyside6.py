@@ -49,7 +49,6 @@ from tts_engine import (
     get_registered_engines, add_model_search_path, _invalidate_scan_cache,
     COSYVOICE_PYTHON_AVAILABLE, get_cosyvoice_model_dir,
     PIPER_VOICES, _ensure_piper_model,
-    COSYVOICE_MODEL_URLS, _ensure_cosyvoice_model,
     split_text, _generate_one_safe, split_by_duration,
     extract_speakers, export_m4b, refresh_piper_voices,
     fetch_piper_voice_catalog, list_piper_catalog_voices,
@@ -2144,8 +2143,8 @@ class AudiobookConverterMain(QMainWindow):
             "声音克隆基于开源的 CosyVoice（依赖 torch，建议 NVIDIA 显卡），需要单独安装：<ol>"
             "<li>按官方说明 <code>git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git</code> "
             "并在独立的 conda / venv 环境里安装依赖；</li>"
-            "<li>下载 <b>Fun-CosyVoice3-0.5B</b>（或 CosyVoice2-0.5B）模型到存储目录的 "
-            "<code>cosyvoice-models/</code> 下；</li>"
+            "<li>用下面的「下载模型」获取 <b>Fun-CosyVoice3-0.5B</b>（或 CosyVoice2-0.5B），"
+            "也可自行下载到存储目录的 <code>cosyvoice-models/</code> 下；</li>"
             "<li>在下面填写该环境的 Python 与仓库路径，点「检测环境」。</li></ol>"
             "详细命令见 README「声音克隆」一节。")
         intro.setWordWrap(True)
@@ -2187,6 +2186,32 @@ class AudiobookConverterMain(QMainWindow):
             b.clicked.connect(browse)
             grid.addWidget(b, row, 2)
         le.addLayout(grid)
+        # 模型下载（整库下载，HuggingFace → hf-mirror → ModelScope 自动回退，可续传）
+        from tts_engine import COSYVOICE_MODELS, COSYVOICE_CLONE_MODEL
+        dl_row = QHBoxLayout()
+        dl_row.addWidget(QLabel("下载模型"))
+        dl_model = QComboBox()
+        dl_model.setObjectName("cloneDlModel")
+        for key in (COSYVOICE_CLONE_MODEL, "CosyVoice2-0.5B"):
+            dl_model.addItem(COSYVOICE_MODELS[key]["description"], key)
+        dl_row.addWidget(dl_model, 1)
+        btn_dl = QPushButton("⬇ 下载")
+        btn_dl.setObjectName("cloneDlStart")
+        btn_dl_stop = QPushButton("暂停")
+        btn_dl_stop.setObjectName("cloneDlStop")
+        btn_dl_stop.setEnabled(False)
+        dl_row.addWidget(btn_dl)
+        dl_row.addWidget(btn_dl_stop)
+        le.addLayout(dl_row)
+        dl_bar = QProgressBar()
+        dl_bar.setObjectName("cloneDlProgress")
+        dl_bar.setVisible(False)
+        le.addWidget(dl_bar)
+        dl_msg = QLabel("")
+        dl_msg.setObjectName("cloneDlMsg")
+        dl_msg.setWordWrap(True)
+        dl_msg.setStyleSheet("color:gray")
+        le.addWidget(dl_msg)
         env_ops = QHBoxLayout()
         btn_save = QPushButton("保存设置")
         btn_save.setObjectName("cloneSave")
@@ -2358,7 +2383,60 @@ class AudiobookConverterMain(QMainWindow):
             self._clone_check_worker = w
             w.start()
 
+        def _refresh_model_hint():
+            if not model_edit.text().strip():
+                md = C.resolve_model_dir()
+                model_edit.setPlaceholderText(f"留空 = 自动：{md}" if md
+                                              else "留空 = 自动在 cosyvoice-models/ 下查找（当前未找到）")
+
+        def _download_model():
+            key = dl_model.currentData()
+            btn_dl.setEnabled(False)
+            btn_dl_stop.setEnabled(True)
+            dl_bar.setVisible(True)
+            dl_bar.setRange(0, 0)
+            dl_msg.setText(f"正在获取 {key} 的文件清单…（模型较大，可随时暂停，下次继续下载会续传）")
+            w = _WizardDownloadWorker()
+            w.setup([("cosyvoice", key)])
+
+            def _progress(desc, cur, total):
+                if total > 0:
+                    dl_bar.setRange(0, 1000)
+                    dl_bar.setValue(int(cur * 1000 / total))
+                    dl_msg.setText(f"{desc}　{cur / 1048576:.1f} / {total / 1048576:.1f} MB")
+
+            paused = "已暂停；再次点击「下载」会从断点继续。"
+
+            def _failed(_i, err):
+                dl_msg.setText(paused if w._should_stop else f"✗ 下载失败：{err}")
+
+            def _finished(failed):
+                btn_dl.setEnabled(True)
+                btn_dl_stop.setEnabled(False)
+                dl_bar.setVisible(False)
+                if not failed:
+                    dl_msg.setText(paused if w._should_stop else f"✓ {key} 下载完成。")
+                _refresh_model_hint()
+                _update_status()
+                self._after_clone_change()
+
+            w.bytes_progress.connect(_progress)
+            w.item_failed.connect(_failed)
+            w.finished_ok.connect(_finished)
+            self._clone_dl_worker = w
+            w.start()
+
+        def _stop_download():
+            w = getattr(self, "_clone_dl_worker", None)
+            if w is not None and w.isRunning():
+                w.request_stop()
+                btn_dl_stop.setEnabled(False)
+                dl_msg.setText("正在暂停…")
+
         tbl.itemSelectionChanged.connect(_update_buttons)
+        btn_dl.clicked.connect(_download_model)
+        btn_dl_stop.clicked.connect(_stop_download)
+        dlg.finished.connect(lambda _r: _stop_download())  # 关闭对话框即暂停（已下部分保留）
         btn_new.clicked.connect(_new)
         btn_text.clicked.connect(_edit_text)
         btn_rename.clicked.connect(_rename)
@@ -3497,7 +3575,8 @@ class AudiobookConverterMain(QMainWindow):
         for attr in ("_convert_worker", "_preview_worker", "_stream_worker",
                      "_asr_worker", "_model_dl_worker", "_voice_dl_worker",
                      "_catalog_worker", "_wizard_dl_worker", "_wizard_preview_worker",
-                     "_clone_check_worker", "_clone_preview_worker", "_clone_asr_worker"):
+                     "_clone_check_worker", "_clone_preview_worker", "_clone_asr_worker",
+                     "_clone_dl_worker"):
             w = getattr(self, attr, None)
             if w is None:
                 continue

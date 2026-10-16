@@ -925,6 +925,8 @@ def _detect_cosyvoice_voices() -> dict:
         if os.path.isdir(model_dir):
             for entry in sorted(os.listdir(model_dir)):
                 entry_path = os.path.join(model_dir, entry)
+                if entry.startswith("."):  # 隐藏目录 / 未下载完的 .<名>.partial
+                    continue
                 if os.path.isdir(entry_path) and os.listdir(entry_path):
                     voices[f"CosyVoice ({entry})"] = entry
     except Exception as e:
@@ -946,13 +948,29 @@ register_builtin_engine("cosyvoice", "CosyVoice（离线神经）")
 register_builtin_engine("clone", "声音克隆（CosyVoice）")
 
 
-# CosyVoice 模型下载 URL（HuggingFace，hf-mirror 自动回退）
-COSYVOICE_MODEL_URLS = {
+# CosyVoice 官方模型仓库（整库下载：HuggingFace → hf-mirror → ModelScope 自动回退）。
+# 目录名与官方说明的 pretrained_models/<名> 一致；前两个支持零样本复刻（声音克隆），
+# 300M-SFT 为预置说话人模型（「CosyVoice」引擎）。
+COSYVOICE_MODELS = {
+    "Fun-CosyVoice3-0.5B": {
+        "repos": {"huggingface": "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",
+                  "modelscope": "FunAudioLLM/Fun-CosyVoice3-0.5B-2512"},
+        "description": "Fun-CosyVoice3-0.5B（声音克隆推荐，效果最好；数 GB）",
+        "skip": ("*.rl.pt",),  # 强化学习版权重，推理默认用 llm.pt
+    },
+    "CosyVoice2-0.5B": {
+        "repos": {"huggingface": "FunAudioLLM/CosyVoice2-0.5B",
+                  "modelscope": "iic/CosyVoice2-0.5B"},
+        "description": "CosyVoice2-0.5B（声音克隆；数 GB）",
+    },
     "CosyVoice-300M-SFT": {
-        "url": "https://huggingface.co/FunAudioLLM/CosyVoice-300M-SFT/resolve/main/cosyvoice-300m-sft.tar.gz",
-        "description": "CosyVoice-300M-SFT 微调模型（推荐，≈600MB）",
+        "repos": {"huggingface": "FunAudioLLM/CosyVoice-300M-SFT",
+                  "modelscope": "iic/CosyVoice-300M-SFT"},
+        "description": "CosyVoice-300M-SFT（预置中文男女声等，供「CosyVoice」引擎）",
     },
 }
+# 声音克隆默认下载的模型
+COSYVOICE_CLONE_MODEL = "Fun-CosyVoice3-0.5B"
 
 
 # CosyVoice 模型实例缓存：加载一次约需数十秒 + 数 GB 内存，
@@ -1013,37 +1031,14 @@ def _cosyvoice_install_hint() -> str:
 
 
 def _download_cosyvoice_model(model_key: str, should_stop=None):
-    """下载并解压 CosyVoice 模型"""
-    if model_key not in COSYVOICE_MODEL_URLS:
-        raise ValueError(f"不支持的 CosyVoice 模型: {model_key}")
-
-    model_dir = get_cosyvoice_model_dir()
-    tar_path = os.path.join(model_dir, f"{model_key}.tar.gz")
-    extract_dir = os.path.join(model_dir, model_key)
-
-    if os.path.isdir(extract_dir) and os.listdir(extract_dir):
-        logger.info(f"CosyVoice 模型已存在: {extract_dir}")
-        return extract_dir
-
-    url = COSYVOICE_MODEL_URLS[model_key]["url"]
-    _download_file_with_progress(url, tar_path,
-        f"CosyVoice {model_key}", should_stop=should_stop)
-
-    import tarfile
-    logger.info(f"解压 CosyVoice 模型: {tar_path}")
-    os.makedirs(extract_dir, exist_ok=True)
-    with tarfile.open(tar_path, "r:gz") as tar:
-        try:
-            tar.extractall(path=extract_dir, filter="data")
-        except TypeError:
-            # Python < 3.12 不支持 filter 参数
-            tar.extractall(path=extract_dir)  # noqa: S202
-
-    try:
-        os.remove(tar_path)
-    except Exception:
-        pass
-
+    """整库下载 CosyVoice 模型到 cosyvoice-models/<model_key>/（可续传，完成后才出现目录）"""
+    meta = COSYVOICE_MODELS.get(model_key)
+    if meta is None:
+        raise ValueError(f"不支持的 CosyVoice 模型: {model_key}（可选：{', '.join(COSYVOICE_MODELS)}）")
+    from audiobook.io import hub
+    extract_dir = os.path.join(get_cosyvoice_model_dir(), model_key)
+    hub.snapshot_download(meta["repos"], extract_dir, f"CosyVoice {model_key}",
+                          should_stop=should_stop, skip=meta.get("skip", ()))
     logger.info(f"CosyVoice 模型就绪: {extract_dir}")
     return extract_dir
 
@@ -1760,7 +1755,7 @@ def _cosyvoice_generate(text: str, voice: str, rate: str, output_path: str,
         raise RuntimeError("CosyVoice Python 包未安装。\n" + _cosyvoice_install_hint())
 
     import numpy as np
-    model_key = voice if voice in COSYVOICE_MODEL_URLS else "CosyVoice-300M-SFT"
+    model_key = voice if voice in COSYVOICE_MODELS else "CosyVoice-300M-SFT"
     model_dir = _ensure_cosyvoice_model(model_key, should_stop=should_stop)
 
     rate_val = int(rate.replace("%", "").replace("+", ""))

@@ -89,6 +89,19 @@ class TestListInstalled(_StorageCase):
         self.assertTrue(all(e.managed for e in entries))
         self.assertEqual(M.total_size(entries), 1010 + 500 + 300 + 200)
 
+    def test_partial_cosyvoice_download_listed_and_deletable(self):
+        d = self.cosy(".Fun-CosyVoice3-0.5B.partial", size=700)
+        os.makedirs(os.path.join(self.storage, "cosyvoice-models", ".cache", "x"))  # 其它隐藏目录忽略
+        (e,) = M.list_installed()
+        self.assertEqual(e.id, ".Fun-CosyVoice3-0.5B.partial")
+        self.assertIn("Fun-CosyVoice3-0.5B", e.name)
+        self.assertIn("未下载完整", e.name)
+        self.assertTrue(e.managed)
+        installed = {(i.kind, i.id): i.installed for i in M.downloadable()}
+        self.assertFalse(installed[("cosyvoice", "Fun-CosyVoice3-0.5B")], "半成品不算已安装")
+        M.delete_model(e)
+        self.assertFalse(os.path.exists(d))
+
     def test_incomplete_whisper_is_labelled(self):
         self.whisper("small", complete=False)
         (e,) = M.list_installed()

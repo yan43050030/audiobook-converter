@@ -119,6 +119,51 @@ class TestCloneDialogs(unittest.TestCase):
         self.assertEqual(cfg["cosyvoice_repo"], "/opt/CosyVoice")
         self.assertIn("不存在", self.find(dlg, QLabel, "cloneStatus").text())
 
+    def test_download_model_from_settings(self):
+        from PySide6.QtWidgets import QComboBox
+        from audiobook import models as M
+        dlg = self.win._build_clone_dialog()
+        combo = self.find(dlg, QComboBox, "cloneDlModel")
+        self.assertEqual(combo.currentData(), "Fun-CosyVoice3-0.5B", "默认推荐 CosyVoice3")
+        model_edit = self.find(dlg, QLineEdit, "cloneModelDir")
+        self.assertIn("当前未找到", model_edit.placeholderText())
+
+        def fake_download(kind, model_id, should_stop=None, storage_dir=None):
+            self.te._notify_download("CosyVoice x [1/2] llm.pt", 512, 1024)
+            self.add_model()
+
+        with mock.patch.object(M, "download", side_effect=fake_download) as dl:
+            self.find(dlg, QPushButton, "cloneDlStart").click()
+            self.pump("_clone_dl_worker")
+        self.assertEqual(dl.call_args[0], ("cosyvoice", "Fun-CosyVoice3-0.5B"))
+        self.assertIn("下载完成", self.find(dlg, QLabel, "cloneDlMsg").text())
+        self.assertIn("Fun-CosyVoice3-0.5B", model_edit.placeholderText(), "下载后自动识别模型目录")
+        self.assertTrue(self.find(dlg, QPushButton, "cloneDlStart").isEnabled())
+
+    def test_download_pause(self):
+        from audiobook import models as M
+        dlg = self.win._build_clone_dialog()
+        started = []
+
+        def slow_download(kind, model_id, should_stop=None, storage_dir=None):
+            started.append(1)
+            while not should_stop():
+                time.sleep(0.01)
+            raise self.te.StopRequested("用户暂停")
+
+        with mock.patch.object(M, "download", side_effect=slow_download):
+            self.find(dlg, QPushButton, "cloneDlStart").click()
+            end = time.time() + 5
+            while not started and time.time() < end:
+                self.app.processEvents()
+                time.sleep(0.01)
+            stop = self.find(dlg, QPushButton, "cloneDlStop")
+            self.assertTrue(stop.isEnabled())
+            stop.click()
+            self.pump("_clone_dl_worker")
+        self.assertIn("已暂停", self.find(dlg, QLabel, "cloneDlMsg").text())
+        self.assertFalse(self.find(dlg, QPushButton, "cloneDlStop").isEnabled())
+
     def test_check_environment_report(self):
         good = {"python": "/py", "repo": "/repo", "model_dir": "/m", "model_type": "CosyVoice3",
                 "ping": {"python": "3.10.14", "cosyvoice": True},

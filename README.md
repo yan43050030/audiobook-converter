@@ -159,8 +159,8 @@ cd CosyVoice
 conda create -n cosyvoice python=3.10 -y && conda activate cosyvoice
 pip install -r requirements.txt
 
-# 2. 下载模型到本程序存储目录的 cosyvoice-models/ 下（国内可把 huggingface_hub 换成 modelscope）
-python -c "from huggingface_hub import snapshot_download; snapshot_download('FunAudioLLM/Fun-CosyVoice3-0.5B-2512', local_dir='<存储目录>/cosyvoice-models/Fun-CosyVoice3-0.5B')"
+# 2. 下载模型（整库下载，HuggingFace → hf-mirror → ModelScope 自动回退，可断点续传）
+python -m audiobook models get cosyvoice Fun-CosyVoice3-0.5B     # 或 CosyVoice2-0.5B
 
 # 3. 告诉本程序用哪个 Python、仓库在哪（打包版必须设置）
 python -m audiobook config --set cosyvoice_python=<conda 环境里的 python 路径> \
@@ -173,7 +173,7 @@ python -m audiobook clone say <音色ID> "你好，这是我的克隆声音。" 
 python -m audiobook convert book.txt --engine clone --voice 小明 --out out --m4b
 ```
 
-图形界面：点语音参数面板的「🎙 克隆音色…」——「环境设置」页填 Python / 仓库路径并一键检测（会实际加载模型）；「音色」页新建音色（选参考音频，可用 Whisper 自动识别文字稿）、编辑文字稿、重命名、删除、试听。之后在引擎里选「声音克隆」，语音下拉框就是你的音色，生成方式与其他引擎完全相同。
+图形界面：点语音参数面板的「🎙 克隆音色…」——「环境设置」页可直接下载模型（带进度，可暂停 / 续传），填 Python / 仓库路径并一键检测（会实际加载模型）；「音色」页新建音色（选参考音频，可用 Whisper 自动识别文字稿）、编辑文字稿、重命名、删除、试听。之后在引擎里选「声音克隆」，语音下拉框就是你的音色，生成方式与其他引擎完全相同。
 
 ### 打包为独立应用
 
