@@ -8,11 +8,9 @@ import platform
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import threading
 import time
-import urllib.parse
 import wave
 from collections import OrderedDict
 from shutil import which
@@ -82,11 +80,6 @@ from audiobook.io.audio import (  # noqa: E402,F401
     write_id3_tags,
     normalize_loudness,
 )
-
-# v6.0/A5b：本地系统语音引擎实现已迁至 audiobook.engines.local；此处再导入
-# _local_generate 以保持 _generate_one_safe 的 local 分支调用不变。
-# （local.py 在函数内惰性引用 tts_engine 的助手，无模块级循环导入。）
-from audiobook.engines.local import _local_generate  # noqa: E402,F401
 
 VERSION = "6.0.0"
 
@@ -1679,54 +1672,6 @@ def _piper_generate_safe(text, voice, rate, output_path, should_stop=None):
                 raise
 
 
-# ======== CosyVoice TTS 引擎 ========
-
-def _cosyvoice_speed(rate: str) -> float:
-    try:
-        val = int(str(rate).replace("%", "").replace("+", ""))
-    except ValueError:
-        val = 0
-    return max(0.5, min(2.0, 1.0 + val / 100.0))
-
-
-def _cosyvoice_generate(text: str, voice: str, rate: str, output_path: str,
-                        should_stop=None) -> None:
-    """经桥接进程用预置说话人合成（语速由 CosyVoice 自身的 speed 参数控制）"""
-    from audiobook.cloning import client as _cv
-    spk = _COSYVOICE_SPK_ALIASES.get(voice, voice) or COSYVOICE_DEFAULT_VOICE
-    if spk in COSYVOICE_MODELS or "cosyvoice" in spk.lower():
-        spk = COSYVOICE_DEFAULT_VOICE  # 旧版把模型目录名当作语音 ID（「CosyVoice (目录)」）
-    fd, wav_path = tempfile.mkstemp(suffix=".wav", prefix="cosyvoice_")
-    os.close(fd)
-    try:
-        _cv.synthesize_sft(spk, text, wav_path, speed=_cosyvoice_speed(rate), should_stop=should_stop)
-        _wav_to_mp3(wav_path, output_path)
-    finally:
-        try:
-            os.remove(wav_path)
-        except OSError:
-            pass
-
-
-def _cosyvoice_generate_safe(text, voice, rate, output_path, should_stop=None):
-    """CosyVoice 单段合成：环境与模型就绪时走桥接进程，否则回退外挂引擎 CLI。
-
-    重试由上层 `_generate_one_safe` 统一负责，这里只做一次。
-    """
-    from audiobook.cloning import client as _cv
-    if should_stop and should_stop():
-        raise StopRequested("用户暂停")
-    ok, msg = _cv.sft_readiness()
-    if ok:
-        _cosyvoice_generate(text, voice, rate, output_path, should_stop=should_stop)
-        return
-    cosy_ext = _scan_external_engines().get("cosyvoice")
-    if not cosy_ext:
-        raise RuntimeError(f"CosyVoice 不可用：{msg}")
-    _external_generate(text, voice, rate, output_path, "cosyvoice",
-                       cosy_ext["executable"], should_stop=should_stop)
-
-
 # ======== 音频文件合并 ========
 
 
@@ -1979,32 +1924,19 @@ _REGISTRY_SYNC_ENGINES = ("local", "piper", "cosyvoice", "clone")
 
 
 def _raw_segment_synth(engine):
-    """返回指定引擎的「单段原语」合成函数：callable(text, voice, rate, out_path, should_stop=None)。
+    """返回外挂插件引擎的「单段原语」合成函数：callable(text, voice, rate, out_path, should_stop=None)。
 
-    集中各引擎的逐段合成分发。A5b 后内置引擎（local/edge/piper/cosyvoice）均已具体化为
-    Engine 子类并各自实现 synthesize_segment，故正常路径下本函数主要服务**外挂插件**引擎
-    （经 _TtsEngineAdapter）；内置分支保留为直调场景的等价兜底。Edge 因异步批量子系统
-    另行处理（见 _generate_one_safe），此处 edge 分支仅覆盖单段直调。
+    内置引擎（local/edge/piper/cosyvoice/clone）都已是独立的 Engine 子类、各自实现
+    synthesize_segment；本函数只服务经 `_TtsEngineAdapter` 包装的外挂插件引擎。
     """
-    if engine == "local":
-        return _local_generate
-    if engine == "piper":
-        return _piper_generate_safe
-    if engine == "cosyvoice":
-        return _cosyvoice_generate_safe
-    if _is_external_engine(engine):
-        ext_info = _scan_external_engines().get(engine)
-        if not ext_info:
-            raise RuntimeError(f"外部引擎 '{engine}' 不可用")
-        executable = ext_info["executable"]
+    ext_info = _scan_external_engines().get(engine)
+    if not ext_info:
+        raise RuntimeError(f"外部引擎 '{engine}' 不可用")
+    executable = ext_info["executable"]
 
-        def _ext(text, voice, rate, out_path, should_stop=None):
-            _external_generate(text, voice, rate, out_path, engine, executable, should_stop=should_stop)
-        return _ext
-
-    def _edge(text, voice, rate, out_path, should_stop=None):
-        asyncio.run(_edge_generate(text, voice, rate, out_path))
-    return _edge
+    def _ext(text, voice, rate, out_path, should_stop=None):
+        _external_generate(text, voice, rate, out_path, engine, executable, should_stop=should_stop)
+    return _ext
 
 
 def _generate_one_safe(text, voice, rate, output_path, engine="edge", should_stop=None,

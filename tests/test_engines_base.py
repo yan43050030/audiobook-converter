@@ -13,7 +13,7 @@ import unittest
 
 import tts_engine
 from audiobook.engines.base import (
-    Engine, register_engine, get_engine, all_engines, _TtsEngineAdapter,
+    Engine, register_engine, get_engine, all_engines,
 )
 
 
