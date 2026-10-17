@@ -8,6 +8,9 @@ import json
 import os
 import tempfile
 import unittest
+from unittest import mock
+
+import tts_engine
 
 from tts_engine import (
     sanitize_filename,
@@ -507,36 +510,58 @@ class TestPiperThreadLocalCache(unittest.TestCase):
         self.assertEqual(len(_get_piper_model_cache()), 0)
 
 
-class TestCosyVoiceSpkResolve(unittest.TestCase):
-    """v5.1: CosyVoice 说话人解析"""
+class TestCosyVoicePresetEngine(unittest.TestCase):
+    """v6: CosyVoice 引擎改走桥接进程（预置说话人）；桥接本身的端到端用例见 test_clone.py。"""
 
-    class _FakeCosy:
-        def __init__(self, spks):
-            self._spks = spks
+    def test_voice_list_is_preset_speakers(self):
+        tts_engine.refresh_cosyvoice_voices()
+        voices = tts_engine.get_voice_list("cosyvoice")
+        self.assertIn("中文女声", voices)
+        self.assertEqual(tts_engine.get_voice_id("中文男声", "cosyvoice"), "中文男")
+        self.assertEqual(tts_engine.get_voice_id("不存在", "cosyvoice"), "中文女")
 
-        def list_avaliable_spks(self):
-            return self._spks
+    def _run(self, voice, rate="+0%"):
+        from audiobook.cloning import client as C
+        calls = []
 
-    def test_alias_mapping(self):
-        from tts_engine import _cosyvoice_resolve_spk
-        cosy = self._FakeCosy(["中文女", "中文男"])
-        self.assertEqual(_cosyvoice_resolve_spk(cosy, "default_female"), "中文女")
-        self.assertEqual(_cosyvoice_resolve_spk(cosy, "default_male"), "中文男")
+        def fake_sft(spk, text, out_wav, speed=1.0, should_stop=None):
+            calls.append((spk, text, speed))
+            open(out_wav, "wb").close()
 
-    def test_direct_match(self):
-        from tts_engine import _cosyvoice_resolve_spk
-        cosy = self._FakeCosy(["中文女", "英文男"])
-        self.assertEqual(_cosyvoice_resolve_spk(cosy, "英文男"), "英文男")
+        with mock.patch.object(C, "sft_readiness", return_value=(True, "ok")), \
+             mock.patch.object(C, "synthesize_sft", side_effect=fake_sft), \
+             mock.patch.object(tts_engine, "_wav_to_mp3") as to_mp3:
+            tts_engine._cosyvoice_generate_safe("你好", voice, rate, "/tmp/never.mp3")
+        to_mp3.assert_called_once()
+        self.assertFalse(os.path.exists(to_mp3.call_args[0][0]), "临时 WAV 应已删除")
+        return calls
 
-    def test_unknown_falls_back_to_first(self):
-        from tts_engine import _cosyvoice_resolve_spk
-        cosy = self._FakeCosy(["中文女"])
-        self.assertEqual(_cosyvoice_resolve_spk(cosy, "不存在的语音"), "中文女")
+    def test_legacy_voice_ids_and_speed(self):
+        self.assertEqual(self._run("default_female"), [("中文女", "你好", 1.0)])
+        self.assertEqual(self._run("default_male", "+50%"), [("中文男", "你好", 1.5)])
+        self.assertEqual(self._run("英文女", "-80%"), [("英文女", "你好", 0.5)])
+        self.assertEqual(self._run("CosyVoice-300M-SFT"), [("中文女", "你好", 1.0)], "旧版的模型目录语音 ID")
 
-    def test_no_spks_returns_none(self):
-        from tts_engine import _cosyvoice_resolve_spk
-        cosy = self._FakeCosy([])
-        self.assertIsNone(_cosyvoice_resolve_spk(cosy, "中文女"))
+    def test_not_ready_without_external_engine_raises_reason(self):
+        from audiobook.cloning import client as C
+        with mock.patch.object(C, "sft_readiness", return_value=(False, "未找到 CosyVoice-300M-SFT 模型")), \
+             mock.patch.object(tts_engine, "_scan_external_engines", return_value={}):
+            with self.assertRaises(RuntimeError) as cm:
+                tts_engine._cosyvoice_generate_safe("你好", "中文女", "+0%", "/tmp/x.mp3")
+            self.assertIn("CosyVoice-300M-SFT", str(cm.exception))
+            ok, msg = tts_engine.check_engine_ready("cosyvoice")
+            self.assertFalse(ok)
+            self.assertIn("CosyVoice-300M-SFT", msg)
+
+    def test_not_ready_falls_back_to_external_engine(self):
+        from audiobook.cloning import client as C
+        ext = {"cosyvoice": {"executable": "/opt/cosy", "name": "外挂"}}
+        with mock.patch.object(C, "sft_readiness", return_value=(False, "x")), \
+             mock.patch.object(tts_engine, "_scan_external_engines", return_value=ext), \
+             mock.patch.object(tts_engine, "_external_generate") as gen:
+            tts_engine._cosyvoice_generate_safe("你好", "中文女", "+0%", "/tmp/x.mp3")
+            self.assertEqual(tts_engine.check_engine_ready("cosyvoice")[0], True)
+        self.assertEqual(gen.call_args[0][4:6], ("cosyvoice", "/opt/cosy"))
 
 
 class TestExtractSpeakers(unittest.TestCase):

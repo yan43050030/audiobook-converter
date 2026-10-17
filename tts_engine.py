@@ -1,4 +1,4 @@
-"""TTS引擎封装 - 支持 edge-tts（联网）、系统语音（跨平台离线）、Piper（离线高质量）、CosyVoice（离线神经） v5.2.0"""
+"""TTS引擎封装 - 支持 edge-tts（联网）、系统语音（跨平台离线）、Piper（离线高质量）、CosyVoice（离线神经，经桥接进程）"""
 
 import asyncio
 import json
@@ -891,15 +891,20 @@ register_builtin_engine("local", "本地（离线）")
 register_builtin_engine("piper", "Piper（离线高质量）")
 
 # ======== CosyVoice 引擎配置（可选） ========
+# CosyVoice 依赖 torch，装在用户自己的 Python 环境里，本程序经常驻桥接子进程调用
+# （audiobook.cloning.client，与「声音克隆」共用环境设置）。本引擎使用 CosyVoice-300M-SFT
+# 的预置说话人；零样本复刻见 clone 引擎。
 
-# 可选导入
-try:
-    from cosyvoice import CosyVoice as _CosyVoiceCls
-    COSYVOICE_PYTHON_AVAILABLE = True
-except ImportError:
-    COSYVOICE_PYTHON_AVAILABLE = False
-    _CosyVoiceCls = None
-
+# 界面显示名 → CosyVoice-300M-SFT 预置说话人（官方 spk2info 中的名字）
+COSYVOICE_SFT_SPEAKERS = {
+    "中文女声": "中文女",
+    "中文男声": "中文男",
+    "粤语女声": "粤语女",
+    "英文女声": "英文女",
+    "英文男声": "英文男",
+    "日语男声": "日语男",
+    "韩语女声": "韩语女",
+}
 COSYVOICE_VOICES: dict[str, str] = {}
 COSYVOICE_DEFAULT_VOICE = ""
 
@@ -911,35 +916,11 @@ def get_cosyvoice_model_dir() -> str:
     return path
 
 
-def _detect_cosyvoice_voices() -> dict:
-    """检测 CosyVoice 可用语音。优先从已下载的模型中扫描。"""
-    voices: dict = {}
-
-    if COSYVOICE_PYTHON_AVAILABLE:
-        voices["默认中文女声"] = "default_female"
-        voices["默认中文男声"] = "default_male"
-
-    # 扫描已下载的模型目录
-    try:
-        model_dir = get_cosyvoice_model_dir()
-        if os.path.isdir(model_dir):
-            for entry in sorted(os.listdir(model_dir)):
-                entry_path = os.path.join(model_dir, entry)
-                if entry.startswith("."):  # 隐藏目录 / 未下载完的 .<名>.partial
-                    continue
-                if os.path.isdir(entry_path) and os.listdir(entry_path):
-                    voices[f"CosyVoice ({entry})"] = entry
-    except Exception as e:
-        logger.warning(f"扫描 CosyVoice 模型目录失败: {e}")
-
-    return voices
-
-
 def refresh_cosyvoice_voices() -> None:
-    """刷新 CosyVoice 语音列表"""
+    """刷新 CosyVoice 语音列表（预置说话人是固定的；保留此函数供模型增删后统一调用）"""
     global COSYVOICE_VOICES, COSYVOICE_DEFAULT_VOICE
-    COSYVOICE_VOICES = _detect_cosyvoice_voices()
-    COSYVOICE_DEFAULT_VOICE = list(COSYVOICE_VOICES.values())[0] if COSYVOICE_VOICES else ""
+    COSYVOICE_VOICES = dict(COSYVOICE_SFT_SPEAKERS)
+    COSYVOICE_DEFAULT_VOICE = next(iter(COSYVOICE_VOICES.values()))
 
 
 refresh_cosyvoice_voices()
@@ -973,59 +954,19 @@ COSYVOICE_MODELS = {
 COSYVOICE_CLONE_MODEL = "Fun-CosyVoice3-0.5B"
 
 
-# CosyVoice 模型实例缓存：加载一次约需数十秒 + 数 GB 内存，
-# 批量生成时逐章重新加载不可接受
-_cosyvoice_model_cache: dict = {}
-_cosyvoice_lock = threading.Lock()
-
-# 界面上历史遗留的语音 ID → CosyVoice-300M-SFT 预置说话人名
+# 历史版本保存过的语音 ID → 预置说话人名（老配置 / 老进度文件仍可能带着它们）
 _COSYVOICE_SPK_ALIASES = {
     "default_female": "中文女",
     "default_male": "中文男",
 }
 
 
-def _load_cosyvoice_model(model_dir: str):
-    """加载 CosyVoice 模型实例（带缓存）"""
-    with _cosyvoice_lock:
-        inst = _cosyvoice_model_cache.get(model_dir)
-        if inst is not None:
-            return inst
-        logger.info(f"加载 CosyVoice 模型: {model_dir}")
-        try:
-            inst = _CosyVoiceCls(model_dir=model_dir)
-        except TypeError:
-            inst = _CosyVoiceCls(model_dir)
-        _cosyvoice_model_cache[model_dir] = inst
-        return inst
-
-
-def _unload_cosyvoice_model() -> None:
-    """卸载 CosyVoice 模型，释放内存"""
-    with _cosyvoice_lock:
-        if _cosyvoice_model_cache:
-            _cosyvoice_model_cache.clear()
-            logger.info("已卸载 CosyVoice 模型")
-
-
-def _cosyvoice_resolve_spk(cosy, voice: str) -> Optional[str]:
-    """把界面选择的语音解析为模型可用的说话人 ID，取不到列表时返回 None"""
-    try:
-        spks = cosy.list_avaliable_spks()  # CosyVoice 官方 API 即为此拼写
-    except Exception:
-        return None
-    if not spks:
-        return None
-    candidate = _COSYVOICE_SPK_ALIASES.get(voice, voice)
-    return candidate if candidate in spks else spks[0]
-
-
 def _cosyvoice_install_hint() -> str:
     """CosyVoice 安装引导提示"""
     return (
-        "CosyVoice 未安装。请通过以下方式安装：\n"
-        "1. pip install cosyvoice soundfile librosa\n"
-        "2. 在 GUI 依赖检测面板点击「下载 CosyVoice 模型」\n"
+        "CosyVoice 需要单独安装（依赖 torch）：\n"
+        "1. 按 README「声音克隆」一节安装 CosyVoice，并在「🎙 克隆音色… → 环境设置」里填写其 Python 与仓库路径；\n"
+        "2. 在「模型管理」下载 CosyVoice-300M-SFT 模型；\n"
         "3. 或将 CosyVoice 可执行文件放入 engines/cosyvoice/ 作为外挂引擎"
     )
 
@@ -1278,22 +1219,14 @@ def check_engine_ready(engine="edge"):
         return readiness()
 
     if engine == "cosyvoice":
-        if COSYVOICE_PYTHON_AVAILABLE:
-            model_dir = get_cosyvoice_model_dir()
-            models = []
-            if os.path.isdir(model_dir):
-                models = [d for d in os.listdir(model_dir)
-                          if os.path.isdir(os.path.join(model_dir, d))]
-            if models:
-                return True, f"CosyVoice 可用（Python 包, {len(models)} 个模型）"
-            return True, "CosyVoice Python 包已安装（可点击「下载 CosyVoice 模型」获取预训练模型）"
-        cli = _which_portable("cosyvoice")
-        if cli:
-            return True, f"CosyVoice CLI 可用（{cli}）"
+        from audiobook.cloning.client import sft_readiness
+        ok, msg = sft_readiness()
+        if ok:
+            return True, msg
         ext = _scan_external_engines()
         if "cosyvoice" in ext:
             return True, f"CosyVoice 外挂引擎可用（{ext['cosyvoice'].get('name')}）"
-        return False, "CosyVoice 未安装。\n" + _cosyvoice_install_hint()
+        return False, msg + "\n\n" + _cosyvoice_install_hint()
 
     # 外部引擎
     if _is_external_engine(engine):
@@ -1748,96 +1681,48 @@ def _piper_generate_safe(text, voice, rate, output_path, should_stop=None):
 
 # ======== CosyVoice TTS 引擎 ========
 
+def _cosyvoice_speed(rate: str) -> float:
+    try:
+        val = int(str(rate).replace("%", "").replace("+", ""))
+    except ValueError:
+        val = 0
+    return max(0.5, min(2.0, 1.0 + val / 100.0))
+
+
 def _cosyvoice_generate(text: str, voice: str, rate: str, output_path: str,
                         should_stop=None) -> None:
-    """使用 CosyVoice Python API 生成音频，失败则回退到外部引擎"""
-    if not COSYVOICE_PYTHON_AVAILABLE or _CosyVoiceCls is None:
-        raise RuntimeError("CosyVoice Python 包未安装。\n" + _cosyvoice_install_hint())
-
-    import numpy as np
-    model_key = voice if voice in COSYVOICE_MODELS else "CosyVoice-300M-SFT"
-    model_dir = _ensure_cosyvoice_model(model_key, should_stop=should_stop)
-
-    rate_val = int(rate.replace("%", "").replace("+", ""))
-    speed = 1.0 + rate_val / 100.0
-    speed = max(0.5, min(2.0, speed))
-
-    cosy = _load_cosyvoice_model(model_dir)
-
-    spk_id = _cosyvoice_resolve_spk(cosy, voice)
-    if spk_id is not None:
-        try:
-            result = cosy.inference_sft(text, spk_id, stream=False)
-        except TypeError:
-            result = cosy.inference_sft(text, stream=False)
-    else:
-        result = cosy.inference_sft(text, stream=False)
-
-    audio_data = np.array([], dtype=np.float32)
-    sample_rate = 22050
-    for chunk in result:
-        if isinstance(chunk, dict):
-            audio_data = np.concatenate([audio_data, chunk.get("tts_speech", np.array([], dtype=np.float32))])
-            sample_rate = chunk.get("sample_rate", sample_rate)
-        elif isinstance(chunk, np.ndarray):
-            audio_data = chunk
-
-    if len(audio_data) == 0:
-        raise RuntimeError("CosyVoice 合成返回空音频")
-
-    # 速度调整
-    if speed != 1.0:
-        try:
-            import librosa
-            audio_data = librosa.effects.time_stretch(audio_data, rate=speed)
-        except ImportError:
-            logger.warning("librosa 未安装，跳过语速调整")
-
-    wav_path = os.path.splitext(output_path)[0] + '.wav'
+    """经桥接进程用预置说话人合成（语速由 CosyVoice 自身的 speed 参数控制）"""
+    from audiobook.cloning import client as _cv
+    spk = _COSYVOICE_SPK_ALIASES.get(voice, voice) or COSYVOICE_DEFAULT_VOICE
+    if spk in COSYVOICE_MODELS or "cosyvoice" in spk.lower():
+        spk = COSYVOICE_DEFAULT_VOICE  # 旧版把模型目录名当作语音 ID（「CosyVoice (目录)」）
+    fd, wav_path = tempfile.mkstemp(suffix=".wav", prefix="cosyvoice_")
+    os.close(fd)
     try:
-        import soundfile as sf
-        sf.write(wav_path, audio_data, int(sample_rate))
+        _cv.synthesize_sft(spk, text, wav_path, speed=_cosyvoice_speed(rate), should_stop=should_stop)
         _wav_to_mp3(wav_path, output_path)
     finally:
-        if os.path.exists(wav_path):
-            try:
-                os.remove(wav_path)
-            except Exception:
-                pass
+        try:
+            os.remove(wav_path)
+        except OSError:
+            pass
 
 
 def _cosyvoice_generate_safe(text, voice, rate, output_path, should_stop=None):
-    """安全的 CosyVoice 生成，含重试 + 外部引擎回退"""
-    # 优先 Python API
-    if COSYVOICE_PYTHON_AVAILABLE and _CosyVoiceCls is not None:
-        for attempt in range(MAX_RETRIES + 1):
-            if should_stop and should_stop():
-                raise StopRequested("用户暂停")
-            try:
-                logger.info(f"CosyVoice 生成 → {output_path} (尝试 {attempt + 1})")
-                _cosyvoice_generate(text, voice, rate, output_path, should_stop=should_stop)
-                if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-                    logger.info(f"CosyVoice 完成: {output_path}")
-                    return
-            except StopRequested:
-                raise
-            except Exception as e:
-                delay = RETRY_DELAY * (2 ** attempt)
-                logger.error(f"CosyVoice 生成失败 尝试{attempt + 1}: {e}")
-                if attempt >= MAX_RETRIES:
-                    logger.warning("CosyVoice Python API 失败，回退到外部引擎")
-                    break
-                if _interruptible_sleep(delay, should_stop):
-                    raise StopRequested("用户暂停")
+    """CosyVoice 单段合成：环境与模型就绪时走桥接进程，否则回退外挂引擎 CLI。
 
-    # 回退：外部引擎
-    ext = _scan_external_engines()
-    cosy_ext = ext.get("cosyvoice")
+    重试由上层 `_generate_one_safe` 统一负责，这里只做一次。
+    """
+    from audiobook.cloning import client as _cv
+    if should_stop and should_stop():
+        raise StopRequested("用户暂停")
+    ok, msg = _cv.sft_readiness()
+    if ok:
+        _cosyvoice_generate(text, voice, rate, output_path, should_stop=should_stop)
+        return
+    cosy_ext = _scan_external_engines().get("cosyvoice")
     if not cosy_ext:
-        raise RuntimeError(
-            "CosyVoice 不可用：Python 包未安装且未找到外部引擎。\n"
-            + _cosyvoice_install_hint()
-        )
+        raise RuntimeError(f"CosyVoice 不可用：{msg}")
     _external_generate(text, voice, rate, output_path, "cosyvoice",
                        cosy_ext["executable"], should_stop=should_stop)
 
@@ -2550,8 +2435,6 @@ def convert_batch(
             finally:
                 if engine == "piper":
                     _unload_piper_model()
-                elif engine == "cosyvoice":
-                    _unload_cosyvoice_model()
     else:
         raise ValueError(f"不支持的引擎类型: {engine}")
 

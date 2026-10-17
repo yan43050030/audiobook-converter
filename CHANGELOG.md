@@ -2,6 +2,23 @@
 
 ## 未发布 — 阶段 3 / C1 声音克隆（核心 + 界面已完成）
 
+### 「CosyVoice」引擎改走桥接进程
+
+- 旧实现在本程序进程内 `from cosyvoice import CosyVoice`：打包版的 Python 里根本没有 torch / CosyVoice，
+  源码版也与当前官方接口不符（方法名拼写、把 torch 张量当 numpy 拼接、librosa 变速），实际上跑不通。
+- 现在与「声音克隆」共用同一套 CosyVoice 环境设置与常驻桥接进程，使用 **CosyVoice-300M-SFT 的预置说话人**
+  （中文女 / 中文男 / 粤语女 / 英文女 / 英文男 / 日语男 / 韩语女）：
+  - 桥接端新增预置说话人合成（`inference_sft`，语速用 CosyVoice 自身的 `speed`）与 `speakers` 命令；
+    兼容 `list_available_spks` / 旧拼写 `list_avaliable_spks`；说话人不存在时报出可用列表。
+  - 桥接端同一时间只保留一个模型：克隆与预置说话人交替使用时自动切换，避免两个模型同时占用显存。
+  - 就绪检测：解释器 + `cosyvoice-models/` 下的 SFT 模型；未就绪时仍可回退外挂引擎 CLI，否则报出具体原因与安装指引。
+  - 历史保存的语音 ID（`default_female` / `default_male`）继续可用。
+- 移除进程内模型缓存与卸载逻辑；删除 CosyVoice 模型时结束桥接进程。不再在生成时自动下载模型
+  （改为在模型管理 / 声音克隆设置里下载，后者的下载列表也加入了 300M-SFT）。
+- 依赖检测面板显示「CosyVoice」与「声音克隆」各自的就绪状态。
+- 测试：替身 CosyVoice 增加预置说话人接口，端到端覆盖桥接合成、模型切换、整本书生成（只加载一次模型）、
+  未就绪回退外挂引擎等。
+
 ### 应用内下载 CosyVoice 模型
 
 - 新增 `audiobook.io.hub`：纯 HTTP 的模型仓库整库下载（等同官方说明里的 `snapshot_download`，不依赖

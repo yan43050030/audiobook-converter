@@ -47,7 +47,6 @@ from tts_engine import (
     get_storage_dir, set_storage_dir, add_download_listener, remove_download_listener,
     refresh_local_voices, check_engine_ready, scan_storage_dependencies,
     get_registered_engines, add_model_search_path, _invalidate_scan_cache,
-    COSYVOICE_PYTHON_AVAILABLE, get_cosyvoice_model_dir,
     PIPER_VOICES, _ensure_piper_model,
     split_text, _generate_one_safe, split_by_duration,
     extract_speakers, export_m4b, refresh_piper_voices,
@@ -1838,14 +1837,9 @@ class AudiobookConverterMain(QMainWindow):
         lines.append(f"{mark(gpu.get('onnxruntime_gpu'))} onnxruntime GPU")
 
         try:
-            if COSYVOICE_PYTHON_AVAILABLE:
-                lines.append("✓ CosyVoice Python 包: 已安装")
-                md = get_cosyvoice_model_dir()
-                if os.path.isdir(md):
-                    cv_models = [d for d in os.listdir(md) if os.path.isdir(os.path.join(md, d))]
-                    lines.append(f"CosyVoice 模型: {len(cv_models)} 个" if cv_models else "○ CosyVoice 模型: 未下载")
-            else:
-                lines.append("○ CosyVoice Python 包: 未安装")
+            from audiobook.cloning.client import sft_readiness, readiness as clone_readiness
+            for label, (ok, msg) in (("CosyVoice", sft_readiness()), ("声音克隆", clone_readiness())):
+                lines.append(f"{mark(ok)} {label}: {msg.splitlines()[0]}")
         except Exception:
             lines.append("○ CosyVoice: 检测失败")
 
@@ -2146,6 +2140,7 @@ class AudiobookConverterMain(QMainWindow):
             "<li>用下面的「下载模型」获取 <b>Fun-CosyVoice3-0.5B</b>（或 CosyVoice2-0.5B），"
             "也可自行下载到存储目录的 <code>cosyvoice-models/</code> 下；</li>"
             "<li>在下面填写该环境的 Python 与仓库路径，点「检测环境」。</li></ol>"
+            "这里的环境同时用于「CosyVoice」引擎（预置中文男女声等，需下载 CosyVoice-300M-SFT）。"
             "详细命令见 README「声音克隆」一节。")
         intro.setWordWrap(True)
         intro.setTextFormat(Qt.TextFormat.RichText)
@@ -2192,7 +2187,7 @@ class AudiobookConverterMain(QMainWindow):
         dl_row.addWidget(QLabel("下载模型"))
         dl_model = QComboBox()
         dl_model.setObjectName("cloneDlModel")
-        for key in (COSYVOICE_CLONE_MODEL, "CosyVoice2-0.5B"):
+        for key in (COSYVOICE_CLONE_MODEL, "CosyVoice2-0.5B", "CosyVoice-300M-SFT"):
             dl_model.addItem(COSYVOICE_MODELS[key]["description"], key)
         dl_row.addWidget(dl_model, 1)
         btn_dl = QPushButton("⬇ 下载")

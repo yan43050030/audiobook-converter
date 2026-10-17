@@ -8,8 +8,11 @@
     {"id": 1, "cmd": "ping"}
     {"id": 2, "cmd": "load", "model_dir": "..."}
     {"id": 3, "cmd": "tts", "model_dir": "...", "text": "...", "prompt_wav": "...",
-     "prompt_text": "...", "speaker_key": "...", "speed": 1.0, "out": "/x.wav"}
-    {"id": 4, "cmd": "quit"}
+     "prompt_text": "...", "speaker_key": "...", "speed": 1.0, "out": "/x.wav"}   零样本复刻
+    {"id": 4, "cmd": "tts", "model_dir": "...", "text": "...", "spk_id": "中文女",
+     "speed": 1.0, "out": "/x.wav"}                                              预置说话人（SFT）
+    {"id": 5, "cmd": "speakers", "model_dir": "..."}
+    {"id": 6, "cmd": "quit"}
 响应：{"id": n, "ok": true, ...} 或 {"id": n, "ok": false, "error": "...", "trace": "..."}
 
 注意：本文件不能 import audiobook 包（运行在另一个 Python 环境里），只依赖标准库、numpy
@@ -26,7 +29,7 @@ import wave
 # CosyVoice3 的提示文本需要这段系统前缀（见官方 example.py）
 V3_PROMPT_PREFIX = "You are a helpful assistant.<|endofprompt|>"
 
-_models = {}        # model_dir -> 模型实例
+_models = {}        # model_dir -> 模型实例（同一时间只保留一个，切换模型时释放旧的）
 _speakers = {}      # model_dir -> 已登记的零样本说话人 key 集合
 
 
@@ -41,6 +44,17 @@ def _setup_paths(repo):
 def _get_model(model_dir):
     m = _models.get(model_dir)
     if m is None:
+        if _models:  # 克隆模型与预置说话人模型交替使用时，避免两个模型同时占用显存 / 内存
+            _models.clear()
+            _speakers.clear()
+            import gc
+            gc.collect()
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
         from cosyvoice.cli.cosyvoice import AutoModel
         m = AutoModel(model_dir=model_dir)
         _models[model_dir] = m
@@ -54,6 +68,15 @@ def _model_type(model):
 
 def _is_v3(model):
     return "CosyVoice3" in [c.__name__ for c in type(model).__mro__]
+
+
+def _list_spks(model):
+    """预置说话人列表（新接口 list_available_spks，老版本拼写为 list_avaliable_spks）。"""
+    for name in ("list_available_spks", "list_avaliable_spks"):
+        fn = getattr(model, name, None)
+        if fn is not None:
+            return [str(s) for s in (fn() or [])]
+    return []
 
 
 def _to_array(speech):
@@ -90,12 +113,21 @@ def _tts(req):
     model_dir = req["model_dir"]
     model = _get_model(model_dir)
     text = req["text"]
-    prompt_wav = req["prompt_wav"]
+    prompt_wav = req.get("prompt_wav") or ""
     prompt_text = (req.get("prompt_text") or "").strip()
     speed = float(req.get("speed") or 1.0)
     v3 = _is_v3(model)
+    spk_id = (req.get("spk_id") or "").strip()
 
-    if prompt_text:
+    if spk_id:
+        spks = _list_spks(model)
+        if spks and spk_id not in spks:
+            raise ValueError(f"模型没有预置说话人「{spk_id}」，可用：{'、'.join(spks)}")
+        if not spks:
+            raise ValueError("该模型没有预置说话人（请使用 CosyVoice-300M-SFT 模型）")
+        chunks = list(model.inference_sft(text, spk_id, stream=False, speed=speed))
+        mode = "sft"
+    elif prompt_text:
         if v3 and "<|endofprompt|>" not in prompt_text:
             prompt_text = V3_PROMPT_PREFIX + prompt_text
         key = req.get("speaker_key") or ""
@@ -145,6 +177,8 @@ def _handle(req):
         return {"model_type": _model_type(m), "sample_rate": int(getattr(m, "sample_rate", 0))}
     if cmd == "tts":
         return _tts(req)
+    if cmd == "speakers":
+        return {"speakers": _list_spks(_get_model(req["model_dir"]))}
     raise ValueError(f"未知命令: {cmd}")
 
 

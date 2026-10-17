@@ -152,10 +152,11 @@ class TestDelete(_StorageCase):
     def test_delete_cosyvoice(self):
         d = self.cosy("CosyVoice-300M-SFT")
         (e,) = M.list_installed()
-        with mock.patch.object(tts_engine, "_unload_cosyvoice_model") as unload, \
+        from audiobook.cloning import client as C
+        with mock.patch.object(C, "shutdown") as unload, \
              mock.patch.object(tts_engine, "refresh_cosyvoice_voices") as refresh:
             M.delete_model(e)
-        unload.assert_called_once()
+        unload.assert_called_once()  # 桥接进程可能正加载着该模型
         refresh.assert_called_once()
         self.assertFalse(os.path.exists(d))
 
