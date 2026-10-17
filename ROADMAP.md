@@ -24,8 +24,8 @@
 > （首次运行向导：选场景 → 备模型 → 试听，记住引擎）——**C2 工作区重设计全部完成**。**C1 声音克隆**：
 > 核心（音色档案 + CosyVoice 常驻桥接进程 + clone 引擎 + CLI）与界面（环境设置 / 音色管理 / 试听）均已完成，
 > **应用内下载 CosyVoice 模型已完成**（`audiobook.io.hub` 整库下载，HF / hf-mirror / ModelScope 自动回退，可续传）；
-> **「CosyVoice」引擎已改走桥接进程**（预置说话人，与声音克隆共用环境）。其余：
-> piper/cosyvoice 重实现整体迁入各自模块、Edge 异步批量编排并入注册表等内部收尾。
+> **「CosyVoice」引擎已改走桥接进程**（预置说话人，与声音克隆共用环境），实现已迁入 `audiobook.engines.cosyvoice`。
+> 其余内部收尾：Piper 重实现整体迁入 `audiobook.engines.piper`、Edge 异步批量编排并入注册表。
 
 ## 一、现有功能盘点
 

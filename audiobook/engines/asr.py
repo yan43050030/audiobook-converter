@@ -12,7 +12,7 @@ import os
 import subprocess
 import tempfile
 from shutil import which
-from typing import Callable, List, Optional
+from typing import Callable, Optional
 
 # 可选导入：实际使用 faster-whisper
 try:
@@ -217,8 +217,9 @@ def _load_whisper_model(model_size: str, storage_dir: str,
 
 
 def unload_whisper_model() -> None:
-    """卸载已加载的 Whisper 模型"""
-    global _whisper_model_cache
+    """卸载已加载的 Whisper 模型（未加载时什么也不做）"""
+    if not _whisper_model_cache:
+        return
     _whisper_model_cache.clear()
     import gc
     gc.collect()
@@ -441,7 +442,7 @@ def external_asr_transcribe(engine_id: str, input_path: str, output_format: str 
                             model: str = "", language: str = "auto",
                             should_stop=None, progress_callback=None) -> str:
     """使用外挂 ASR 引擎转录音频"""
-    from tts_engine import get_storage_dir, _run_subprocess_interruptible, StopRequested
+    from tts_engine import get_storage_dir, _run_subprocess_interruptible
     engines = scan_external_asr_engines(get_storage_dir())
     info = engines.get(engine_id)
     if not info:

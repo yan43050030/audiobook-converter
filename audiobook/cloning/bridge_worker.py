@@ -166,7 +166,8 @@ def _handle(req):
     cmd = req.get("cmd")
     if cmd == "ping":
         try:
-            import cosyvoice  # noqa: F401
+            import importlib
+            importlib.import_module("cosyvoice")  # 只检测能否导入
             ok, err = True, ""
         except Exception as e:
             ok, err = False, f"{type(e).__name__}: {e}"

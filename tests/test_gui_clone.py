@@ -20,7 +20,7 @@ from unittest import mock
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from PySide6.QtWidgets import (QApplication, QDialog, QInputDialog, QLabel, QLineEdit,
+    from PySide6.QtWidgets import (QApplication, QInputDialog, QLabel, QLineEdit,
                                    QMessageBox, QPlainTextEdit, QPushButton, QTableWidget,
                                    QTabWidget, QFileDialog)
     _QT_ERROR = None
@@ -255,7 +255,7 @@ class TestCloneDialogs(unittest.TestCase):
         self.assertEqual(self.P.list_profiles(), [])
 
     def test_listen_when_not_ready_goes_to_settings(self):
-        p = self.P.create_profile("小明", make_wav(os.path.join(self.tmp, "a.wav"), 5))
+        self.P.create_profile("小明", make_wav(os.path.join(self.tmp, "a.wav"), 5))
         dlg = self.win._build_clone_dialog()
         tabs = self.find(dlg, QTabWidget, "cloneTabs")
         tabs.setCurrentIndex(0)

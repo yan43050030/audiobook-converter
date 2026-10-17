@@ -29,7 +29,7 @@ class EdgeEngine(Engine):
                 for disp in _te.get_voice_list("edge")}
 
     def synthesize_segment(self, text, voice, rate, out_path, should_stop=None):
-        # 单段原语：与具体化前 _raw_segment_synth("edge") 的直调路径一致
-        # （Edge 为网络合成，不支持 should_stop 中断，故忽略该参数）。
+        # 单段原语（Edge 为网络合成，不支持 should_stop 中断，故忽略该参数）。
+        # 整章 / 整本的批量生成走 tts_engine 的异步批量路径，不经过这里。
         import tts_engine as _te
         asyncio.run(_te._edge_generate(text, voice, rate, out_path))

@@ -13,7 +13,7 @@ import unittest
 from unittest import mock
 
 import tts_engine
-from audiobook.engines.base import Engine, get_engine, _TtsEngineAdapter
+from audiobook.engines.base import get_engine, _TtsEngineAdapter
 from audiobook.engines.edge import EdgeEngine
 from audiobook.engines.piper import PiperEngine
 from audiobook.engines.cosyvoice import CosyVoiceEngine
@@ -60,10 +60,13 @@ class TestSegmentSynthDelegation(unittest.TestCase):
             PiperEngine().synthesize_segment("文本", "v", "+0%", "/tmp/x.mp3")
             m.assert_called_once_with("文本", "v", "+0%", "/tmp/x.mp3", should_stop=None)
 
-    def test_cosyvoice_delegates(self):
-        with mock.patch.object(tts_engine, "_cosyvoice_generate_safe") as m:
-            CosyVoiceEngine().synthesize_segment("文本", "v", "+0%", "/tmp/x.mp3")
-            m.assert_called_once_with("文本", "v", "+0%", "/tmp/x.mp3", should_stop=None)
+    def test_cosyvoice_delegates_to_bridge(self):
+        from audiobook.cloning import client as C
+        with mock.patch.object(C, "sft_readiness", return_value=(True, "ok")), \
+             mock.patch.object(C, "synthesize_sft") as m, \
+             mock.patch.object(tts_engine, "_wav_to_mp3"):
+            CosyVoiceEngine().synthesize_segment("文本", "中文男", "+0%", "/tmp/x.mp3")
+        self.assertEqual(m.call_args[0][:2], ("中文男", "文本"))
 
     def test_edge_delegates_via_asyncio(self):
         async def _fake(*a, **k):

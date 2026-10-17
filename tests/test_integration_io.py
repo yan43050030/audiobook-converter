@@ -23,7 +23,7 @@ def _make_silence_mp3(path, seconds=1.0):
     """用 ffmpeg 直接生成一段静音 mp3 作为纯 IO 测试的输入，避免依赖 TTS 引擎。"""
     subprocess.run(
         [_ffmpeg(), "-y", "-f", "lavfi", "-i",
-         f"anullsrc=r=22050:cl=mono", "-t", str(seconds), "-q:a", "9", path],
+         "anullsrc=r=22050:cl=mono", "-t", str(seconds), "-q:a", "9", path],
         capture_output=True, check=True,
     )
 

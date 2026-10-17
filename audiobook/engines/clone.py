@@ -10,7 +10,8 @@ import tempfile
 from audiobook.engines.base import Engine
 
 
-def _speed_from_rate(rate: str) -> float:
+def speed_from_rate(rate: str) -> float:
+    """界面语速（如 "+20%"）→ CosyVoice 的 speed 倍率（0.5–2.0）。"""
     try:
         val = int(str(rate).replace("%", "").replace("+", ""))
     except ValueError:
@@ -44,7 +45,7 @@ class CloneEngine(Engine):
         fd, wav = tempfile.mkstemp(suffix=".wav", prefix="clone_")
         os.close(fd)
         try:
-            synthesize(prof, text, wav, speed=_speed_from_rate(rate), should_stop=should_stop)
+            synthesize(prof, text, wav, speed=speed_from_rate(rate), should_stop=should_stop)
             _te._wav_to_mp3(wav, out_path)
         finally:
             try:

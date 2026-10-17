@@ -1,6 +1,6 @@
-"""Qt6 GUI — 文字转有声读物 v6.0.0（兼容 PySide6 / PyQt6）"""
+"""Qt6 GUI — 文字转有声读物（兼容 PySide6 / PyQt6；版本号见 tts_engine.VERSION）"""
 
-import os, sys, threading, subprocess, platform, logging, json, tempfile, shutil, time
+import os, threading, subprocess, platform, tempfile, shutil, time
 from typing import Optional
 
 # 自动适配 PySide6 或 PyQt6
@@ -9,17 +9,17 @@ try:
         QMainWindow, QWidget, QSplitter, QTabWidget, QStackedWidget,
         QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QPushButton, QLabel,
         QComboBox, QRadioButton, QButtonGroup, QCheckBox, QSlider,
-        QSpinBox, QProgressBar, QPlainTextEdit, QTreeWidget, QTreeWidgetItem,
+        QProgressBar, QPlainTextEdit, QTreeWidget, QTreeWidgetItem,
         QLineEdit, QFileDialog, QMessageBox, QFrame, QSizePolicy,
         QHeaderView, QAbstractItemView, QApplication, QScrollArea, QLayout,
         QTableWidget, QTableWidgetItem, QDialog, QListWidget, QListWidgetItem,
         QInputDialog,
     )
     from PySide6.QtCore import (
-        Qt, Signal, Slot, QThread, QTimer, QSize, QRect,
+        Qt, Signal, QThread, QTimer,
     )
     from PySide6.QtGui import (
-        QFont, QIcon, QPalette, QColor, QTextCursor,
+        QFont, QColor,
     )
     _QT_BACKEND = "PySide6"
 except ImportError:
@@ -27,17 +27,17 @@ except ImportError:
         QMainWindow, QWidget, QSplitter, QTabWidget, QStackedWidget,
         QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QPushButton, QLabel,
         QComboBox, QRadioButton, QButtonGroup, QCheckBox, QSlider,
-        QSpinBox, QProgressBar, QPlainTextEdit, QTreeWidget, QTreeWidgetItem,
+        QProgressBar, QPlainTextEdit, QTreeWidget, QTreeWidgetItem,
         QLineEdit, QFileDialog, QMessageBox, QFrame, QSizePolicy,
         QHeaderView, QAbstractItemView, QApplication, QScrollArea, QLayout,
         QTableWidget, QTableWidgetItem, QDialog, QListWidget, QListWidgetItem,
         QInputDialog,
     )
     from PyQt6.QtCore import (
-        Qt, QThread, QTimer, QSize, QRect, pyqtSignal as Signal, pyqtSlot as Slot,
+        Qt, QThread, QTimer, pyqtSignal as Signal,
     )
     from PyQt6.QtGui import (
-        QFont, QIcon, QPalette, QColor, QTextCursor,
+        QFont, QColor,
     )
     _QT_BACKEND = "PyQt6"
 
@@ -47,9 +47,8 @@ from tts_engine import (
     get_storage_dir, set_storage_dir, add_download_listener, remove_download_listener,
     refresh_local_voices, check_engine_ready, scan_storage_dependencies,
     get_registered_engines, add_model_search_path, _invalidate_scan_cache,
-    PIPER_VOICES, _ensure_piper_model,
     split_text, _generate_one_safe, split_by_duration,
-    extract_speakers, export_m4b, refresh_piper_voices,
+    extract_speakers, export_m4b,
     fetch_piper_voice_catalog, list_piper_catalog_voices,
     download_piper_voice_from_catalog,
 )
@@ -1804,7 +1803,7 @@ class AudiobookConverterMain(QMainWindow):
                 os.startfile(path)
             else:
                 subprocess.Popen(["xdg-open", path])
-        except Exception as e:
+        except Exception:
             QMessageBox.information(self, "目录", path)
 
     def _reset_storage(self):

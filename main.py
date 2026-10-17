@@ -45,11 +45,11 @@ def _run_qt(backend, prefix):
 
     if prefix == "PySide6":
         from PySide6.QtWidgets import QApplication
-        from PySide6.QtCore import Qt, QTimer
+        from PySide6.QtCore import QTimer
         from PySide6.QtGui import QPalette, QColor
     else:
         from PyQt6.QtWidgets import QApplication
-        from PyQt6.QtCore import Qt, QTimer
+        from PyQt6.QtCore import QTimer
         from PyQt6.QtGui import QPalette, QColor
 
     from tts_engine import _load_config, VERSION

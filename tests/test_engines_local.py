@@ -13,7 +13,7 @@ import unittest
 
 import tts_engine
 from audiobook.engines.base import get_engine, Engine
-from audiobook.engines.local import LocalEngine, _local_generate
+from audiobook.engines.local import LocalEngine
 
 
 class TestLocalEngineWiring(unittest.TestCase):
@@ -22,10 +22,6 @@ class TestLocalEngineWiring(unittest.TestCase):
         self.assertIsInstance(e, LocalEngine)
         self.assertIsInstance(e, Engine)
         self.assertEqual(e.id, "local")
-
-    def test_tts_engine_reexports_local_generate(self):
-        # _generate_one_safe 的 local 分支仍调用 tts_engine._local_generate（再导入）
-        self.assertIs(tts_engine._local_generate, _local_generate)
 
     def test_is_ready_matches_dispatch(self):
         self.assertEqual(get_engine("local").is_ready(),

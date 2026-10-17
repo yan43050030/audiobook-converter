@@ -2,6 +2,17 @@
 
 ## 未发布 — 阶段 3 / C1 声音克隆（核心 + 界面已完成）
 
+### 内部清理
+
+- CosyVoice 单段合成实现从 `tts_engine` 迁入 `audiobook.engines.cosyvoice`（`CosyVoiceEngine.synthesize_segment`
+  + `resolve_speaker`）；与 clone 引擎共用 `speed_from_rate`，去掉重复实现。
+- `_raw_segment_synth` 只保留外挂插件引擎分支：内置引擎早已各自实现 `synthesize_segment`，旧的
+  local / piper / cosyvoice / edge 兜底分支是死代码；随之移除 `tts_engine` 对 `_local_generate` 的再导入。
+- 修复退出时的「Logging error / I/O operation on closed file」：`unload_whisper_model()` 未加载模型时不再
+  做任何事（此前退出钩子每次都打日志，测试进程退出时日志流已关闭即报错）。
+- 清理未用导入 / 变量（GUI、main、tts_engine、asr、测试），GUI 模块文档串去掉写死的版本号；
+  pyflakes 除有意的再导出 / 可用性探测外全部清零。
+
 ### 「CosyVoice」引擎改走桥接进程
 
 - 旧实现在本程序进程内 `from cosyvoice import CosyVoice`：打包版的 Python 里根本没有 torch / CosyVoice，
