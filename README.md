@@ -1,6 +1,6 @@
 # 文字转有声读物 (Text-to-Audiobook Converter)
 
-**v6.0.0** — 将文字转换为自然语音的有声读物制作工具，PySide6/Qt6 界面，支持多引擎 TTS、ASR 语音转文字、多人对话识别。保留 v5.2 全部能力（Piper 语音包在线目录、角色→音色映射、m4b 有声书导出含章节、srt 字幕、ASR 批量转录）。v6.0 为大版本重构 + 产品形态扩展：分层 `audiobook` 包 + 统一 `Engine` 抽象/注册表（全引擎具体化）、`audiobook` 命令行与库 API、集中式配置 schema、本地 Web UI（`audiobook serve`）；仅支持 Qt6。详见 CHANGELOG.md / ROADMAP.md。
+**v6.1.0** — 将文字转换为自然语音的有声读物制作工具，PySide6/Qt6 界面（简体中文 / English），支持多引擎 TTS、ASR 语音转文字、多人对话识别、声音克隆（实验性）。保留 v5.2 全部能力（Piper 语音包在线目录、角色→音色映射、m4b 有声书导出含章节、srt 字幕、ASR 批量转录）。v6.0 为大版本重构 + 产品形态扩展：分层 `audiobook` 包 + 统一 `Engine` 抽象/注册表（全引擎具体化）、`audiobook` 命令行与库 API、集中式配置 schema、本地 Web UI（`audiobook serve`）；仅支持 Qt6。详见 CHANGELOG.md / ROADMAP.md。
 
 > ⚠️ v6.0 起仅支持 Qt6 界面，已移除 Tkinter 回退后端（需安装 PySide6 或 PyQt6）。
 
@@ -254,7 +254,8 @@ audiobook_converter/
 
 ## 版本历史
 
-- **v6.0.0** (2026-10) — v6.0 正式版：大版本重构 + 产品形态扩展全部落地。**架构**：移除 Tkinter 后端（仅 Qt6）、删除遗留界面；分层 `audiobook/` 包（`core`/`io`/`engines`）；统一 `Engine` 抽象接口 + 注册表，local/edge/piper/cosyvoice **全部具体化为独立引擎子类**，通用适配器仅服务外挂插件；`_generate_one_safe` 分发改走注册表。**新形态**：`audiobook` 命令行与库 API（`convert`/`engines`/`voices`/`transcribe`/`config`/`serve`）、集中式配置 schema（`audiobook.config`）、本地 Web UI（FastAPI，`audiobook serve`）。**界面**：章节列表可拖动调整高度修复。全程行为不变、集成测试兜底（172 项），功能与 v5.2.x 一致。详见 ROADMAP.md / CHANGELOG.md
+- **v6.1.0** (2026-10) — v6.x 首个正式构建版：阶段 3 全部完成（模型管理器、生成队列可视化与失败重试、首次运行向导、声音克隆 + 应用内下载 CosyVoice 模型）；多语言界面（简体中文 / English，桌面版 / 命令行 `--lang` / Web UI）；Piper / Edge 实现迁入各自引擎模块；修复 Piper 嵌套重试、未知引擎被当作 Edge、早期 Piper 语音包无法加载、`convert --help` 崩溃等。v6.0.0 只在源码中定版、未构建发布，其内容一并包含在本版中
+- **v6.0.0** (2026-10，源码定版，未单独发布) — v6.0 正式版：大版本重构 + 产品形态扩展全部落地。**架构**：移除 Tkinter 后端（仅 Qt6）、删除遗留界面；分层 `audiobook/` 包（`core`/`io`/`engines`）；统一 `Engine` 抽象接口 + 注册表，local/edge/piper/cosyvoice **全部具体化为独立引擎子类**，通用适配器仅服务外挂插件；`_generate_one_safe` 分发改走注册表。**新形态**：`audiobook` 命令行与库 API（`convert`/`engines`/`voices`/`transcribe`/`config`/`serve`）、集中式配置 schema（`audiobook.config`）、本地 Web UI（FastAPI，`audiobook serve`）。**界面**：章节列表可拖动调整高度修复。全程行为不变、集成测试兜底（172 项），功能与 v5.2.x 一致。详见 ROADMAP.md / CHANGELOG.md
 - **v6.0.0-beta.1** (2026-09) — v6.0 阶段 1 架构重构完成，作为可用版本发布（移除 Tkinter、分层包、Engine 注册表）。
 - **v5.2.1** (2026-09) — 修复 Linux 本地语音（espeak-ng）检测选中不可用的 MBROLA 语音导致合成失败；界面优化：ASR 页隐藏 TTS 专用底部操作条、语音参数按钮换行避免窄窗裁切、章节列表/文本内容改为可调分隔条、文本区改用系统默认字体、直接输入文本时输出文件名不再出现 untitled
 - **v5.2.0** (2026-07) — Piper 语音包在线目录（官方 voices.json，界面内下载多语言语音）、角色→音色多对多映射、Edge 引擎对话检测、ASR 多文件批量转录、m4b 有声书导出（内嵌章节）、ID3 元数据写入、srt 字幕同步生成、macOS 包体积从 1.4GB 大幅瘦身（PySide6 按需打包）、说话人归属修复

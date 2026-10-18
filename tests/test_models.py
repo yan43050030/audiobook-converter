@@ -17,6 +17,8 @@ import tts_engine
 from audiobook import models as M
 from audiobook.engines import asr
 
+os.environ["AUDIOBOOK_LANG"] = "zh"  # 断言按中文界面文案写；不受系统语言影响（unittest 不加载 conftest）
+
 
 def _write(path, nbytes):
     os.makedirs(os.path.dirname(path), exist_ok=True)

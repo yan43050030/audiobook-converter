@@ -105,7 +105,7 @@ from audiobook.engines.edge import (  # noqa: E402,F401
     _edge_batch_generate,
 )
 
-VERSION = "6.0.0"
+VERSION = "6.1.0"
 
 # 当前平台
 _PLATFORM = platform.system()  # "Darwin" / "Windows" / "Linux"

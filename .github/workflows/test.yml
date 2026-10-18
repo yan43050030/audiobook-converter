@@ -51,4 +51,5 @@ jobs:
       - name: Run tests
         env:
           QT_QPA_PLATFORM: offscreen
+          AUDIOBOOK_LANG: zh
         run: python -m pytest tests -v

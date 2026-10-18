@@ -27,6 +27,8 @@ import tts_engine
 from audiobook.cloning import profiles as P
 from audiobook.cloning import client as C
 
+os.environ["AUDIOBOOK_LANG"] = "zh"  # 断言按中文界面文案写；不受系统语言影响（unittest 不加载 conftest）
+
 try:
     import numpy  # noqa: F401
     _HAS_NUMPY = True

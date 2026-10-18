@@ -1,6 +1,9 @@
 # 项目情况日志 — 文字转有声读物 (Audiobook Converter)
 
-## 未发布 — 阶段 3 / C1 声音克隆（核心 + 界面已完成）
+## 当前版本：v6.1.0 (2026-10-18)
+
+> **v6.1.0 发布说明**：v6.x 首个正式构建版（v6.0.0 已在源码中定版，但从未构建发布，6.0.0 的全部内容一并包含在本版中）。
+> 相对 v6.0.0 新增：**阶段 3 全部完成**——C2 工作区重设计（模型管理器 / 生成队列可视化 / 首次运行向导）与 C1 声音克隆（CosyVoice 零样本复刻 + 应用内下载模型 + 「CosyVoice」引擎改走桥接进程）；**U4 多语言界面**（简体中文 / English，桌面版 + 命令行 + Web UI）；Piper / Edge 实现迁入各自引擎模块；以及多项缺陷修复（Piper 嵌套重试、未知引擎被当作 Edge、早期 Piper 语音包无法加载、`convert --help` 崩溃、CI 中 GUI 测试从未执行等）。
 
 ### U4 多语言界面（简体中文 / English：桌面版 + 命令行 + Web UI）
 
@@ -14,6 +17,10 @@
   被 argparse 当作格式符（`ValueError: unsupported format character`），现转义为 `%%`。
 - 词典共 723 条；测试新增 CLI 两种语言的 `--help` 均可渲染、`--lang` 两种写法、英文 `engines` /
   `config` 无中文、Web 页面与接口英文化且中文页面不变、页面中没有未标记的中文。
+- **测试与构建不受系统语言影响**：按中文文案断言的测试模块自行固定 `AUDIOBOOK_LANG=zh`（unittest 不加载
+  conftest），打包流程 `build.yml` 的测试步骤改用 pytest 并显式设置语言——否则 macOS / Windows 英文构建机
+  上界面会自动切成英文，25 项测试失败、发布构建中断（发布前在本地以英文系统模拟复现并修复）。
+  调用子进程的 i18n 测试统一 UTF-8 输出，避免 Windows 管道默认 cp1252 编码中文时报错。
 
 - 新增 `audiobook.i18n`：以中文原文为键的 `tr()`，英文词典在 `audiobook/locales/en.py`；
   缺译时回落中文、不会空白。语言优先级：环境变量 `AUDIOBOOK_LANG` > 配置 `language` > 系统语言。
@@ -141,7 +148,7 @@
   错误 / 崩溃 / 暂停恢复），并跑通 `convert_batch(engine="clone")` 与全部 CLI。
   **真实模型的出声效果需在装好 CosyVoice 的机器上验证。**
 
-## 未发布 — 阶段 3 / C2 工作区重设计（U1 / U3 / U2 均已完成）
+### 阶段 3 / C2 工作区重设计（U1 / U3 / U2）
 
 ### U2 首次运行向导
 
@@ -194,7 +201,7 @@
 - PyInstaller 三份 spec 补 `audiobook.config` / `audiobook.models` hiddenimports。
 - 新增 `tests/test_models.py`（21 项：盘点各布局、外部/符号链接拒删、删除副作用、下载分发、CLI）。
 
-## 当前版本：v6.0.0 (2026-10，正式版)
+## v6.0.0 (2026-10，源码定版；未单独构建发布，内容并入 v6.1.0)
 
 > **v6.0.0 正式版发布说明**：v6.0 大版本重构 + 产品形态扩展全部完成，自 beta.1 转正式版。
 > 功能与 v5.2.x 完全一致（多引擎 TTS / ASR / m4b / srt / 对话识别等），全程行为不变、

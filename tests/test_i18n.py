@@ -177,9 +177,10 @@ class TestCatalog(unittest.TestCase):
 
 
 def _run(code, lang, timeout=180):
-    env = dict(os.environ, AUDIOBOOK_LANG=lang, QT_QPA_PLATFORM="offscreen")
+    # 子进程输出含中文：Windows 上管道默认 cp1252，统一用 UTF-8
+    env = dict(os.environ, AUDIOBOOK_LANG=lang, QT_QPA_PLATFORM="offscreen", PYTHONIOENCODING="utf-8")
     return subprocess.run([sys.executable, "-c", textwrap.dedent(code)], cwd=ROOT, env=env,
-                          capture_output=True, text=True, timeout=timeout)
+                          capture_output=True, text=True, encoding="utf-8", timeout=timeout)
 
 
 class TestNoImportTimeResolution(unittest.TestCase):
@@ -292,9 +293,9 @@ class TestEnglishGui(unittest.TestCase):
 
 class TestEnglishCli(unittest.TestCase):
     def _cli(self, *args, lang="zh"):
-        env = dict(os.environ, AUDIOBOOK_LANG=lang)
+        env = dict(os.environ, AUDIOBOOK_LANG=lang, PYTHONIOENCODING="utf-8")
         return subprocess.run([sys.executable, "-m", "audiobook", *args], cwd=ROOT, env=env,
-                              capture_output=True, text=True, timeout=120)
+                              capture_output=True, text=True, encoding="utf-8", timeout=120)
 
     def test_help_renders_in_both_languages(self):
         # 帮助文字里的 % 必须转义为 %%，否则 argparse 渲染 --help 会直接崩溃

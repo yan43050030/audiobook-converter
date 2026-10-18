@@ -17,7 +17,7 @@
 > 外挂插件引擎（piper/cosyvoice 的重实现暂留 `tts_engine`，可后续整体迁入各自模块）。
 > **阶段 2 全部完成**：B2（CLI + 库 API，`audiobook convert/engines/voices/transcribe`）、
 > B3（配置 schema，`audiobook.config` + CLI `config`）、B4（本地 Web UI，FastAPI +
-> `audiobook serve`）。**已定版发布 v6.0.0 正式版**（阶段 1 + 阶段 2 全落地；macOS/Windows
+> `audiobook serve`）。**v6.0.0 已在源码中定版**（阶段 1 + 阶段 2 全落地；未单独构建发布，内容并入 v6.1.0；macOS/Windows
 > 构建）。**阶段 3 进行中**：C2 工作区重设计按 U1 模型管理器 → U3 生成队列可视化 → U2 首次运行
 > 向导推进，**U1 已完成**（`audiobook.models` + GUI 模型管理器 + CLI `models`），**U3 已完成**（生成队列页：
 > 逐章状态 / 错误原因 / 单项与失败项重试；`convert_batch` 新增 `item_callback` / `only_indices`），**U2 已完成**
@@ -28,7 +28,8 @@
 > **内部收尾已完成**：Piper 实现整体迁入 `audiobook.engines.piper`，Edge 整批异步编排经 `EdgeEngine.run_batch`
 > 并入注册表（`Engine` 新增 `run_batch` / `batch_parallelism` / `release` 钩子），`convert_batch` 不再特判引擎。
 > **U4 多语言界面已完成**：桌面版、命令行（`--lang`）、Web UI 均支持简体中文 / English。
-> **剩余**：把 v6.0.0 之后的全部功能定版发布（v6.0.0 从未实际构建发布）。
+> **已发布 v6.1.0**（2026-10-18）：v6.x 首个正式构建版，包含 v6.0.0 全部内容 + 阶段 3 + U4 多语言。
+> 至此 ROADMAP 所列项目（P0–P3、v6.0 阶段 1–3）全部完成；代码签名公证（U5）按决定取消。
 
 ## 一、现有功能盘点
 

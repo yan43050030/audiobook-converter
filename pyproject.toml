@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "audiobook-converter"
-version = "6.0.0"
+version = "6.1.0"
 description = "文字转有声读物 / Text-to-Audiobook Converter"
 readme = "README.md"
 requires-python = ">=3.11"

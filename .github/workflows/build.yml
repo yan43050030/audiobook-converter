@@ -31,11 +31,17 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller
+          pip install pyinstaller pytest
           pip install -r requirements.txt
 
+      # 与 test.yml 一致用 pytest；界面语言固定为中文（测试按中文文案断言，
+      # 而 macOS / Windows 构建机是英文系统，不固定的话界面会自动切成英文）
       - name: Run tests
-        run: python -m unittest discover -s tests -v
+        env:
+          AUDIOBOOK_LANG: zh
+          QT_QPA_PLATFORM: offscreen
+          PYTHONIOENCODING: utf-8
+        run: python -m pytest tests -v
 
       - name: Build macOS app
         run: |
@@ -68,11 +74,17 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pyinstaller
+          pip install pyinstaller pytest
           pip install -r requirements.txt
 
+      # 与 test.yml 一致用 pytest；界面语言固定为中文（测试按中文文案断言，
+      # 而 macOS / Windows 构建机是英文系统，不固定的话界面会自动切成英文）
       - name: Run tests
-        run: python -m unittest discover -s tests -v
+        env:
+          AUDIOBOOK_LANG: zh
+          QT_QPA_PLATFORM: offscreen
+          PYTHONIOENCODING: utf-8
+        run: python -m pytest tests -v
 
       - name: Build Windows exe
         run: |

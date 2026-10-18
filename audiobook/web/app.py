@@ -152,6 +152,9 @@ def render_index(page: str) -> str:
         key = m.group(1)
         if key == "HTML_LANG":
             return "en" if i18n.current_language() == "en" else "zh-CN"
+        if key == "APP_VERSION":
+            from tts_engine import VERSION
+            return VERSION
         return html.escape(tr(key), quote=True)
 
     table = {k: tr(k) for k in _JS_CALL.findall(page)}
@@ -166,7 +169,8 @@ def create_app():
     from fastapi import FastAPI, Form, UploadFile, File, HTTPException
     from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 
-    app = FastAPI(title=tr("文字转有声读物 · Web UI"), version="6.0")
+    from tts_engine import VERSION
+    app = FastAPI(title=tr("文字转有声读物 · Web UI"), version=VERSION)
     store = JobStore()
 
     _here = os.path.dirname(os.path.abspath(__file__))
