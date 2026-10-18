@@ -147,6 +147,15 @@ class TestCatalog(unittest.TestCase):
         self.assertEqual(missing, [], "以下界面文案缺英文译文（请补到 audiobook/locales/en.py）：\n"
                          + "\n".join(missing))
 
+    def test_web_page_strings_are_translated(self):
+        page = open(os.path.join(ROOT, "audiobook", "web", "index.html"), encoding="utf-8").read()
+        keys = re.findall(r"\{\{(.+?)\}\}", page) + re.findall(r'\bt\("((?:[^"\\]|\\.)*)"', page)
+        missing = [k for k in keys if k != "HTML_LANG" and CJK.search(k) and k not in MESSAGES]
+        self.assertEqual(missing, [], "Web 页面文案缺英文译文")
+        # 页面里不应还有未标记的中文（注释除外）
+        stripped = re.sub(r"\{\{.*?\}\}|\bt\(\"[^\"]*\"|//[^\n]*", "", page)
+        self.assertIsNone(re.search("[一-鿿]", stripped), "Web 页面有未标记 {{…}} / t() 的中文")
+
     def test_module_level_display_data_is_translated(self):
         # 这些模块级数据保持中文原文（部分兼作查找键），在显示处 tr(值) 翻译
         import tts_engine as te
@@ -158,6 +167,11 @@ class TestCatalog(unittest.TestCase):
         values += list(te.PIPER_BUILTIN_VOICES) + list(te.EDGE_VOICES) + list(te.COSYVOICE_SFT_SPEAKERS)
         values += [v for sc in OB.SCENARIOS for v in (sc.title, sc.description, sc.size_hint)]
         values += [v for v in H.SOURCE_LABELS.values() if CJK.search(v)]
+        # CLI / Web 显示处翻译：配置项说明、引擎显示名
+        from audiobook.config import SCHEMA
+        from audiobook.engines.base import all_engines
+        values += [spec["help"] for spec in SCHEMA.values()]
+        values += [e.display_name for e in all_engines() if CJK.search(e.display_name)]
         missing = [v for v in values if v not in MESSAGES]
         self.assertEqual(missing, [])
 
@@ -274,6 +288,74 @@ class TestEnglishGui(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr[-3000:])
         self.assertIn("SAVED en", r.stdout)
         self.assertIn("Restart", r.stdout, "切换语言后应提示重启（双语）")
+
+
+class TestEnglishCli(unittest.TestCase):
+    def _cli(self, *args, lang="zh"):
+        env = dict(os.environ, AUDIOBOOK_LANG=lang)
+        return subprocess.run([sys.executable, "-m", "audiobook", *args], cwd=ROOT, env=env,
+                              capture_output=True, text=True, timeout=120)
+
+    def test_help_renders_in_both_languages(self):
+        # 帮助文字里的 % 必须转义为 %%，否则 argparse 渲染 --help 会直接崩溃
+        for lang in ("zh", "en"):
+            for sub in (["--help"], ["convert", "--help"], ["clone", "say", "--help"]):
+                r = self._cli(*sub, lang=lang)
+                self.assertEqual(r.returncode, 0, f"{lang} {sub}: {r.stderr[-800:]}")
+
+    def test_lang_flag_switches_help_language(self):
+        # 环境为中文，--lang 显式覆盖；两种写法都要支持
+        for args in (["--lang", "en", "convert", "--help"], ["--lang=en", "convert", "--help"]):
+            r = self._cli(*args, lang="zh")
+            self.assertEqual(r.returncode, 0, r.stderr[-800:])
+            self.assertIn("Input files", r.stdout)
+            self.assertIsNone(re.search("[一-鿿]", r.stdout), r.stdout)
+
+    def test_engines_and_config_in_english(self):
+        for args in (["engines"], ["config"]):
+            r = self._cli("--lang", "en", *args)
+            self.assertEqual(r.returncode, 0, r.stderr[-800:])
+            self.assertIsNone(re.search("[一-鿿]", r.stdout), r.stdout)
+
+
+class TestEnglishWeb(_LangCase):
+    def setUp(self):
+        super().setUp()
+        try:
+            from fastapi.testclient import TestClient
+        except Exception as e:
+            self.skipTest(f"需要 fastapi / httpx: {e}")
+        from audiobook.web import create_app
+        i18n.set_language("en")
+        self.client = TestClient(create_app())
+
+    def test_page_is_english(self):
+        page = self.client.get("/").text
+        self.assertIn('<html lang="en">', page)
+        markup = re.sub(r"<script>.*?</script>|<style>.*?</style>", "", page, flags=re.S)
+        self.assertIsNone(re.search("[一-鿿]", markup))
+        table = json.loads(re.search(r"const T = (\{.*?\});", page).group(1))
+        self.assertTrue(table)
+        self.assertEqual([k for k, v in table.items() if re.search("[一-鿿]", v)], [])
+
+    def test_api_translates_names_but_keeps_voice_keys(self):
+        names = [e["name"] for e in self.client.get("/api/engines").json()["engines"]]
+        self.assertTrue(all(not re.search("[一-鿿]", n) for n in names), names)
+        d = self.client.get("/api/voices?engine=edge").json()
+        self.assertIn("晓晓（女声，自然）", d["voices"], "voices 字段保持原样（接口兼容）")
+        self.assertEqual(d["voice_labels"]["晓晓（女声，自然）"], "Xiaoxiao (female, natural)")
+
+    def test_error_detail_is_translated(self):
+        r = self.client.post("/api/convert", data={"text": ""})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["detail"], "The input text is empty")
+
+    def test_chinese_page_unchanged(self):
+        i18n.set_language("zh")
+        page = self.client.get("/").text
+        self.assertIn('<html lang="zh-CN">', page)
+        self.assertIn("粘贴文本", page)
+        self.assertNotIn("{{", page)
 
 
 if __name__ == "__main__":

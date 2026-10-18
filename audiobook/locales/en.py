@@ -914,6 +914,208 @@ MESSAGES = {
         '{file_prefix}_part{file_idx}',
     '响度归一化':
         'Loudness normalization',
+    # ---- audiobook/cli.py ----
+    '配置文件: {CONFIG_PATH}':
+        'Config file: {CONFIG_PATH}',
+    '本地 Web UI: http://{host}:{port}  (Ctrl-C 停止)':
+        'Local Web UI: http://{host}:{port}  (Ctrl-C to stop)',
+    '已删除: {name}，释放 {v1}':
+        'Deleted: {name}, freed {v1}',
+    '不可用':
+        'Unavailable',
+    '引擎 {engine!r} 无可用语音（可能未就绪）':
+        'Engine {engine!r} has no voices (it may not be ready)',
+    '错误：输入文本为空':
+        'Error: the input text is empty',
+    '  {key:20} = {val!r:>18}   # (未知键，原样保留)':
+        '  {key:20} = {val!r:>18}   # (unknown key, kept as is)',
+    '合计 {v1} 个，占用 {v2}':
+        '{v1} in total, using {v2}',
+    '已下载: {kind} {id}':
+        'Downloaded: {kind} {id}',
+    '未找到已安装模型: {kind} {id}（见 audiobook models list）':
+        'Installed model not found: {kind} {id} (see audiobook models list)',
+    '删除 {name}（{v1}）？[y/N] ':
+        'Delete {name} ({v1})? [y/N] ',
+    '已创建克隆音色：{name}（ID {id}，{duration:.1f} 秒）':
+        'Created cloned voice: {name} (ID {id}, {duration:.1f} s)',
+    '已删除：{name}':
+        'Deleted: {name}',
+    'Python 解释器: {v1}':
+        'Python interpreter: {v1}',
+    'CosyVoice 仓库: {v1}':
+        'CosyVoice repository: {v1}',
+    '克隆音色: {v1} 个':
+        'Cloned voices: {v1}',
+    '未找到克隆音色：{id}':
+        'Cloned voice not found: {id}',
+    '文字转有声读物 — 命令行接口':
+        'Audiobook Converter — command-line interface',
+    '界面语言：auto（跟随配置 / 系统）/ zh / en':
+        'Interface language: auto (follow config / system) / zh / en',
+    '把文本文件转成有声书':
+        'Convert text files into an audiobook',
+    '输入文件（txt/md/docx/epub/html/pdf，支持通配符）':
+        'Input files (txt/md/docx/epub/html/pdf; wildcards allowed)',
+    '引擎 id（默认 local；见 audiobook engines）':
+        'Engine id (default local; see audiobook engines)',
+    '语音（显示名或 voice_id；默认取引擎首个）':
+        "Voice (display name or voice_id; defaults to the engine's first voice)",
+    '语速，如 +0%% / -20%% / +30%%':
+        'Speed, e.g. +0%% / -20%% / +30%%',
+    '拆分方式（默认 chapter）':
+        'How to split (default chapter)',
+    '按时间拆分时每段分钟数':
+        'Minutes per part when splitting by duration',
+    '输出目录（默认 ./output）':
+        'Output folder (default ./output)',
+    '输出文件名前缀 / 专辑名':
+        'Output file name prefix / album name',
+    '专辑名（默认用 --prefix）':
+        'Album name (defaults to --prefix)',
+    '额外导出带章节的 m4b':
+        'Also export an m4b with chapters',
+    '同时生成 srt 字幕':
+        'Also generate .srt subtitles',
+    '写入 ID3 元数据':
+        'Write ID3 metadata',
+    '响度归一化（需 ffmpeg）':
+        'Normalize loudness (needs ffmpeg)',
+    '多人对话检测':
+        'Detect multi-speaker dialogue',
+    '列出引擎及就绪状态':
+        'List engines and whether they are ready',
+    '列出某引擎的可用语音':
+        'List the voices of an engine',
+    '引擎 id（默认 local）':
+        'Engine id (default local)',
+    '查看 / 修改配置（--set KEY=VALUE，可多次）':
+        'Show / change settings (--set KEY=VALUE, repeatable)',
+    '修改一项配置，如 --set cosyvoice_python=/path/to/python':
+        'Change one setting, e.g. --set cosyvoice_python=/path/to/python',
+    '启动本地 Web UI（需 [web] 依赖）':
+        'Start the local Web UI (needs the [web] extras)',
+    '监听地址（默认 127.0.0.1）':
+        'Address to listen on (default 127.0.0.1)',
+    '监听端口（默认 8000）':
+        'Port to listen on (default 8000)',
+    '模型管理：查看占用 / 下载 / 删除':
+        'Manage models: disk usage / download / delete',
+    '列出已安装模型及占用空间':
+        'List installed models and their disk usage',
+    '列出常用可下载模型（✓ 为已安装）':
+        'List common downloadable models (✓ = installed)',
+    '下载模型（Piper 也可填官方目录中的语音 key）':
+        'Download a model (for Piper, any voice key from the official catalog works)',
+    '模型标识，如 zh_CN-huayan-medium / Fun-CosyVoice3-0.5B / base':
+        'Model id, e.g. zh_CN-huayan-medium / Fun-CosyVoice3-0.5B / base',
+    '删除已安装模型（仅限存储目录内）':
+        'Delete an installed model (only inside the storage folder)',
+    '见 audiobook models list 的第二列':
+        'See the second column of audiobook models list',
+    '不询问直接删除':
+        'Delete without asking',
+    '声音克隆：用一段参考音频复刻音色（需 CosyVoice 环境）':
+        'Voice cloning: clone a voice from a reference recording (needs a CosyVoice environment)',
+    '列出克隆音色':
+        'List cloned voices',
+    '从参考音频创建克隆音色（建议 5–15 秒清晰人声）':
+        'Create a cloned voice from reference audio (5–15 s of clear speech recommended)',
+    '音色名字':
+        'Voice name',
+    '参考音频（wav/mp3/m4a/...）':
+        'Reference audio (wav/mp3/m4a/...)',
+    '参考音频的文字稿（强烈建议填写）':
+        'Transcript of the reference audio (strongly recommended)',
+    '删除克隆音色':
+        'Delete a cloned voice',
+    '音色 ID（见 audiobook clone list）':
+        'Voice ID (see audiobook clone list)',
+    '检查 CosyVoice 环境（解释器 / 仓库 / 模型）':
+        'Check the CosyVoice environment (interpreter / repository / model)',
+    '同时实际加载一次模型（较慢）':
+        'Also load the model once (slower)',
+    '用克隆音色合成一句话':
+        'Synthesize a sentence with a cloned voice',
+    '音色 ID':
+        'Voice ID',
+    '要合成的文本':
+        'Text to synthesize',
+    '输出文件（默认 clone_sample.mp3）':
+        'Output file (default clone_sample.mp3)',
+    '语速，如 +0%% / -20%%':
+        'Speed, e.g. +0%% / -20%%',
+    '语音转文字（ASR，需 faster-whisper）':
+        'Speech to text (ASR, needs faster-whisper)',
+    '音频文件（mp3/wav/m4a/...）':
+        'Audio file (mp3/wav/m4a/...)',
+    'Whisper 模型：tiny/base/small/medium/large-v3':
+        'Whisper model: tiny/base/small/medium/large-v3',
+    '语言：auto/zh/en/ja/...':
+        'Language: auto/zh/en/ja/...',
+    '输出格式':
+        'Output format',
+    '输出文件路径（默认音频旁）':
+        'Output file path (default: next to the audio)',
+    '\r进度: {v1}/{v2}':
+        '\rProgress: {v1}/{v2}',
+    '警告：没有可合成 m4b 的 mp3':
+        'Warning: no MP3s to build the m4b from',
+    '已保存：':
+        'Saved: ',
+    '错误：需要安装 Web 依赖：pip install "audiobook-converter[web]"':
+        'Error: the Web extras are needed: pip install "audiobook-converter[web]"',
+    '（尚未安装任何模型）':
+        '(no models installed yet)',
+    '  [外部·只读]':
+        '  [external · read-only]',
+    '已取消':
+        'Cancelled',
+    '（还没有克隆音色，用 audiobook clone add <名字> <参考音频> 创建）':
+        '(no cloned voices yet; create one with audiobook clone add <name> <reference audio>)',
+    '提示：填写参考音频的文字稿（--text）能明显提升复刻效果。':
+        'Tip: providing the reference transcript (--text) noticeably improves the clone.',
+    '模型目录: {v1}':
+        'Model folder: {v1}',
+    '模型加载: {v1}，采样率 {v2} ✓':
+        'Model loaded: {v1}, sample rate {v2} ✓',
+    '错误: {v1}':
+        'Error: {v1}',
+    '\n已取消':
+        '\nCancelled',
+    '错误: {exc}':
+        'Error: {exc}',
+    '文件不存在: {m}':
+        'File not found: {m}',
+    '错误：无效的设置 {item!r}（格式 KEY=VALUE，KEY 见 audiobook config）':
+        'Error: invalid setting {item!r} (format KEY=VALUE; see audiobook config for keys)',
+    '\r下载 {desc}: {v1:.1f}/{v2:.1f} MB':
+        '\rDownloading {desc}: {v1:.1f}/{v2:.1f} MB',
+    '（无文字稿）':
+        '(no transcript)',
+    '桥接进程: Python {v1}，cosyvoice ':
+        'Bridge process: Python {v1}, cosyvoice ',
+    '（未配置，依赖解释器自身的 PYTHONPATH）':
+        "(not configured; relies on the interpreter's own PYTHONPATH)",
+    '无法导入 ✗（{v1}）':
+        'not importable ✗ ({v1})',
+    '删除克隆音色「{name}」？[y/N] ':
+        'Delete cloned voice “{name}”? [y/N] ',
+    # ---- audiobook/web/app.py ----
+    '文字转有声读物 · Web UI':
+        'Audiobook Converter · Web UI',
+    '输入文本为空':
+        'The input text is empty',
+    '非法拆分方式: {split}':
+        'Invalid split mode: {split}',
+    '任务不存在':
+        'Job not found',
+    '文件不存在':
+        'File not found',
+    '引擎 {engine!r} 不可用: {exc}':
+        'Engine {engine!r} unavailable: {exc}',
+    '引擎/语音解析失败: {exc}':
+        "Couldn't resolve engine / voice: {exc}",
     # ---- audiobook/engines/piper.py ----
     '方式 1: pip install piper-tts\n方式 2: 从 https://github.com/rhasspy/piper/releases 下载 piper 可执行文件，\n        放入便携 bin 目录或系统 PATH':
         'Option 1: pip install piper-tts\nOption 2: download the piper executable from https://github.com/rhasspy/piper/releases\n          and put it in the portable bin folder or on PATH',
@@ -1175,4 +1377,98 @@ MESSAGES = {
         'Korean female',
     'espeak-ng 中文':
         'espeak-ng Chinese',
+    '便携存储目录；空表示用默认 ~/.audiobook_converter':
+        'Portable storage folder; empty = default ~/.audiobook_converter',
+    '额外的模型/程序搜索路径列表':
+        'Extra folders to search for models / programs',
+    '界面主题：light / dark':
+        'Theme: light / dark',
+    '界面语言：auto（跟随系统）/ zh / en；环境变量 AUDIOBOOK_LANG 优先':
+        'Interface language: auto (follow system) / zh / en; the AUDIOBOOK_LANG environment variable takes precedence',
+    '本地引擎并发数覆盖（0=自动，上限 16）':
+        'Local engine concurrency override (0 = auto, max 16)',
+    'Edge 在线引擎并发数覆盖（0=自动，上限 10）':
+        'Edge online engine concurrency override (0 = auto, max 10)',
+    '窗口位置/大小记忆（由界面维护）':
+        'Remembered window position / size (managed by the app)',
+    '启动时默认选中的引擎（记住上次使用的；空=列表第一个）':
+        'Engine selected at startup (remembers the last one used; empty = first in the list)',
+    '是否已完成首次运行向导':
+        'Whether the first-run wizard has been completed',
+    '声音克隆：装好 CosyVoice 的 Python 解释器路径（空=源码运行时用当前解释器）':
+        'Voice cloning: path to the Python interpreter that has CosyVoice (empty = the current interpreter when running from source)',
+    '声音克隆：CosyVoice 仓库路径（git clone 的目录，自动加入 PYTHONPATH）':
+        'Voice cloning: CosyVoice repository path (the git clone; added to PYTHONPATH automatically)',
+    '声音克隆：模型目录（空=在 cosyvoice-models/ 下自动找 CosyVoice3/2）':
+        'Voice cloning: model folder (empty = find CosyVoice3/2 under cosyvoice-models/ automatically)',
+    'Edge（联网）':
+        'Edge (online)',
+    'Piper（离线高质量）':
+        'Piper (offline, high quality)',
+    'CosyVoice（离线神经）':
+        'CosyVoice (offline, neural)',
+    '声音克隆（CosyVoice）':
+        'Voice cloning (CosyVoice)',
+    '本地（离线）':
+        'System (offline)',
+    '粘贴文本（或在下方上传文件，二者可并用）':
+        'Paste text (or upload files below; you can use both)',
+    '在此粘贴要转换的文字…':
+        'Paste the text to convert here…',
+    '上传文件（可多选：txt / md / docx / epub / html / pdf）':
+        'Upload files (multiple: txt / md / docx / epub / html / pdf)',
+    '引擎':
+        'Engine',
+    '语速':
+        'Speed',
+    '拆分方式':
+        'Split',
+    '按章节':
+        'By chapter',
+    '按时长':
+        'By duration',
+    '合并单文件':
+        'Single file',
+    '文件名前缀 / 专辑名':
+        'File name prefix / album name',
+    '生成字幕(srt)':
+        'Subtitles (srt)',
+    '导出 m4b(章节)':
+        'Export m4b (chapters)',
+    '写入元数据':
+        'Write metadata',
+    '对话检测':
+        'Detect dialogue',
+    '开始转换':
+        'Start',
+    '状态：':
+        'Status: ',
+    '等待中':
+        'Waiting',
+    '生成中':
+        'Generating',
+    '失败':
+        'Failed',
+    '(不可用)':
+        '(unavailable)',
+    '加载中…':
+        'Loading…',
+    '（无可用语音）':
+        '(no voices available)',
+    '（加载失败）':
+        '(failed to load)',
+    '提交中…':
+        'Submitting…',
+    '提交失败':
+        'Submission failed',
+    '错误：':
+        'Error: ',
+    '进度 {cur}/{total}（{pct}%）':
+        'Progress {cur}/{total} ({pct}%)',
+    '{n} 个文件':
+        '{n} files',
+    '失败：':
+        'Failed: ',
+    '未知错误':
+        'unknown error',
 }

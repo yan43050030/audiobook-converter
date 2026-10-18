@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="{{HTML_LANG}}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>文字转有声读物 · Web UI</title>
+<title>{{文字转有声读物 · Web UI}}</title>
 <style>
   :root{
     --bg:#faf7f2; --panel:#fff; --ink:#2b2b2b; --muted:#8a8178;
@@ -50,57 +50,57 @@
 </head>
 <body>
 <header>
-  <h1>文字转有声读物</h1><span class="v">Web UI · v6.0</span>
+  <h1>{{文字转有声读物}}</h1><span class="v">Web UI · v6.0</span>
 </header>
 <main>
   <div class="card">
-    <label>粘贴文本（或在下方上传文件，二者可并用）</label>
-    <textarea id="text" placeholder="在此粘贴要转换的文字…"></textarea>
-    <label>上传文件（可多选：txt / md / docx / epub / html / pdf）</label>
+    <label>{{粘贴文本（或在下方上传文件，二者可并用）}}</label>
+    <textarea id="text" placeholder="{{在此粘贴要转换的文字…}}"></textarea>
+    <label>{{上传文件（可多选：txt / md / docx / epub / html / pdf）}}</label>
     <input type="file" id="files" multiple>
     <div class="row">
       <div>
-        <label>引擎</label>
+        <label>{{引擎}}</label>
         <select id="engine"></select>
       </div>
       <div>
-        <label>语音</label>
+        <label>{{语音}}</label>
         <select id="voice"></select>
       </div>
     </div>
     <div class="row">
       <div>
-        <label>语速</label>
+        <label>{{语速}}</label>
         <input type="text" id="rate" value="+0%">
       </div>
       <div>
-        <label>拆分方式</label>
+        <label>{{拆分方式}}</label>
         <select id="split">
-          <option value="chapter">按章节</option>
-          <option value="time">按时长</option>
-          <option value="single">合并单文件</option>
+          <option value="chapter">{{按章节}}</option>
+          <option value="time">{{按时长}}</option>
+          <option value="single">{{合并单文件}}</option>
         </select>
       </div>
       <div>
-        <label>文件名前缀 / 专辑名</label>
-        <input type="text" id="prefix" value="有声读物">
+        <label>{{文件名前缀 / 专辑名}}</label>
+        <input type="text" id="prefix" value="{{有声读物}}">
       </div>
     </div>
     <div class="checks">
-      <label><input type="checkbox" id="srt"> 生成字幕(srt)</label>
-      <label><input type="checkbox" id="m4b"> 导出 m4b(章节)</label>
-      <label><input type="checkbox" id="metadata"> 写入元数据</label>
-      <label><input type="checkbox" id="dialogue"> 对话检测</label>
-      <label><input type="checkbox" id="normalize"> 响度归一化</label>
+      <label><input type="checkbox" id="srt"> {{生成字幕(srt)}}</label>
+      <label><input type="checkbox" id="m4b"> {{导出 m4b(章节)}}</label>
+      <label><input type="checkbox" id="metadata"> {{写入元数据}}</label>
+      <label><input type="checkbox" id="dialogue"> {{对话检测}}</label>
+      <label><input type="checkbox" id="normalize"> {{响度归一化}}</label>
     </div>
     <div style="margin-top:16px">
-      <button id="go">开始转换</button>
+      <button id="go">{{开始转换}}</button>
       <span id="hint" class="muted"></span>
     </div>
   </div>
 
   <div class="card" id="jobcard" style="display:none">
-    <div>状态：<span id="jstatus" class="status">—</span>
+    <div>{{状态：}}<span id="jstatus" class="status">—</span>
       <span id="jpill" class="pill" style="display:none"></span></div>
     <div class="bar"><i id="jbar"></i></div>
     <div class="muted" id="jprog"></div>
@@ -111,30 +111,39 @@
 
 <script>
 const $ = id => document.getElementById(id);
+// 译文表由服务端扫描本页的 t() 调用生成并注入；缺译时显示原文
+const T = /*I18N*/{}/*END_I18N*/;
+function t(s, vars){
+  let r = T[s] || s;
+  for (const k in (vars || {})) r = r.split('{' + k + '}').join(vars[k]);
+  return r;
+}
+const STATUS = {pending: t("等待中"), running: t("生成中"), done: t("完成"), error: t("失败")};
 
 async function loadEngines(){
   const r = await fetch('/api/engines'); const d = await r.json();
   const sel = $('engine'); sel.innerHTML = '';
   d.engines.forEach(e => {
     const o = document.createElement('option');
-    o.value = e.id; o.textContent = e.name + (e.ready ? ' ✓' : ' (不可用)');
+    o.value = e.id; o.textContent = e.name + (e.ready ? ' ✓' : ' ' + t("(不可用)"));
     sel.appendChild(o);
   });
   await loadVoices();
 }
 async function loadVoices(){
   const eng = $('engine').value;
-  const sel = $('voice'); sel.innerHTML = '<option>加载中…</option>';
+  const sel = $('voice'); sel.innerHTML = '<option>' + t("加载中…") + '</option>';
   try{
     const r = await fetch('/api/voices?engine=' + encodeURIComponent(eng));
     const d = await r.json(); sel.innerHTML = '';
     const entries = Object.entries(d.voices || {});
-    if(!entries.length){ sel.innerHTML = '<option value="">（无可用语音）</option>'; return; }
+    if(!entries.length){ sel.innerHTML = '<option value="">' + t("（无可用语音）") + '</option>'; return; }
     entries.forEach(([disp, vid]) => {
-      const o = document.createElement('option'); o.value = vid; o.textContent = disp;
+      const o = document.createElement('option'); o.value = vid;
+      o.textContent = (d.voice_labels || {})[disp] || disp;
       sel.appendChild(o);
     });
-  }catch(e){ sel.innerHTML = '<option value="">（加载失败）</option>'; }
+  }catch(e){ sel.innerHTML = '<option value="">' + t("（加载失败）") + '</option>'; }
 }
 $('engine').addEventListener('change', loadVoices);
 
@@ -150,14 +159,14 @@ async function convert(){
   ['srt','m4b','metadata','dialogue','normalize'].forEach(k => fd.append(k, $(k).checked));
   for(const f of $('files').files) fd.append('files', f);
 
-  $('go').disabled = true; $('hint').textContent = '提交中…';
+  $('go').disabled = true; $('hint').textContent = t("提交中…");
   let d;
   try{
     const r = await fetch('/api/convert', {method:'POST', body:fd});
     d = await r.json();
-    if(!r.ok){ throw new Error(d.detail || '提交失败'); }
+    if(!r.ok){ throw new Error(d.detail || t("提交失败")); }
   }catch(e){
-    $('go').disabled = false; $('hint').textContent = '错误：' + e.message; return;
+    $('go').disabled = false; $('hint').textContent = t("错误：") + e.message; return;
   }
   $('hint').textContent = '';
   $('jobcard').style.display = 'block';
@@ -169,20 +178,20 @@ async function convert(){
 
 async function track(id){
   const r = await fetch('/api/jobs/' + id); const j = await r.json();
-  const st = $('jstatus'); st.textContent = j.status; st.className = 'status ' + j.status;
+  const st = $('jstatus'); st.textContent = STATUS[j.status] || j.status; st.className = 'status ' + j.status;
   const p = j.progress || {cur:0,total:0};
   const pct = p.total ? Math.round(p.cur / p.total * 100) : (j.status==='done'?100:0);
   $('jbar').style.width = pct + '%';
-  $('jprog').textContent = p.total ? `进度 ${p.cur}/${p.total}（${pct}%）` : '';
+  $('jprog').textContent = p.total ? t("进度 {cur}/{total}（{pct}%）", {cur: p.cur, total: p.total, pct: pct}) : '';
   if(j.status === 'done' || j.status === 'error'){
     clearInterval(poll); poll = null; $('go').disabled = false;
     if(j.status === 'done'){
       const pill = $('jpill'); pill.style.display='inline-block';
-      pill.className='pill ok'; pill.textContent = j.files.length + ' 个文件';
+      pill.className='pill ok'; pill.textContent = t("{n} 个文件", {n: j.files.length});
       $('jfiles').innerHTML = j.files.map(f =>
         `<a class="dl" href="/api/jobs/${id}/files/${encodeURIComponent(f)}">⬇ ${f}</a>`).join('');
     }
-    if(j.status === 'error') $('jerr').textContent = '失败：' + (j.error || '未知错误');
+    if(j.status === 'error') $('jerr').textContent = t("失败：") + (j.error || t("未知错误"));
   }
 }
 $('go').addEventListener('click', convert);

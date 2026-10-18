@@ -8,12 +8,18 @@
 * 纯本地工具定位：任务登记在内存，重启即清空（不做持久化/鉴权）。
 """
 
+import html
+import json
 import os
+import re
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
+
+from audiobook import i18n
+from audiobook.i18n import tr
 
 
 # ---------------- 任务模型 ----------------
@@ -133,13 +139,34 @@ def _run_job(store: JobStore, job: Job, text: str, opts: dict) -> None:
         job.status = "error"
 
 
+# ---------------- 页面渲染 ----------------
+
+_TAG = re.compile(r"\{\{(.+?)\}\}")                 # 页面里的静态文字：{{中文原文}}
+_JS_CALL = re.compile(r'\bt\("((?:[^"\\]|\\.)*)"')   # 脚本里的动态文字：t("中文原文")
+_JS_TABLE = "/*I18N*/{}/*END_I18N*/"
+
+
+def render_index(page: str) -> str:
+    """按当前界面语言渲染页面：替换 {{…}}，并为脚本注入 t("…") 的译文表。"""
+    def _tag(m):
+        key = m.group(1)
+        if key == "HTML_LANG":
+            return "en" if i18n.current_language() == "en" else "zh-CN"
+        return html.escape(tr(key), quote=True)
+
+    table = {k: tr(k) for k in _JS_CALL.findall(page)}
+    # json.dumps 后再转义 "</"，防止译文里出现 </script> 提前结束脚本
+    page = page.replace(_JS_TABLE, json.dumps(table, ensure_ascii=False).replace("</", "<\\/"))
+    return _TAG.sub(_tag, page)
+
+
 # ---------------- 应用工厂 ----------------
 
 def create_app():
     from fastapi import FastAPI, Form, UploadFile, File, HTTPException
     from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 
-    app = FastAPI(title="文字转有声读物 · Web UI", version="6.0")
+    app = FastAPI(title=tr("文字转有声读物 · Web UI"), version="6.0")
     store = JobStore()
 
     _here = os.path.dirname(os.path.abspath(__file__))
@@ -154,7 +181,7 @@ def create_app():
     @app.get("/", response_class=HTMLResponse)
     def index():
         with open(_index, "r", encoding="utf-8") as f:
-            return HTMLResponse(f.read())
+            return HTMLResponse(render_index(f.read()))
 
     @app.get("/api/engines")
     def api_engines():
@@ -166,7 +193,7 @@ def create_app():
             except Exception as exc:
                 ready, msg = False, repr(exc)
             first = (msg or "").splitlines()[0] if msg else ""
-            out.append({"id": e.id, "name": e.display_name,
+            out.append({"id": e.id, "name": tr(e.display_name),
                         "ready": bool(ready), "message": first})
         return {"engines": out}
 
@@ -176,8 +203,10 @@ def create_app():
         try:
             voices = get_engine(engine).list_voices()
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"引擎 {engine!r} 不可用: {exc}")
-        return {"engine": engine, "voices": voices}
+            raise HTTPException(status_code=400, detail=tr('引擎 {engine!r} 不可用: {exc}', engine=engine, exc=exc))
+        # voices 保持 {显示名: voice_id} 不变（接口兼容）；voice_labels 给出显示名的译名
+        return {"engine": engine, "voices": voices,
+                "voice_labels": {disp: tr(disp) for disp in voices}}
 
     @app.post("/api/convert")
     async def api_convert(
@@ -187,7 +216,7 @@ def create_app():
         rate: str = Form("+0%"),
         split: str = Form("chapter"),
         time_minutes: int = Form(30),
-        prefix: str = Form("有声读物"),
+        prefix: str = Form(tr("有声读物")),
         album: str = Form(""),
         m4b: bool = Form(False),
         srt: bool = Form(False),
@@ -201,16 +230,16 @@ def create_app():
             uploads.append((uf.filename or "upload.txt", await uf.read()))
         full_text = _assemble_text(text, uploads)
         if not full_text.strip():
-            raise HTTPException(status_code=400, detail="输入文本为空")
+            raise HTTPException(status_code=400, detail=tr("输入文本为空"))
 
         if split not in ("chapter", "time", "single"):
-            raise HTTPException(status_code=400, detail=f"非法拆分方式: {split}")
+            raise HTTPException(status_code=400, detail=tr('非法拆分方式: {split}', split=split))
 
         from audiobook.cli import _resolve_voice
         try:
             resolved_voice = _resolve_voice(engine, voice)
         except Exception as exc:
-            raise HTTPException(status_code=400, detail=f"引擎/语音解析失败: {exc}")
+            raise HTTPException(status_code=400, detail=tr('引擎/语音解析失败: {exc}', exc=exc))
 
         job = store.create(engine=engine, prefix=prefix)
         job.out_dir = os.path.join(_web_root(), job.id)
@@ -233,21 +262,21 @@ def create_app():
     def api_job(job_id: str):
         job = store.get(job_id)
         if not job:
-            raise HTTPException(status_code=404, detail="任务不存在")
+            raise HTTPException(status_code=404, detail=tr("任务不存在"))
         return job.to_dict()
 
     @app.get("/api/jobs/{job_id}/files/{name}")
     def api_job_file(job_id: str, name: str):
         job = store.get(job_id)
         if not job:
-            raise HTTPException(status_code=404, detail="任务不存在")
+            raise HTTPException(status_code=404, detail=tr("任务不存在"))
         # 防目录穿越：只允许产物清单内的裸文件名
         safe = os.path.basename(name)
         if safe != name or safe not in job.files:
-            raise HTTPException(status_code=404, detail="文件不存在")
+            raise HTTPException(status_code=404, detail=tr("文件不存在"))
         path = os.path.join(job.out_dir, safe)
         if not os.path.isfile(path):
-            raise HTTPException(status_code=404, detail="文件不存在")
+            raise HTTPException(status_code=404, detail=tr("文件不存在"))
         return FileResponse(path, filename=safe)
 
     return app

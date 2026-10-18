@@ -27,8 +27,8 @@
 > **「CosyVoice」引擎已改走桥接进程**（预置说话人，与声音克隆共用环境），实现已迁入 `audiobook.engines.cosyvoice`。
 > **内部收尾已完成**：Piper 实现整体迁入 `audiobook.engines.piper`，Edge 整批异步编排经 `EdgeEngine.run_batch`
 > 并入注册表（`Engine` 新增 `run_batch` / `batch_parallelism` / `release` 钩子），`convert_batch` 不再特判引擎。
-> **剩余**：U4 多语言界面——桌面版（简体中文 / English）已完成，命令行与 Web UI 待接入；
-> 以及把 v6.0.0 之后的全部功能定版发布（v6.0.0 从未实际构建发布）。
+> **U4 多语言界面已完成**：桌面版、命令行（`--lang`）、Web UI 均支持简体中文 / English。
+> **剩余**：把 v6.0.0 之后的全部功能定版发布（v6.0.0 从未实际构建发布）。
 
 ## 一、现有功能盘点
 

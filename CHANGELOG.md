@@ -2,9 +2,20 @@
 
 ## 未发布 — 阶段 3 / C1 声音克隆（核心 + 界面已完成）
 
-### U4 多语言界面（桌面版：简体中文 / English）
+### U4 多语言界面（简体中文 / English：桌面版 + 命令行 + Web UI）
 
-- 新增 `audiobook.i18n`：以中文原文为键的 `tr()`，英文词典在 `audiobook/locales/en.py`（576 条）；
+- **命令行**：新增全局参数 `--lang auto|zh|en`（在构建解析器前生效，`--help` 说明也随之切换），
+  输出、参数说明、配置项说明、引擎显示名全部可翻译。
+- **Web UI**：页面静态文字用 `{{中文原文}}` 标记、脚本动态文字用 `t("中文原文")`，服务端返回页面时
+  按界面语言替换并注入译文表（单一来源，无需另维护清单）；`<html lang>` 随语言切换；引擎名与接口错误
+  信息翻译；`/api/voices` **新增** `voice_labels` 字段给出语音译名，原 `voices` 字段不变（接口兼容）。
+  任务状态从原始英文值（pending/running/done/error）改为本地化显示。
+- 修复 `audiobook convert --help` 与 `audiobook clone say --help` 直接崩溃：帮助文字里的 `+0%`
+  被 argparse 当作格式符（`ValueError: unsupported format character`），现转义为 `%%`。
+- 词典共 723 条；测试新增 CLI 两种语言的 `--help` 均可渲染、`--lang` 两种写法、英文 `engines` /
+  `config` 无中文、Web 页面与接口英文化且中文页面不变、页面中没有未标记的中文。
+
+- 新增 `audiobook.i18n`：以中文原文为键的 `tr()`，英文词典在 `audiobook/locales/en.py`；
   缺译时回落中文、不会空白。语言优先级：环境变量 `AUDIOBOOK_LANG` > 配置 `language` > 系统语言。
   GUI 进程优先用 Qt 的系统区域判断（macOS 从 Finder 启动时 `LANG` 常为空）。
 - 「外观」面板新增「界面语言 / Language」：跟随系统 / 简体中文 / English，重启后生效
