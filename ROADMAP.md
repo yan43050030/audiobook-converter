@@ -25,7 +25,9 @@
 > 核心（音色档案 + CosyVoice 常驻桥接进程 + clone 引擎 + CLI）与界面（环境设置 / 音色管理 / 试听）均已完成，
 > **应用内下载 CosyVoice 模型已完成**（`audiobook.io.hub` 整库下载，HF / hf-mirror / ModelScope 自动回退，可续传）；
 > **「CosyVoice」引擎已改走桥接进程**（预置说话人，与声音克隆共用环境），实现已迁入 `audiobook.engines.cosyvoice`。
-> 其余内部收尾：Piper 重实现整体迁入 `audiobook.engines.piper`、Edge 异步批量编排并入注册表。
+> **内部收尾已完成**：Piper 实现整体迁入 `audiobook.engines.piper`，Edge 整批异步编排经 `EdgeEngine.run_batch`
+> 并入注册表（`Engine` 新增 `run_batch` / `batch_parallelism` / `release` 钩子），`convert_batch` 不再特判引擎。
+> **剩余**：U4 多语言界面（i18n）；以及把 v6.0.0 之后的全部功能定版发布（v6.0.0 从未实际构建发布）。
 
 ## 一、现有功能盘点
 

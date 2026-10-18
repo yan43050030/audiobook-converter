@@ -32,10 +32,14 @@ jobs:
           pip install pytest httpx
 
       # full 腿额外装系统语音/音频工具，让引擎与 IO 层集成测试真正执行；
+      # 以及 Qt 运行所需的系统库（缺 libEGL 等时 GUI 测试会整体跳过）。
       # minimal 腿不装，验证可选依赖缺失时的降级与测试跳过路径。
       - name: Install system audio tools (full)
         if: matrix.deps == 'full'
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg espeak-ng
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg espeak-ng \
+            libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 libglib2.0-0
 
       - name: Install dependencies (full)
         if: matrix.deps == 'full'
@@ -45,4 +49,6 @@ jobs:
           pip install fastapi uvicorn python-multipart
 
       - name: Run tests
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: python -m pytest tests -v

@@ -3,7 +3,7 @@
 验证：
 - get_engine(id) 返回对应的具体子类（不再是通用 _TtsEngineAdapter）；
 - id / display_name 正确，is_ready / list_voices 与 tts_engine 分发一致；
-- synthesize_segment 委托到各自的 tts_engine 合成函数（打桩拦截，不触发真实合成）；
+- synthesize_segment 委托到各自模块的合成函数（打桩拦截，不触发真实合成）；
 - 外挂插件引擎仍回退 _TtsEngineAdapter。
 
 Run with: python3 -m unittest tests/test_engines_concrete.py
@@ -13,6 +13,8 @@ import unittest
 from unittest import mock
 
 import tts_engine
+from audiobook.engines import edge as edge_mod
+from audiobook.engines import piper as piper_mod
 from audiobook.engines.base import get_engine, _TtsEngineAdapter
 from audiobook.engines.edge import EdgeEngine
 from audiobook.engines.piper import PiperEngine
@@ -53,10 +55,11 @@ class TestConcreteResolution(unittest.TestCase):
 
 
 class TestSegmentSynthDelegation(unittest.TestCase):
-    """synthesize_segment 应委托到对应的 tts_engine 函数（不触发真实合成）。"""
+    """synthesize_segment 应委托到各自模块的合成函数（不触发真实合成）。"""
 
-    def test_piper_delegates(self):
-        with mock.patch.object(tts_engine, "_piper_generate_safe") as m:
+    def test_piper_delegates_single_attempt(self):
+        # 单段原语只尝试一次：重试归编排层，避免与 _generate_one_safe 的重试叠加
+        with mock.patch.object(piper_mod, "_piper_generate") as m:
             PiperEngine().synthesize_segment("文本", "v", "+0%", "/tmp/x.mp3")
             m.assert_called_once_with("文本", "v", "+0%", "/tmp/x.mp3", should_stop=None)
 
@@ -71,7 +74,7 @@ class TestSegmentSynthDelegation(unittest.TestCase):
     def test_edge_delegates_via_asyncio(self):
         async def _fake(*a, **k):
             return None
-        with mock.patch.object(tts_engine, "_edge_generate",
+        with mock.patch.object(edge_mod, "_edge_generate",
                                side_effect=_fake) as m:
             EdgeEngine().synthesize_segment("文本", "zh-CN", "+0%", "/tmp/x.mp3")
             m.assert_called_once_with("文本", "zh-CN", "+0%", "/tmp/x.mp3")

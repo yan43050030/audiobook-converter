@@ -2,6 +2,29 @@
 
 ## 未发布 — 阶段 3 / C1 声音克隆（核心 + 界面已完成）
 
+### 内部收尾：Piper / Edge 实现迁入各自引擎模块
+
+- **Piper 实现整体迁入 `audiobook.engines.piper`**：语音列表与官方语音目录、模型下载、线程本地
+  模型缓存、Python 包 / CLI 双后端都归 `PiperEngine` 所在模块；`tts_engine` 只保留同名再导出。
+  再导出的可变状态（`PIPER_VOICES` / `PIPER_MODEL_PATHS`）改为原地更新，刷新后旧引用不会过期。
+- **Edge 实现与整批异步编排迁入 `audiobook.engines.edge`**，经新的 `EdgeEngine.run_batch` 接入注册表。
+- `Engine` 基类新增整批生成的三个可选钩子：`run_batch`（引擎自带整批编排）、`batch_parallelism`
+  （通用编排的并行章节数）、`release`（整批结束后释放资源）。`convert_batch` / `_generate_one_safe`
+  全部经注册表分发，不再出现 `if engine == "edge" / "piper"` 特判；通用编排拆成串行 / 并行两个助手。
+- **修复 Piper 嵌套重试**：引擎单段原语此前调用自带重试的实现，与编排层重试叠加，持续失败的章节
+  会尝试 16 次、单是退避等待就约 175 秒（界面像卡死）。现在引擎只尝试一次，重试统一归编排层（4 次）。
+- **修复未知引擎被静默当作 Edge**：`_generate_one_safe` 遇到未知引擎 id 时此前会走 Edge 分支；
+  现在直接报 `不支持的引擎类型`，也不再进入重试循环白白等待。
+- **兼容早期 Piper 语音包**：rhasspy/piper 早期 Release（v0.0.x，网上教程常引用）的配置文件把
+  `phoneme_type` 写成 `"PhonemeType.ESPEAK"`，piper-tts 1.x 拒绝加载（报
+  "'PhonemeType.ESPEAK' is not a valid PhonemeType"）。现在加载时自动使用规范化副本，不改动原文件。
+- Piper 的 WAV→MP3 改用通用 `_wav_to_mp3`：与就绪检测一致只要求 ffmpeg（此前没装 pydub 时就绪检测
+  显示可用、生成时却报"ffmpeg 未安装"）。
+- **CI 的 GUI 测试此前从未真正执行**：full 腿缺 Qt 所需的 libEGL 等系统库，18 项 GUI 测试整体跳过。
+  现在补装系统库并设置 offscreen 平台。
+- 新增 `tests/test_engine_batch_hooks.py`（钩子默认值、重试归属、未知引擎、Edge 未安装、旧语音包配置、
+  再导出状态一致性）。真实模型端到端验证：Piper 并行批量生成 3 章，有效 MP3、逐章事件正确、结束后卸载模型。
+
 ### 内部清理
 
 - CosyVoice 单段合成实现从 `tts_engine` 迁入 `audiobook.engines.cosyvoice`（`CosyVoiceEngine.synthesize_segment`

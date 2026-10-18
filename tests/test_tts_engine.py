@@ -657,7 +657,7 @@ class TestFfmetadataChapters(unittest.TestCase):
 
     def test_escaping(self):
         from tts_engine import _ffmeta_escape
-        self.assertEqual(_ffmeta_escape("a=b;c#d"), "a\\=b\;c\\#d")
+        self.assertEqual(_ffmeta_escape("a=b;c#d"), r"a\=b\;c\#d")
 
 
 class TestPiperCatalog(unittest.TestCase):

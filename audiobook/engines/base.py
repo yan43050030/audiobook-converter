@@ -1,19 +1,19 @@
-"""audiobook.engines.base — TTS 引擎抽象接口与注册表（v6.0/A5a）。
-
-A5a 目标：先把统一的 `Engine` 接口与注册表立起来，用**薄适配器**包住 `tts_engine`
-现有的按引擎分发函数（`check_engine_ready` / `get_voice_list` / `get_voice_id` /
-`_generate_one_safe`），**零行为变化**。后续（A5b）再把各引擎实现迁入
-`audiobook/engines/<name>.py`，(A5c) 把 `_generate_one_safe` / `convert_batch`
-的分发改为走本注册表。
-
-设计（与用户确认的草案一致）：
+"""audiobook.engines.base — TTS 引擎抽象接口与注册表。
 
     class Engine(ABC):
         id: str
         display_name: str
         def is_ready(self) -> tuple[bool, str]
         def list_voices(self) -> dict[str, str]      # 显示名 -> voice_id
-        def synthesize(self, text, voice, rate, out_path, should_stop=None) -> None
+        def synthesize_segment(self, text, voice, rate, out_path, should_stop=None) -> None
+
+        # 整批生成的可选钩子
+        def run_batch(...) -> bool       # 引擎自带整批编排（Edge 的异步并发）
+        def batch_parallelism() -> int   # 通用编排的并行章节数（Piper 按 CPU 自适应）
+        def release() -> None            # 整批结束后释放资源（Piper 卸载模型）
+
+内置引擎（local / edge / piper / cosyvoice / clone）各自是独立的 Engine 子类；只有外挂
+插件引擎经 `_TtsEngineAdapter` 包住 tts_engine 的外挂引擎调用。
 
 注册表：register_engine(e) / get_engine(id) / all_engines()
 """
@@ -79,6 +79,26 @@ class Engine(ABC):
             _merge_mp3_files(temp_files, out_path)
         finally:
             _shutil.rmtree(temp_dir, ignore_errors=True)
+
+    # ---- 整批生成的可选钩子（tts_engine.convert_batch 经注册表调用） ----
+
+    def run_batch(self, items, voice: str, rate: str, output_dir: str, *,
+                  progress_callback=None, should_stop=None, item_callback=None) -> bool:
+        """引擎自带的整批编排。返回 True 表示已处理完整批；默认 False，交由通用编排
+        （逐章 `_generate_one_safe`，按 `batch_parallelism()` 串行或线程池并行）。
+
+        覆盖者需自行更新 items 的 status/error、调用 progress_callback、推送逐章事件
+        并落盘进度——与通用编排的约定一致（参考 EdgeEngine）。
+        """
+        return False
+
+    def batch_parallelism(self) -> int:
+        """通用编排的并行章节数。默认 1（串行）；只有能安全并发合成的引擎才返回 >1。"""
+        return 1
+
+    def release(self) -> None:
+        """整批结束（含失败 / 暂停）后释放资源，如卸载模型。默认无操作。"""
+        return None
 
     def __repr__(self) -> str:  # pragma: no cover - 便于调试
         return f"<Engine {self.id!r} ({self.display_name})>"

@@ -14,6 +14,8 @@ import unittest
 from unittest import mock
 
 import tts_engine
+from audiobook.engines import edge as edge_mod
+from audiobook.engines import piper as piper_mod
 
 BOOK = "第一章 甲\n内容一。\n\n第二章 乙\n内容二。\n\n第三章 丙\n内容三。\n"
 
@@ -142,9 +144,9 @@ class TestSyncPath(_QueueCase):
 class TestPiperParallelPath(_QueueCase):
     def test_events_per_item(self):
         rec = _Recorder()
-        with mock.patch.object(tts_engine, "_get_piper_mode", return_value=tts_engine.PIPER_MODE_PYTHON), \
+        with mock.patch.object(piper_mod, "_get_piper_mode", return_value=piper_mod.PIPER_MODE_PYTHON), \
              mock.patch.object(tts_engine, "get_local_concurrency", return_value=2), \
-             mock.patch.object(tts_engine, "_unload_piper_model"), \
+             mock.patch.object(piper_mod, "_unload_piper_model"), \
              mock.patch.object(tts_engine, "_generate_one_safe", _fake_synth(fail_texts=("内容三",))):
             self.run_batch(rec, engine="piper")
         per = rec.per_index()
@@ -163,9 +165,9 @@ class TestEdgePath(_QueueCase):
                 f.write(b"\x00" * 16)
 
         rec = _Recorder()
-        with mock.patch.object(tts_engine, "EDGE_TTS_AVAILABLE", True), \
+        with mock.patch.object(edge_mod, "EDGE_TTS_AVAILABLE", True), \
              mock.patch.object(tts_engine, "MAX_RETRIES", 0), \
-             mock.patch.object(tts_engine, "_edge_generate", fake_edge):
+             mock.patch.object(edge_mod, "_edge_generate", fake_edge):
             self.run_batch(rec, engine="edge")
         self.assertEqual(rec.per_index(), {0: ["running", "done"], 1: ["running", "error"],
                                            2: ["running", "done"]})
@@ -181,8 +183,8 @@ class TestEdgeBatchCompletes(_QueueCase):
             with open(out_path, "wb") as f:
                 f.write(b"\x00" * 16)
 
-        with mock.patch.object(tts_engine, "EDGE_TTS_AVAILABLE", True), \
-             mock.patch.object(tts_engine, "_edge_generate", fake_edge):
+        with mock.patch.object(edge_mod, "EDGE_TTS_AVAILABLE", True), \
+             mock.patch.object(edge_mod, "_edge_generate", fake_edge):
             files = tts_engine.convert_batch(text=BOOK, voice="v", rate="+0%",
                                              output_dir=self.out, engine="edge")
         self.assertEqual(len(files), 3)

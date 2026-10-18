@@ -1,6 +1,5 @@
 """TTS引擎封装 - 支持 edge-tts（联网）、系统语音（跨平台离线）、Piper（离线高质量）、CosyVoice（离线神经，经桥接进程）"""
 
-import asyncio
 import json
 import logging
 import os
@@ -11,32 +10,8 @@ import subprocess
 import tempfile
 import threading
 import time
-import wave
-from collections import OrderedDict
 from shutil import which
 from typing import Callable, List, Optional
-
-# 可选导入 - Edge TTS（在线引擎，与其他引擎一致按可选依赖处理）
-try:
-    import edge_tts
-    EDGE_TTS_AVAILABLE = True
-except ImportError:
-    EDGE_TTS_AVAILABLE = False
-    edge_tts = None
-
-# 可选导入 - Piper TTS和音频处理
-try:
-    from piper import PiperVoice
-    PIPER_PYTHON_AVAILABLE = True
-except ImportError:
-    PIPER_PYTHON_AVAILABLE = False
-    PiperVoice = None
-
-# Piper 新 API (1.3.0+) 的 SynthesisConfig（可选）
-try:
-    from piper import SynthesisConfig as _PiperSynthesisConfig
-except Exception:
-    _PiperSynthesisConfig = None
 
 try:
     from pydub import AudioSegment
@@ -79,6 +54,53 @@ from audiobook.io.audio import (  # noqa: E402,F401
     export_m4b,
     write_id3_tags,
     normalize_loudness,
+)
+
+# Piper 实现已迁至 audiobook.engines.piper；此处再导入以保持模块内部调用与
+# `from tts_engine import refresh_piper_voices, ...` 等旧用法兼容。
+# （piper.py 在函数内惰性引用 tts_engine 的共享助手，无模块级循环导入。）
+from audiobook.engines.piper import (  # noqa: E402,F401
+    PIPER_PYTHON_AVAILABLE,
+    PiperVoice,
+    PIPER_MODE_PYTHON,
+    PIPER_MODE_CLI,
+    PIPER_BUILTIN_VOICES,
+    PIPER_VOICES,
+    PIPER_DEFAULT_VOICE,
+    PIPER_MODEL_PATHS,
+    PIPER_MODEL_URLS,
+    PIPER_CONFIG_URLS,
+    PIPER_VOICES_JSON_URL,
+    PIPER_VOICES_BASE_URL,
+    MAX_PIPER_CACHE,
+    fetch_piper_voice_catalog,
+    list_piper_catalog_voices,
+    download_piper_voice_from_catalog,
+    refresh_piper_voices,
+    invalidate_piper_voices,
+    _ensure_piper_voices,
+    _piper_available,
+    _piper_install_hint,
+    _get_piper_mode,
+    _get_piper_model_cache,
+    _load_piper_model,
+    _unload_piper_model,
+    _get_piper_model_path,
+    _download_piper_model,
+    _ensure_piper_model,
+    _piper_generate,
+)
+
+# Edge 实现（语音表、异步合成、整批编排）已迁至 audiobook.engines.edge，同样再导入。
+from audiobook.engines.edge import (  # noqa: E402,F401
+    EDGE_TTS_AVAILABLE,
+    edge_tts,
+    EDGE_VOICES,
+    EDGE_DEFAULT_VOICE,
+    _edge_generate,
+    _edge_generate_multi,
+    _edge_generate_dialogue,
+    _edge_batch_generate,
 )
 
 VERSION = "6.0.0"
@@ -216,12 +238,11 @@ _scan_cache: dict = {"storage_dir": None, "found": {}, "models": None}
 
 
 def _invalidate_scan_cache() -> None:
-    global _piper_voices_scanned
     _scan_cache["storage_dir"] = None
     _scan_cache["found"] = {}
     _scan_cache["models"] = None
     # Piper 语音列表随目录变更失效，下次访问时重新扫描
-    _piper_voices_scanned = False
+    invalidate_piper_voices()
 
 
 def _search_in_tree(root_dir: str, target_names: List[str], max_depth: int = 4) -> Optional[str]:
@@ -537,16 +558,7 @@ def _external_generate(text: str, voice: str, rate: str, output_path: str,
 
 # ======== 通用配置 ========
 
-EDGE_VOICES = {
-    "晓晓（女声，自然）": "zh-CN-XiaoxiaoNeural",
-    "云希（男声，自然）": "zh-CN-YunxiNeural",
-    "云健（男声，播音）": "zh-CN-YunjianNeural",
-    "晓伊（女声，活泼）": "zh-CN-XiaoyiNeural",
-    "云扬（男声，温暖）": "zh-CN-YunyangNeural",
-    "晓辰（女声，温柔）": "zh-CN-XiaochenNeural",
-}
-EDGE_DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
-
+# （Edge 语音表已迁至 audiobook.engines.edge，顶部再导入）
 
 # ======== 跨平台本地系统语音 ========
 
@@ -735,27 +747,6 @@ def _ensure_local_voices() -> None:
 LOCAL_VOICES: dict = {}
 LOCAL_DEFAULT_VOICE = ""
 
-PIPER_BUILTIN_VOICES = {
-    "Piper中文女声（中等质量）": "zh_CN-huayan-medium",
-    "Piper中文女声（较低质量）": "zh_CN-huayan-low",
-}
-PIPER_VOICES = dict(PIPER_BUILTIN_VOICES)
-PIPER_DEFAULT_VOICE = "zh_CN-huayan-medium"
-
-# 已下载模型的 voice_id → 模型文件绝对路径（含额外搜索路径中发现的模型）
-PIPER_MODEL_PATHS: dict[str, str] = {}
-
-# Piper模型下载URL（Hugging Face）
-PIPER_MODEL_URLS = {
-    "zh_CN-huayan-medium": "https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx",
-    "zh_CN-huayan-low": "https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/low/zh_CN-huayan-low.onnx",
-}
-# 模型配置URL（与模型文件同名，扩展名.json）
-PIPER_CONFIG_URLS = {
-    "zh_CN-huayan-medium": "https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/medium/zh_CN-huayan-medium.onnx.json",
-    "zh_CN-huayan-low": "https://huggingface.co/rhasspy/piper-voices/resolve/main/zh/zh_CN/huayan/low/zh_CN-huayan-low.onnx.json",
-}
-
 # 国内镜像
 HF_MIRROR_DOMAIN = "hf-mirror.com"
 HF_ORIGIN_DOMAIN = "huggingface.co"
@@ -764,118 +755,6 @@ HF_ORIGIN_DOMAIN = "huggingface.co"
 def _get_mirror_url(url: str) -> str:
     """将HuggingFace URL替换为hf-mirror镜像"""
     return url.replace(HF_ORIGIN_DOMAIN, HF_MIRROR_DOMAIN)
-
-
-# ======== Piper 语音包目录（官方 voices.json） ========
-
-PIPER_VOICES_JSON_URL = "https://huggingface.co/rhasspy/piper-voices/resolve/main/voices.json"
-PIPER_VOICES_BASE_URL = "https://huggingface.co/rhasspy/piper-voices/resolve/main/"
-
-
-def fetch_piper_voice_catalog(force_refresh: bool = False, should_stop=None) -> dict:
-    """下载并缓存 Piper 官方语音目录 voices.json（数百个语音，覆盖多语言）。
-
-    返回原始目录 dict：{voice_key: {language, quality, files, ...}}
-    """
-    cache_path = os.path.join(get_piper_model_dir(), "voices_catalog.json")
-    if not force_refresh and os.path.isfile(cache_path):
-        try:
-            with open(cache_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            logger.warning(f"语音目录缓存损坏，重新下载: {e}")
-    # 强制刷新/缓存损坏时删除旧文件，避免断点续传逻辑向旧文件追加
-    if os.path.exists(cache_path):
-        try:
-            os.remove(cache_path)
-        except Exception:
-            pass
-    _download_file_with_progress(PIPER_VOICES_JSON_URL, cache_path,
-                                 "Piper 语音目录", should_stop=should_stop)
-    with open(cache_path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def list_piper_catalog_voices(catalog: dict, language_prefix: str = "") -> list[dict]:
-    """把 voices.json 解析为便于展示的列表，可按语言代码前缀过滤（如 "zh"）。"""
-    out = []
-    for key, meta in sorted(catalog.items()):
-        if not isinstance(meta, dict):
-            continue
-        lang = meta.get("language", {}) or {}
-        code = lang.get("code", "")
-        if language_prefix and not code.lower().startswith(language_prefix.lower()):
-            continue
-        files = meta.get("files", {}) or {}
-        out.append({
-            "key": key,
-            "language_code": code,
-            "language_name": lang.get("name_native") or lang.get("name_english") or code,
-            "quality": meta.get("quality", ""),
-            "num_speakers": meta.get("num_speakers", 1),
-            "size_bytes": sum((f or {}).get("size_bytes", 0) for f in files.values()),
-        })
-    return out
-
-
-def download_piper_voice_from_catalog(voice_key: str, should_stop=None) -> str:
-    """按语音目录下载指定语音的 .onnx + .onnx.json 到 piper-models/，返回模型路径"""
-    catalog = fetch_piper_voice_catalog(should_stop=should_stop)
-    meta = catalog.get(voice_key)
-    if not meta:
-        raise ValueError(f"语音目录中没有: {voice_key}")
-
-    model_dir = get_piper_model_dir()
-    onnx_path = None
-    for fpath in (meta.get("files", {}) or {}):
-        if not (fpath.endswith(".onnx") or fpath.endswith(".onnx.json")):
-            continue  # 跳过 MODEL_CARD 等
-        fname = os.path.basename(fpath)
-        dst = os.path.join(model_dir, fname)
-        _download_file_with_progress(PIPER_VOICES_BASE_URL + fpath, dst,
-                                     f"Piper {fname}", should_stop=should_stop)
-        if fpath.endswith(".onnx"):
-            onnx_path = dst
-
-    if not onnx_path:
-        raise RuntimeError(f"语音 {voice_key} 的目录条目中没有 .onnx 模型文件")
-    refresh_piper_voices()
-    return onnx_path
-
-
-_piper_voices_scanned = False
-
-
-def _ensure_piper_voices() -> None:
-    """懒扫描：首次访问 Piper 语音列表时才扫描模型目录"""
-    if not _piper_voices_scanned:
-        refresh_piper_voices()
-
-
-def refresh_piper_voices() -> None:
-    """重新扫描 piper-models/ 与额外搜索路径，把已下载模型并入语音列表"""
-    global PIPER_VOICES, PIPER_MODEL_PATHS, _piper_voices_scanned
-    _piper_voices_scanned = True
-    voices = dict(PIPER_BUILTIN_VOICES)
-    paths: dict[str, str] = {}
-    builtin_ids = set(PIPER_BUILTIN_VOICES.values())
-
-    roots = [get_piper_model_dir()] + get_model_search_paths()
-    seen_ids = set()
-    for root in roots:
-        for onnx in _search_models_in_tree(root):
-            if not os.path.isfile(onnx + ".json"):
-                continue  # 缺配置文件的模型无法使用
-            vid = os.path.splitext(os.path.basename(onnx))[0]
-            if vid in seen_ids:
-                continue
-            seen_ids.add(vid)
-            paths[vid] = os.path.abspath(onnx)
-            if vid not in builtin_ids:
-                voices[f"Piper {vid}"] = vid
-
-    PIPER_MODEL_PATHS = paths
-    PIPER_VOICES = voices
 
 
 # 注册内置引擎
@@ -986,11 +865,7 @@ def _ensure_cosyvoice_model(model_key: str = "CosyVoice-300M-SFT", should_stop=N
     return model_dir
 
 
-# Piper运行模式
-PIPER_MODE_PYTHON = "python"
-PIPER_MODE_CLI = "cli"
 
-# CHARS_PER_SECOND_BASE 已迁至 audiobook.core.text（顶部再导入）
 PROGRESS_FILENAME = ".audiobook_progress.json"
 MAX_RETRIES = 3  # 生成失败时重试次数
 RETRY_DELAY = 5  # 重试前等待秒数（指数退避基础值）
@@ -1157,13 +1032,6 @@ def get_voice_id(display_name, engine="edge"):
     return EDGE_VOICES.get(display_name, EDGE_DEFAULT_VOICE)
 
 
-def _piper_available() -> bool:
-    """动态检测 Piper 是否可用（Python 包或便携 / PATH 中的 CLI）"""
-    if PIPER_PYTHON_AVAILABLE:
-        return True
-    return _refresh_piper_cli_path() is not None
-
-
 def _ffmpeg_path() -> Optional[str]:
     """动态解析 ffmpeg 路径（便携目录优先）"""
     return _which_portable("ffmpeg")
@@ -1175,14 +1043,6 @@ def _ffmpeg_install_hint() -> str:
     if _PLATFORM == "Windows":
         return "Windows: 从 https://www.gyan.dev/ffmpeg/builds/ 下载 ffmpeg.exe，放入便携 bin 目录或系统 PATH"
     return "Linux: sudo apt install ffmpeg（或对应发行版包管理器）"
-
-
-def _piper_install_hint() -> str:
-    return (
-        "方式 1: pip install piper-tts\n"
-        "方式 2: 从 https://github.com/rhasspy/piper/releases 下载 piper 可执行文件，\n"
-        "        放入便携 bin 目录或系统 PATH"
-    )
 
 
 def check_engine_ready(engine="edge"):
@@ -1256,100 +1116,6 @@ def _configure_pydub_ffmpeg() -> bool:
 
 
 # ======== 文本分段 ========
-
-
-# ======== Piper 模型缓存（LRU，每线程上限 2 个模型） ========
-
-MAX_PIPER_CACHE = 2
-
-# PiperVoice / onnxruntime 会话跨线程共享不安全：并行生成时每个工作线程
-# 持有独立的模型实例（线程本地缓存），主线程串行使用时行为与全局缓存一致。
-_piper_tls = threading.local()
-_piper_all_caches: List[OrderedDict] = []
-_piper_caches_lock = threading.Lock()
-_piper_download_lock = threading.Lock()
-
-
-def _get_piper_model_cache() -> OrderedDict:
-    cache = getattr(_piper_tls, "cache", None)
-    if cache is None:
-        cache = OrderedDict()
-        _piper_tls.cache = cache
-        with _piper_caches_lock:
-            _piper_all_caches.append(cache)
-    return cache
-
-
-def _get_piper_mode() -> str:
-    """确定Piper运行模式：优先Python包，其次CLI（便携目录优先）"""
-    if PIPER_PYTHON_AVAILABLE:
-        return PIPER_MODE_PYTHON
-    if _refresh_piper_cli_path():
-        return PIPER_MODE_CLI
-    raise RuntimeError("Piper TTS 不可用。\n" + _piper_install_hint())
-
-
-def _load_piper_model(voice_name, should_stop=None):
-    """加载Piper模型，使用缓存避免重复加载"""
-    model_path = _ensure_piper_model(voice_name, should_stop=should_stop)
-    config_path = model_path + ".json"
-    cache_key = (voice_name, model_path)
-    cache = _get_piper_model_cache()
-
-    if cache_key in cache:
-        logger.debug(f"使用缓存的Piper模型: {voice_name}")
-        cache.move_to_end(cache_key)  # LRU: 标记为最近使用
-        return cache[cache_key]
-
-    mode = _get_piper_mode()
-
-    if mode == PIPER_MODE_PYTHON:
-        if not os.path.exists(config_path):
-            raise FileNotFoundError(f"Piper配置文件不存在: {config_path}")
-        voice_model = PiperVoice.load(model_path, config_path)
-        # LRU：达到上限时淘汰最久未使用的
-        if len(cache) >= MAX_PIPER_CACHE:
-            cache.popitem(last=False)
-            logger.debug("LRU淘汰：Piper模型缓存已满")
-        cache[cache_key] = voice_model
-        logger.info(f"Piper模型已加载并缓存: {voice_name} (缓存大小={len(cache)})")
-        return voice_model
-    else:
-        # CLI模式：仅验证文件存在，不加载到内存
-        if not os.path.exists(config_path):
-            raise FileNotFoundError(f"Piper配置文件不存在: {config_path}")
-        cache[cache_key] = None  # CLI模式缓存标记
-        logger.info(f"Piper CLI模式就绪: {voice_name}")
-        return None
-
-
-def _unload_piper_model(voice_name=None):
-    """卸载Piper模型，释放内存（清空所有线程的缓存；在批量结束后调用）"""
-    with _piper_caches_lock:
-        for cache in _piper_all_caches:
-            if voice_name is None:
-                cache.clear()
-            else:
-                for key in [k for k in cache if k[0] == voice_name]:
-                    del cache[key]
-    if voice_name is None:
-        logger.info("已卸载所有Piper模型")
-    else:
-        logger.info(f"已卸载Piper模型: {voice_name}")
-
-
-# ======== Piper TTS 引擎 ========
-
-def _get_piper_model_path(voice_name):
-    """获取Piper模型文件路径。已扫描到的模型（含额外搜索路径）优先，
-    否则落到 piper-models/ 默认位置（不存在时由下载逻辑补齐）。"""
-    _ensure_piper_voices()
-    known = PIPER_MODEL_PATHS.get(voice_name)
-    if known and os.path.isfile(known):
-        return known
-    model_dir = get_piper_model_dir()
-    model_file = f"{voice_name}.onnx"
-    return os.path.join(model_dir, model_file)
 
 
 def _download_file_with_progress(url, filepath, description="", timeout=60, should_stop=None):
@@ -1443,235 +1209,6 @@ def _download_file_single(url, filepath, description="", timeout=60, should_stop
     logger.info(f"下载完成: {filepath}")
 
 
-def _download_piper_model(voice_name, should_stop=None):
-    """下载Piper模型文件"""
-    if voice_name not in PIPER_MODEL_URLS:
-        raise ValueError(f"不支持的Piper语音: {voice_name}")
-
-    model_url = PIPER_MODEL_URLS[voice_name]
-    model_path = _get_piper_model_path(voice_name)
-    config_url = PIPER_CONFIG_URLS[voice_name]
-    config_path = model_path + ".json"
-
-    _download_file_with_progress(model_url, model_path, f"Piper模型 {voice_name}", should_stop=should_stop)
-    _download_file_with_progress(config_url, config_path, f"Piper配置 {voice_name}", should_stop=should_stop)
-
-    logger.info(f"Piper模型下载完成: {voice_name}")
-
-
-def _ensure_piper_model(voice_name, should_stop=None):
-    """确保Piper模型存在，如果不存在则下载。
-    加锁防止并行生成时多个工作线程同时下载同一模型导致文件损坏。"""
-    model_path = _get_piper_model_path(voice_name)
-    if not os.path.exists(model_path):
-        with _piper_download_lock:
-            if not os.path.exists(model_path):
-                logger.info(f"模型不存在，开始下载: {voice_name}")
-                _download_piper_model(voice_name, should_stop=should_stop)
-    return model_path
-
-
-def _convert_wav_to_mp3(wav_path, mp3_path=None):
-    """将WAV文件转换为MP3格式"""
-    if not PYDUB_AVAILABLE:
-        raise ImportError("pydub库未安装，无法转换音频格式")
-
-    if mp3_path is None:
-        mp3_path = os.path.splitext(wav_path)[0] + '.mp3'
-
-    audio = AudioSegment.from_wav(wav_path)
-    audio.export(mp3_path, format="mp3", bitrate="128k")
-    return mp3_path
-
-
-def _piper_generate_cli(text, voice_name, speed, wav_path, should_stop=None):
-    """使用piper CLI命令生成音频（可中断）"""
-    model_path = _get_piper_model_path(voice_name)
-    config_path = model_path + ".json"
-    cli_path = _refresh_piper_cli_path()
-    if not cli_path:
-        raise RuntimeError("Piper CLI 不可用。\n" + _piper_install_hint())
-
-    cmd = [
-        cli_path,
-        "--model", model_path,
-        "--config", config_path,
-        "--output_file", wav_path,
-    ]
-    if speed != 1.0:
-        cmd.extend(["--length_scale", str(1.0 / speed)])
-
-    rc, _out, err = _run_subprocess_interruptible(
-        cmd, should_stop=should_stop, input_bytes=text.encode("utf-8"),
-    )
-    if rc != 0:
-        stderr = err.decode("utf-8", errors="replace") if err else ""
-        raise RuntimeError(f"Piper CLI失败 (code {rc}): {stderr}")
-
-
-def _piper_sample_rate(voice_model) -> int:
-    """从 Piper 模型读取采样率，兼容新旧属性路径"""
-    cfg = getattr(voice_model, "config", None)
-    if cfg is None:
-        return 22050
-    for attr in ("sample_rate", "sampling_rate"):
-        v = getattr(cfg, attr, None)
-        if isinstance(v, int) and v > 0:
-            return v
-    audio_cfg = getattr(cfg, "audio", None)
-    if audio_cfg is not None:
-        for attr in ("sample_rate", "sampling_rate"):
-            v = getattr(audio_cfg, attr, None)
-            if isinstance(v, int) and v > 0:
-                return v
-    return 22050
-
-
-def _piper_chunk_bytes(chunk) -> Optional[bytes]:
-    """从 AudioChunk 取出 int16 PCM 字节（兼容多种属性名）"""
-    for attr in ("audio_int16_bytes", "audio_bytes", "int16_bytes"):
-        v = getattr(chunk, attr, None)
-        if isinstance(v, (bytes, bytearray)):
-            return bytes(v)
-    arr = getattr(chunk, "audio_int16_array", None)
-    if arr is not None:
-        try:
-            return arr.tobytes()
-        except Exception:
-            pass
-    # 兜底：假设 chunk 本身就是字节
-    if isinstance(chunk, (bytes, bytearray)):
-        return bytes(chunk)
-    return None
-
-
-def _piper_synthesize_to_wav(voice_model, text: str, speed: float,
-                             wav_path: str, should_stop=None) -> None:
-    """将 Piper 合成结果写入 WAV 文件（兼容新旧 API，支持暂停）"""
-    # 新 API (piper-tts 1.3.0+): 使用 synthesize(text) -> Iterable[AudioChunk]
-    if hasattr(voice_model, "synthesize"):
-        syn_config = None
-        if _PiperSynthesisConfig is not None and speed != 1.0:
-            try:
-                syn_config = _PiperSynthesisConfig(length_scale=1.0 / speed)
-            except Exception as e:
-                logger.warning(f"构造 SynthesisConfig 失败，忽略速度: {e}")
-                syn_config = None
-
-        try:
-            iterator = (
-                voice_model.synthesize(text, syn_config=syn_config)
-                if syn_config is not None
-                else voice_model.synthesize(text)
-            )
-        except TypeError:
-            # 某些版本签名不同
-            iterator = voice_model.synthesize(text)
-
-        sample_rate = _piper_sample_rate(voice_model)
-        with wave.open(wav_path, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(sample_rate)
-            for chunk in iterator:
-                if should_stop and should_stop():
-                    raise StopRequested("用户暂停")
-                # 首块若携带 sample_rate，则修正
-                sr = getattr(chunk, "sample_rate", None)
-                if isinstance(sr, int) and sr > 0 and sr != sample_rate:
-                    wf.setframerate(sr)
-                    sample_rate = sr
-                data = _piper_chunk_bytes(chunk)
-                if not data:
-                    continue
-                wf.writeframes(data)
-        return
-
-    # 旧 API (piper-tts <1.3.0): synthesize_stream_raw 返回原始 PCM 字节流
-    if hasattr(voice_model, "synthesize_stream_raw"):
-        sample_rate = _piper_sample_rate(voice_model)
-        pcm = bytearray()
-        for audio_bytes in voice_model.synthesize_stream_raw(text, speed=speed):
-            if should_stop and should_stop():
-                raise StopRequested("用户暂停")
-            pcm.extend(audio_bytes)
-        with wave.open(wav_path, "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(sample_rate)
-            wf.writeframes(bytes(pcm))
-        return
-
-    raise RuntimeError(
-        "Piper API 不兼容：未找到 synthesize 或 synthesize_stream_raw 方法。"
-        "\n请升级或重装 piper-tts。"
-    )
-
-
-def _piper_generate(text, voice, rate, output_path, should_stop=None):
-    """使用Piper TTS生成音频（支持Python包和CLI两种模式）"""
-    if not _piper_available():
-        raise RuntimeError("Piper TTS 不可用。\n" + _piper_install_hint())
-
-    if not _configure_pydub_ffmpeg():
-        raise RuntimeError("ffmpeg 未安装，Piper 引擎需要 ffmpeg 进行 WAV→MP3 转换。\n" + _ffmpeg_install_hint())
-
-    voice_model = _load_piper_model(voice, should_stop=should_stop)
-
-    rate_val = int(rate.replace("%", "").replace("+", ""))
-    speed = 1.0 + rate_val / 100.0
-    speed = max(0.5, min(2.0, speed))
-
-    wav_path = os.path.splitext(output_path)[0] + '.wav'
-
-    try:
-        mode = _get_piper_mode()
-
-        if mode == PIPER_MODE_PYTHON:
-            _piper_synthesize_to_wav(voice_model, text, speed, wav_path, should_stop=should_stop)
-        else:
-            _piper_generate_cli(text, voice, speed, wav_path, should_stop=should_stop)
-
-        if should_stop and should_stop():
-            raise StopRequested("用户暂停")
-        _convert_wav_to_mp3(wav_path, output_path)
-
-    finally:
-        if os.path.exists(wav_path):
-            try:
-                os.remove(wav_path)
-            except Exception:
-                pass
-
-
-def _piper_generate_safe(text, voice, rate, output_path, should_stop=None):
-    """安全的Piper生成函数，包含重试机制（可中断）"""
-    for attempt in range(MAX_RETRIES + 1):
-        if should_stop and should_stop():
-            raise StopRequested("用户暂停")
-        try:
-            logger.info(f"Piper生成 → {output_path} (尝试 {attempt + 1})")
-            _piper_generate(text, voice, rate, output_path, should_stop=should_stop)
-
-            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-                logger.info(f"Piper完成: {output_path} ({os.path.getsize(output_path)} bytes)")
-                return
-            else:
-                raise RuntimeError(f"生成文件为空: {output_path}")
-
-        except StopRequested:
-            raise
-        except Exception as e:
-            delay = RETRY_DELAY * (2 ** attempt)
-            logger.error(f"Piper生成失败 尝试{attempt + 1}/{MAX_RETRIES + 1}: {e}")
-            if attempt < MAX_RETRIES:
-                logger.info(f"等待 {delay}秒 后重试...")
-                if _interruptible_sleep(delay, should_stop):
-                    raise StopRequested("用户暂停")
-            else:
-                raise
-
-
 # ======== 音频文件合并 ========
 
 
@@ -1704,163 +1241,6 @@ def get_local_concurrency() -> int:
         return min(override, 16)
     cpu = os.cpu_count() or 2
     return max(2, min(4, cpu // 2))
-
-
-# ======== Edge TTS 引擎 ========
-
-async def _edge_generate(text, voice, rate, output_path):
-    if not EDGE_TTS_AVAILABLE:
-        raise RuntimeError("Edge TTS 未安装。请运行: pip install edge-tts")
-    communicate = edge_tts.Communicate(text, voice, rate=rate)
-    await communicate.save(output_path)
-
-
-async def _edge_generate_multi(segments, voice, rate, output_path):
-    """单个文件内多段文本串行生成（避免并发过多触发限流）"""
-    temp_dir = tempfile.mkdtemp()
-    temp_files = []
-    try:
-        for i, seg in enumerate(segments):
-            tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
-            await _edge_generate(seg, voice, rate, tp)
-            temp_files.append(tp)
-        _merge_mp3_files(temp_files, output_path)
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-
-
-async def _edge_generate_dialogue(dialogue_segments, default_voice, voice_map,
-                                  rate, output_path, stop_event=None):
-    """对话检测模式：逐段按角色/类型切换语音生成后合并（Edge 引擎）"""
-    temp_dir = tempfile.mkdtemp()
-    temp_files = []
-    try:
-        for i, seg in enumerate(dialogue_segments):
-            if stop_event is not None and stop_event.is_set():
-                raise StopRequested("用户暂停")
-            seg_voice = _resolve_segment_voice(seg, default_voice, voice_map)
-            tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
-            await _edge_generate(seg["text"], seg_voice, rate, tp)
-            temp_files.append(tp)
-        _merge_mp3_files(temp_files, output_path)
-    finally:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-
-
-# ======== 批量 Edge TTS（并发 + 单一事件循环） ========
-
-async def _interruptible_asleep(seconds: float, stop_event: "asyncio.Event") -> bool:
-    """异步版可中断睡眠。返回 True 表示被 stop_event 唤醒。"""
-    try:
-        await asyncio.wait_for(stop_event.wait(), timeout=seconds)
-        return True
-    except asyncio.TimeoutError:
-        return False
-
-
-async def _generate_one_item(item, voice, rate, output_dir, semaphore, stop_event, on_start=None):
-    """生成单个章节，由信号量控制并发（支持暂停）。on_start 在真正拿到并发名额时调用。"""
-    if stop_event.is_set():
-        return
-    out_path = os.path.join(output_dir, item["filename"])
-    segments = split_text(item["text"])
-
-    async with semaphore:
-        if stop_event.is_set():
-            return
-        if on_start:
-            on_start()
-        for attempt in range(MAX_RETRIES + 1):
-            if stop_event.is_set():
-                return
-            try:
-                logger.info(f"生成 [{item['title']}] → {item['filename']} (尝试 {attempt + 1}/{MAX_RETRIES + 1})")
-
-                if item.get("segments") and item.get("voice_map"):
-                    # 对话检测模式：按角色/类型切换语音
-                    await _edge_generate_dialogue(item["segments"], voice,
-                                                  item["voice_map"], rate, out_path,
-                                                  stop_event=stop_event)
-                elif len(segments) == 1:
-                    await _edge_generate(segments[0], voice, rate, out_path)
-                else:
-                    await _edge_generate_multi(segments, voice, rate, out_path)
-
-                if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
-                    item["status"] = "done"
-                    logger.info(f"完成 [{item['title']}] ({os.path.getsize(out_path)} bytes)")
-                    return
-                else:
-                    raise RuntimeError(f"生成文件为空: {out_path}")
-
-            except Exception as e:
-                delay = RETRY_DELAY * (2 ** attempt)  # 指数退避: 5s, 10s, 20s
-                logger.error(f"生成失败 [{item['title']}] 尝试{attempt + 1}/{MAX_RETRIES + 1}: {e}")
-                if attempt < MAX_RETRIES:
-                    logger.info(f"等待 {delay}秒 后重试...")
-                    if await _interruptible_asleep(delay, stop_event):
-                        return
-                else:
-                    item["status"] = "error"
-                    item["error"] = str(e)
-
-
-async def _edge_batch_generate(items, voice, rate, output_dir, progress_callback, should_stop,
-                               item_callback=None):
-    """并发批量生成，支持暂停（stop_event 即时传播）"""
-    pending_items = [(i, it) for i, it in enumerate(items) if _is_active(it)]
-    total_active = len(pending_items)
-    done_count = 0
-
-    semaphore = asyncio.Semaphore(get_edge_concurrency())
-    stop_event = asyncio.Event()
-
-    async def _watch_stop():
-        while not stop_event.is_set():
-            if should_stop and should_stop():
-                logger.info("用户暂停：广播取消事件")
-                stop_event.set()
-                return
-            await asyncio.sleep(0.2)
-
-    async def _process_item(idx, item):
-        nonlocal done_count
-        started = []
-
-        def _on_start():
-            item.pop("error", None)  # 重试时清掉上次的错误信息
-            started.append(True)
-            _emit_item(item_callback, "running", index=idx)
-
-        await _generate_one_item(item, voice, rate, output_dir, semaphore, stop_event,
-                                 on_start=_on_start)
-        _emit_item_result(item_callback, idx, item, bool(started))
-        done_count += 1
-        if progress_callback:
-            try:
-                progress_callback(done_count, total_active)
-            except Exception:
-                pass
-        save_progress(output_dir, items)
-
-    watcher = asyncio.create_task(_watch_stop())
-    tasks = [asyncio.create_task(_process_item(i, item)) for i, item in pending_items]
-
-    try:
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-    finally:
-        stop_event.set()
-        watcher.cancel()
-        try:
-            await watcher
-        except asyncio.CancelledError:
-            # Python 3.8+ 中 CancelledError 继承 BaseException，`except Exception` 接不住：
-            # 此前每次 Edge 批量结束都会把它抛出 convert_batch，导致界面收不到完成信号、
-            # 字幕/元数据/归一化后处理不执行、进度文件不清理。
-            pass
-        except Exception:
-            pass
 
 
 # ======== 本地 TTS 引擎 (跨平台) ========
@@ -1919,8 +1299,13 @@ def _generate_one_safe_multi_voice(
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-# 经注册表逐段同步合成的内置引擎（Edge 走异步批量专用路径，不在此列）
-_REGISTRY_SYNC_ENGINES = ("local", "piper", "cosyvoice", "clone")
+def _resolve_engine(engine):
+    """按 id 从注册表取引擎实例；未知 id 报出与旧版一致的 ValueError。"""
+    from audiobook.engines.base import get_engine
+    try:
+        return get_engine(engine)
+    except KeyError:
+        raise ValueError(f"不支持的引擎类型: {engine}") from None
 
 
 def _raw_segment_synth(engine):
@@ -1955,6 +1340,9 @@ def _generate_one_safe(text, voice, rate, output_path, engine="edge", should_sto
 
     segments = split_text(text)
     total_segs = len(segments)
+    # 先解析引擎：未知 id 直接报错，不进入重试循环
+    # （旧版会把任何未知 id 静默当成 Edge 处理）
+    seg_synth = _resolve_engine(engine).synthesize_segment
 
     def _notify(i):
         if seg_progress and total_segs > 1:
@@ -1969,34 +1357,23 @@ def _generate_one_safe(text, voice, rate, output_path, engine="edge", should_sto
         try:
             logger.info(f"生成单文件 → {output_path} (尝试 {attempt + 1}, {total_segs} 段)")
 
-            if engine in _REGISTRY_SYNC_ENGINES or _is_external_engine(engine):
-                # 经注册表分发：内置引擎（local/piper/cosyvoice）解析为各自的具体 Engine
-                # 子类，外挂引擎回退 _TtsEngineAdapter；分段/合并/进度/重试的编排仍在本函数。
-                from audiobook.engines.base import get_engine
-                seg_synth = get_engine(engine).synthesize_segment
-                if total_segs == 1:
-                    seg_synth(segments[0], voice, rate, output_path, should_stop=should_stop)
-                else:
-                    temp_dir = tempfile.mkdtemp()
-                    temp_files = []
-                    try:
-                        for i, seg in enumerate(segments):
-                            if should_stop and should_stop():
-                                raise StopRequested("用户暂停")
-                            tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
-                            seg_synth(seg, voice, rate, tp, should_stop=should_stop)
-                            temp_files.append(tp)
-                            _notify(i)
-                        _merge_mp3_files(temp_files, output_path)
-                    finally:
-                        shutil.rmtree(temp_dir, ignore_errors=True)
+            # 引擎只负责单段合成；分段 / 合并 / 进度 / 重试的编排都在本函数
+            if total_segs == 1:
+                seg_synth(segments[0], voice, rate, output_path, should_stop=should_stop)
             else:
-                # Edge：保留异步批量路径（_edge_generate_multi 单事件循环批处理）。
-                # 待 EdgeEngine 具体化并理清编排后再并入注册表分发。
-                if len(segments) == 1:
-                    asyncio.run(_edge_generate(segments[0], voice, rate, output_path))
-                else:
-                    asyncio.run(_edge_generate_multi(segments, voice, rate, output_path))
+                temp_dir = tempfile.mkdtemp()
+                temp_files = []
+                try:
+                    for i, seg in enumerate(segments):
+                        if should_stop and should_stop():
+                            raise StopRequested("用户暂停")
+                        tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
+                        seg_synth(seg, voice, rate, tp, should_stop=should_stop)
+                        temp_files.append(tp)
+                        _notify(i)
+                    _merge_mp3_files(temp_files, output_path)
+                finally:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
 
             if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
                 logger.info(f"完成: {output_path} ({os.path.getsize(output_path)} bytes)")
@@ -2102,6 +1479,117 @@ def clear_progress(output_dir):
 
 
 # ======== 批量生成（支持断点续传 + 选择生成） ========
+
+def _run_items_parallel(items, voice, rate, output_dir, engine, workers,
+                        progress_callback, should_stop, item_callback):
+    """通用编排·并行：线程池逐章 `_generate_one_safe`（引擎须能安全并发合成）。"""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    pending = [(i, it) for i, it in enumerate(items) if _is_active(it)]
+    total_active = len(pending)
+    done_count = 0
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        fut_map = {}
+        for idx, item in pending:
+            if should_stop and should_stop():
+                logger.info("用户暂停生成")
+                break
+
+            def _one(it=item, i=idx):
+                it.pop("error", None)  # 重试时清掉上次的错误信息
+                _emit_item(item_callback, "running", index=i)
+                p = os.path.join(output_dir, it["filename"])
+                _generate_one_safe(it["text"], voice, rate, p,
+                                   engine=engine, should_stop=should_stop,
+                                   voice_map=it.get("voice_map"),
+                                   dialogue_segments=it.get("segments"))
+                it["status"] = "done"
+            fut_map[executor.submit(_one)] = idx
+
+        for future in as_completed(fut_map):
+            idx = fut_map[future]
+            try:
+                future.result()
+                _emit_item(item_callback, "done", index=idx)
+            except StopRequested:
+                logger.info(f"用户暂停：[{items[idx]['title']}] 未完成")
+                _emit_item(item_callback, "pending", index=idx)
+                executor.shutdown(wait=False, cancel_futures=True)
+                break
+            except Exception as e:
+                items[idx]["status"] = "error"
+                items[idx]["error"] = str(e)
+                logger.error(f"{engine}引擎生成失败 [{items[idx]['title']}]: {e}")
+                _emit_item(item_callback, "error", index=idx, error=str(e))
+
+            save_progress(output_dir, items)
+            done_count += 1
+            if progress_callback:
+                try:
+                    progress_callback(done_count, total_active)
+                except Exception:
+                    pass
+
+
+def _run_items_sequential(items, voice, rate, output_dir, engine,
+                          progress_callback, should_stop, item_callback):
+    """通用编排·串行：逐章 `_generate_one_safe`，章内段级进度并入主进度回调。"""
+    done_count = 0
+    total_active = sum(1 for it in items if _is_active(it))
+
+    for idx, item in enumerate(items):
+        if not _is_active(item):
+            continue
+        if should_stop and should_stop():
+            logger.info("用户暂停生成")
+            break
+
+        out_path = os.path.join(output_dir, item["filename"])
+        item.pop("error", None)  # 重试时清掉上次的错误信息
+        _emit_item(item_callback, "running", index=idx)
+        try:
+            # 把段级进度并入主进度回调（携带章节标题）
+            def _seg_cb(cur, total, _t=item.get("title", "")):
+                if progress_callback:
+                    try:
+                        progress_callback(done_count, total_active,
+                                          seg_current=cur, seg_total=total,
+                                          seg_title=_t)
+                    except TypeError:
+                        # 老回调签名不接受关键字参数
+                        try:
+                            progress_callback(done_count, total_active)
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+            _generate_one_safe(item["text"], voice, rate, out_path,
+                               engine=engine, should_stop=should_stop,
+                               seg_progress=_seg_cb,
+                               voice_map=item.get("voice_map"),
+                               dialogue_segments=item.get("segments"))
+            item["status"] = "done"
+            _emit_item(item_callback, "done", index=idx)
+        except StopRequested:
+            logger.info(f"用户暂停：[{item['title']}] 未完成")
+            _emit_item(item_callback, "pending", index=idx)
+            save_progress(output_dir, items)
+            break
+        except Exception as e:
+            item["status"] = "error"
+            item["error"] = str(e)
+            logger.error(f"{engine}引擎生成失败 [{item['title']}]: {e}")
+            _emit_item(item_callback, "error", index=idx, error=str(e))
+
+        save_progress(output_dir, items)
+        done_count += 1
+        if progress_callback:
+            try:
+                progress_callback(done_count, total_active)
+            except Exception:
+                pass
+
+
 
 def convert_batch(
     text,
@@ -2238,137 +1726,23 @@ def convert_batch(
     logger.info(f"批量生成开始: {sum(1 for it in items if _is_active(it))} 个待处理, 引擎={engine}")
     _emit_item(item_callback, "init", items=_queue_snapshot(items))
 
-    if engine == "edge":
-        if not EDGE_TTS_AVAILABLE:
-            raise RuntimeError("Edge TTS 未安装。请运行: pip install edge-tts，"
-                               "或切换到离线引擎（系统语音 / Piper / CosyVoice）。")
-        # 用单一事件循环批量生成
-        asyncio.run(_edge_batch_generate(items, voice, rate, output_dir, progress_callback, should_stop,
-                                         item_callback=item_callback))
-    elif engine in _REGISTRY_SYNC_ENGINES or _is_external_engine(engine):
-        # Piper：用 ThreadPoolExecutor 并行处理。
-        # CLI 模式靠子进程隔离；Python 模式每个工作线程持有独立模型实例（线程本地缓存）。
-        _parallel_piper_done = False
-        if engine == "piper":
-            piper_mode = None
-            try:
-                piper_mode = _get_piper_mode()
-            except Exception as e:
-                logger.warning(f"Piper 模式检测失败，改用串行路径: {e}")
-            if piper_mode in (PIPER_MODE_CLI, PIPER_MODE_PYTHON):
-                from concurrent.futures import ThreadPoolExecutor, as_completed
-                pending = [(i, it) for i, it in enumerate(items) if _is_active(it)]
-                total_active = len(pending)
-                done_count = 0
-
-                try:
-                    with ThreadPoolExecutor(max_workers=get_local_concurrency()) as executor:
-                        fut_map = {}
-                        for idx, item in pending:
-                            if should_stop and should_stop():
-                                logger.info("用户暂停生成")
-                                break
-                            def _piper_one(it=item, i=idx):
-                                it.pop("error", None)  # 重试时清掉上次的错误信息
-                                _emit_item(item_callback, "running", index=i)
-                                p = os.path.join(output_dir, it["filename"])
-                                _generate_one_safe(it["text"], voice, rate, p,
-                                                   engine="piper", should_stop=should_stop,
-                                                   voice_map=it.get("voice_map"),
-                                                   dialogue_segments=it.get("segments"))
-                                it["status"] = "done"
-                            future = executor.submit(_piper_one)
-                            fut_map[future] = idx
-
-                        for future in as_completed(fut_map):
-                            idx = fut_map[future]
-                            try:
-                                future.result()
-                                _emit_item(item_callback, "done", index=idx)
-                            except StopRequested:
-                                logger.info(f"用户暂停：[{items[idx]['title']}] 未完成")
-                                _emit_item(item_callback, "pending", index=idx)
-                                executor.shutdown(wait=False, cancel_futures=True)
-                                break
-                            except Exception as e:
-                                items[idx]["status"] = "error"
-                                items[idx]["error"] = str(e)
-                                logger.error(f"Piper生成失败 [{items[idx]['title']}]: {e}")
-                                _emit_item(item_callback, "error", index=idx, error=str(e))
-
-                            save_progress(output_dir, items)
-                            done_count += 1
-                            if progress_callback:
-                                try:
-                                    progress_callback(done_count, total_active)
-                                except Exception:
-                                    pass
-                finally:
-                    _unload_piper_model()
-                _parallel_piper_done = True
-
-        if not _parallel_piper_done:
-            # 本地/外部引擎同步逐个生成（支持暂停）
-            done_count = 0
-            total_active = sum(1 for it in items if _is_active(it))
-
-            try:
-                for idx, item in enumerate(items):
-                    if not _is_active(item):
-                        continue
-                    if should_stop and should_stop():
-                        logger.info("用户暂停生成")
-                        break
-
-                    out_path = os.path.join(output_dir, item["filename"])
-                    item.pop("error", None)  # 重试时清掉上次的错误信息
-                    _emit_item(item_callback, "running", index=idx)
-                    try:
-                        # 把段级进度并入主进度回调（携带章节标题）
-                        def _seg_cb(cur, total, _t=item.get("title", "")):
-                            if progress_callback:
-                                try:
-                                    progress_callback(done_count, total_active,
-                                                      seg_current=cur, seg_total=total,
-                                                      seg_title=_t)
-                                except TypeError:
-                                    # 老回调签名不接受关键字参数
-                                    try:
-                                        progress_callback(done_count, total_active)
-                                    except Exception:
-                                        pass
-                                except Exception:
-                                    pass
-                        _generate_one_safe(item["text"], voice, rate, out_path,
-                                           engine=engine, should_stop=should_stop,
-                                           seg_progress=_seg_cb,
-                                           voice_map=item.get("voice_map"),
-                                           dialogue_segments=item.get("segments"))
-                        item["status"] = "done"
-                        _emit_item(item_callback, "done", index=idx)
-                    except StopRequested:
-                        logger.info(f"用户暂停：[{item['title']}] 未完成")
-                        _emit_item(item_callback, "pending", index=idx)
-                        save_progress(output_dir, items)
-                        break
-                    except Exception as e:
-                        item["status"] = "error"
-                        item["error"] = str(e)
-                        logger.error(f"{engine}引擎生成失败 [{item['title']}]: {e}")
-                        _emit_item(item_callback, "error", index=idx, error=str(e))
-
-                    save_progress(output_dir, items)
-                    done_count += 1
-                    if progress_callback:
-                        try:
-                            progress_callback(done_count, total_active)
-                        except Exception:
-                            pass
-            finally:
-                if engine == "piper":
-                    _unload_piper_model()
-    else:
-        raise ValueError(f"不支持的引擎类型: {engine}")
+    # 经注册表分发：引擎可自带整批编排（Edge 的异步并发），否则走通用编排——
+    # 按引擎声明的并行度用线程池并行（Piper）或逐章串行（其余引擎）。
+    eng = _resolve_engine(engine)
+    try:
+        handled = eng.run_batch(items, voice, rate, output_dir,
+                                progress_callback=progress_callback,
+                                should_stop=should_stop, item_callback=item_callback)
+        if not handled:
+            workers = eng.batch_parallelism()
+            if workers > 1:
+                _run_items_parallel(items, voice, rate, output_dir, engine, workers,
+                                    progress_callback, should_stop, item_callback)
+            else:
+                _run_items_sequential(items, voice, rate, output_dir, engine,
+                                      progress_callback, should_stop, item_callback)
+    finally:
+        eng.release()
 
     # 生成阶段结束：解除暂挂标记，推送全量快照让界面与真实状态对齐
     # （并行 / 暂停等路径下个别逐项事件可能缺失，以 final 为准）

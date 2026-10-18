@@ -3,11 +3,11 @@
 目标（阶段 1/A5）：定义统一的 `Engine` 抽象基类（list_voices / ready /
 synthesize），内置引擎（edge/local/piper/cosyvoice）与外挂引擎走同一注册表接口。
 
-迁移状态（6.0.0）：ASR 实现已迁入 `audiobook.engines.asr`（A4）；统一的
-`Engine` 抽象接口与注册表已落地于 `audiobook.engines.base`（A5a）。A5b 起各 TTS
-引擎具体化为 Engine 子类：本地 → `local.LocalEngine`、Edge → `edge.EdgeEngine`、
-Piper → `piper.PiperEngine`、CosyVoice → `cosyvoice.CosyVoiceEngine`。只有外挂插件
-引擎仍由 base 的薄适配器包住 tts_engine 分发。
+迁移状态：ASR 实现在 `audiobook.engines.asr`；统一的 `Engine` 抽象接口与注册表在
+`audiobook.engines.base`。内置 TTS 引擎各自是 Engine 子类并持有自己的实现：本地 →
+`local.LocalEngine`、Edge → `edge.EdgeEngine`（含整批异步编排）、Piper →
+`piper.PiperEngine`（含模型缓存 / 语音目录 / 双后端）、CosyVoice →
+`cosyvoice.CosyVoiceEngine`。只有外挂插件引擎仍由 base 的薄适配器包住 tts_engine 分发。
 """
 
 _REEXPORT = {
