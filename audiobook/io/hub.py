@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from urllib.parse import quote
 
+from audiobook.i18n import tr
+
 HF = "huggingface"
 HF_MIRROR = "hf-mirror"
 MODELSCOPE = "modelscope"
@@ -69,7 +71,7 @@ def list_files(source: str, repo: str) -> List[RepoFile]:
         d = _get_json(f"{_HOSTS[MODELSCOPE]}/api/v1/models/{repo}/repo/files"
                       f"?Revision=master&Recursive=true")
         if isinstance(d, dict) and d.get("Code") not in (None, 200):
-            raise HubError(f"ModelScope 返回错误：{d.get('Message') or d.get('Code')}")
+            raise HubError(tr('ModelScope 返回错误：{v1}', v1=d.get('Message') or d.get('Code')))
         files = (d.get("Data") or {}).get("Files") or []
         return [RepoFile(f["Path"], int(f.get("Size") or 0))
                 for f in files if f.get("Type") != "tree" and f.get("Path")]
@@ -91,7 +93,7 @@ def _safe_dest(root: str, path: str) -> str:
     dest = os.path.normpath(os.path.join(root, *path.split("/")))
     if os.path.isabs(path) or os.path.commonpath([os.path.abspath(dest), os.path.abspath(root)]) \
             != os.path.abspath(root):
-        raise HubError(f"仓库文件路径不安全，已拒绝：{path}")
+        raise HubError(tr('仓库文件路径不安全，已拒绝：{path}', path=path))
     return dest
 
 
@@ -106,12 +108,12 @@ def resolve_listing(repos: Dict[str, str], sources: Iterable[str] = SOURCE_ORDER
         try:
             files = [f for f in list_files(src, repo) if not _skipped(f.path, skip)]
         except Exception as e:
-            errors.append(f"{SOURCE_LABELS.get(src, src)}: {e}")
+            errors.append(f"{tr(SOURCE_LABELS.get(src, src))}: {e}")
             continue
         if files:
             return src, files
-        errors.append(f"{SOURCE_LABELS.get(src, src)}: 文件清单为空")
-    raise HubError("无法从任何下载源获取模型文件清单（请检查网络）：\n" + "\n".join(errors))
+        errors.append(tr('{source}: 文件清单为空', source=tr(SOURCE_LABELS.get(src, src))))
+    raise HubError(tr("无法从任何下载源获取模型文件清单（请检查网络）：\n") + "\n".join(errors))
 
 
 def _check_disk(path: str, need: int) -> None:
@@ -126,7 +128,7 @@ def _check_disk(path: str, need: int) -> None:
     free = shutil.disk_usage(probe).free
     if free < need * 1.05:
         gb = 1024 ** 3
-        raise HubError(f"磁盘空间不足：需要约 {need / gb:.1f} GB，可用 {free / gb:.1f} GB（{probe}）")
+        raise HubError(tr('磁盘空间不足：需要约 {v1:.1f} GB，可用 {v2:.1f} GB（{probe}）', v1=need / gb, v2=free / gb, probe=probe))
 
 
 def _read_done(partial: str) -> set:
@@ -168,7 +170,7 @@ def snapshot_download(repos: Dict[str, str], target_dir: str, description: str =
     desc = description or os.path.basename(target_dir)
 
     if should_stop and should_stop():
-        raise _te.StopRequested("用户暂停")
+        raise _te.StopRequested(tr("用户暂停"))
     primary, files = resolve_listing(repos, sources, skip)
     partial = partial_dir(target_dir)
     os.makedirs(partial, exist_ok=True)
@@ -181,7 +183,7 @@ def snapshot_download(repos: Dict[str, str], target_dir: str, description: str =
         if f.path in done:
             continue
         if should_stop and should_stop():
-            raise _te.StopRequested("用户暂停")
+            raise _te.StopRequested(tr("用户暂停"))
         dest = _safe_dest(partial, f.path)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         errors = []
@@ -196,14 +198,14 @@ def snapshot_download(repos: Dict[str, str], target_dir: str, description: str =
                 if f.size and os.path.getsize(dest) != f.size:
                     got = os.path.getsize(dest)
                     os.remove(dest)  # 大小不符：丢弃，换源重下
-                    raise HubError(f"文件大小不符（应为 {f.size}，实得 {got}）")
+                    raise HubError(tr('文件大小不符（应为 {size}，实得 {got}）', size=f.size, got=got))
                 break
             except _te.StopRequested:
                 raise
             except Exception as e:
-                errors.append(f"{SOURCE_LABELS.get(src, src)}: {e}")
+                errors.append(f"{tr(SOURCE_LABELS.get(src, src))}: {e}")
         else:
-            raise HubError(f"下载失败：{f.path}\n" + "\n".join(errors))
+            raise HubError(tr('下载失败：{path}\n', path=f.path) + "\n".join(errors))
         done.add(f.path)
         _write_done(partial, done)
 

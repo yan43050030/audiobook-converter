@@ -27,6 +27,7 @@
 - 支持多种音频格式（mp3 / wav / m4a / flac / ogg / aac / wma）
 
 ### UI/UX
+- 界面语言：简体中文 / English（「外观」面板切换，默认跟随系统；也可用环境变量 `AUDIOBOOK_LANG=en` 指定）
 - 深色/浅色主题切换
 - 键盘快捷键
 - 章节搜索过滤

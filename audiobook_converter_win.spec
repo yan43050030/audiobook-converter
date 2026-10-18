@@ -83,6 +83,7 @@ all_hidden = base_hidden + piper_hidden + onnx_hidden + pygame_hidden + _doc_hid
     'audiobook.engines', 'audiobook.engines.base', 'audiobook.engines.local',
     'audiobook.engines.edge', 'audiobook.engines.piper', 'audiobook.engines.cosyvoice', 'audiobook.engines.clone', 'audiobook.cloning', 'audiobook.cloning.profiles', 'audiobook.cloning.client',
     'audiobook.engines.asr',
+    'audiobook.i18n', 'audiobook.locales', 'audiobook.locales.en',
     # ASR 语音转文字
     'faster_whisper', 'ctranslate2',
     # Qt6 GUI（PySide6 推荐）

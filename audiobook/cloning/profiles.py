@@ -19,6 +19,8 @@ import wave
 from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional, Tuple
 
+from audiobook.i18n import tr
+
 PROFILE_DIRNAME = "voice-profiles"
 VOICE_PREFIX = "clone:"
 MIN_SECONDS = 3.0
@@ -70,7 +72,7 @@ def parse_voice_id(voice: str) -> Optional[str]:
 
 def _check_id(pid: str) -> str:
     if not isinstance(pid, str) or not _ID_RE.match(pid):
-        raise ProfileError(f"无效的音色 ID: {pid!r}")
+        raise ProfileError(tr('无效的音色 ID: {pid!r}', pid=pid))
     return pid
 
 
@@ -126,7 +128,7 @@ def voice_map(storage_dir: Optional[str] = None) -> Dict[str, str]:
         counts[p.name] = counts.get(p.name, 0) + 1
     out: Dict[str, str] = {}
     for p in profiles:
-        disp = p.name if counts[p.name] == 1 else f"{p.name}（{p.id[-4:]}）"
+        disp = p.name if counts[p.name] == 1 else tr('{name}（{v1}）', name=p.name, v1=p.id[-4:])
         out[disp] = p.voice_id
     return out
 
@@ -143,14 +145,14 @@ def _normalize_audio(src: str, dst: str) -> None:
     import tts_engine as _te
     ff = _te._ffmpeg_path()
     if not ff:
-        raise ProfileError("需要 ffmpeg 才能处理参考音频。\n" + _te._ffmpeg_install_hint())
+        raise ProfileError(tr("需要 ffmpeg 才能处理参考音频。\n") + _te._ffmpeg_install_hint())
     cmd = [ff, "-y", "-hide_banner", "-loglevel", "error", "-i", src,
            "-t", str(MAX_SECONDS), "-ac", "1", "-ar", str(SAMPLE_RATE),
            "-sample_fmt", "s16", dst]
     r = subprocess.run(cmd, capture_output=True, **_te._quiet_popen_kwargs())
     if r.returncode != 0 or not os.path.isfile(dst):
         err = r.stderr.decode("utf-8", errors="replace").strip()
-        raise ProfileError(f"无法读取参考音频（格式不支持或文件损坏）：{err[:200]}")
+        raise ProfileError(tr('无法读取参考音频（格式不支持或文件损坏）：{v1}', v1=err[:200]))
 
 
 def prepare_reference(audio_path: str) -> Tuple[str, float]:
@@ -160,7 +162,7 @@ def prepare_reference(audio_path: str) -> Tuple[str, float]:
     保证文字稿与实际使用的音频一致。调用方负责删除返回路径所在的临时目录。
     """
     if not audio_path or not os.path.isfile(audio_path):
-        raise ProfileError(f"参考音频不存在: {audio_path}")
+        raise ProfileError(tr('参考音频不存在: {audio_path}', audio_path=audio_path))
     d = tempfile.mkdtemp(prefix="clone_ref_")
     wav = os.path.join(d, "prompt.wav")
     try:
@@ -177,9 +179,9 @@ def create_profile(name: str, audio_path: str, prompt_text: str = "",
                    storage_dir: Optional[str] = None) -> VoiceProfile:
     name = (name or "").strip()
     if not name:
-        raise ProfileError("请给音色起个名字")
+        raise ProfileError(tr("请给音色起个名字"))
     if not audio_path or not os.path.isfile(audio_path):
-        raise ProfileError(f"参考音频不存在: {audio_path}")
+        raise ProfileError(tr('参考音频不存在: {audio_path}', audio_path=audio_path))
 
     root = profiles_dir(storage_dir)
     os.makedirs(root, exist_ok=True)
@@ -191,8 +193,7 @@ def create_profile(name: str, audio_path: str, prompt_text: str = "",
         _normalize_audio(audio_path, wav)
         duration = _wav_duration(wav)
         if duration < MIN_SECONDS:
-            raise ProfileError(f"参考音频太短（{duration:.1f} 秒），至少需要 {MIN_SECONDS:.0f} 秒，"
-                               "建议 5–15 秒的清晰人声。")
+            raise ProfileError(tr('参考音频太短（{duration:.1f} 秒），至少需要 {MIN_SECONDS:.0f} 秒，建议 5–15 秒的清晰人声。', duration=duration, MIN_SECONDS=MIN_SECONDS))
         profile = VoiceProfile(id=pid, name=name, prompt_text=(prompt_text or "").strip(),
                                duration=round(duration, 2), created_at=time.time(), path=dirpath)
         _save(profile)
@@ -206,10 +207,10 @@ def update_profile(pid: str, name: Optional[str] = None, prompt_text: Optional[s
                    storage_dir: Optional[str] = None) -> VoiceProfile:
     p = get_profile(_check_id(pid), storage_dir)
     if p is None:
-        raise ProfileError(f"音色不存在: {pid}")
+        raise ProfileError(tr('音色不存在: {pid}', pid=pid))
     if name is not None:
         if not name.strip():
-            raise ProfileError("名字不能为空")
+            raise ProfileError(tr("名字不能为空"))
         p.name = name.strip()
     if prompt_text is not None:
         p.prompt_text = prompt_text.strip()
@@ -221,5 +222,5 @@ def delete_profile(pid: str, storage_dir: Optional[str] = None) -> None:
     _check_id(pid)
     dirpath = os.path.join(profiles_dir(storage_dir), pid)
     if not os.path.isdir(dirpath):
-        raise ProfileError(f"音色不存在: {pid}")
+        raise ProfileError(tr('音色不存在: {pid}', pid=pid))
     shutil.rmtree(dirpath)

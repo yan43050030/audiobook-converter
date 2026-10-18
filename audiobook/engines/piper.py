@@ -20,6 +20,7 @@ from collections import OrderedDict
 from typing import List, Optional
 
 from audiobook.engines.base import Engine
+from audiobook.i18n import tr
 
 # 可选导入 - Piper Python 包
 try:
@@ -134,7 +135,7 @@ def fetch_piper_voice_catalog(force_refresh: bool = False, should_stop=None) -> 
         except Exception:
             pass
     _te._download_file_with_progress(PIPER_VOICES_JSON_URL, cache_path,
-                                     "Piper 语音目录", should_stop=should_stop)
+                                     tr("Piper 语音目录"), should_stop=should_stop)
     with open(cache_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -167,7 +168,7 @@ def download_piper_voice_from_catalog(voice_key: str, should_stop=None) -> str:
     catalog = fetch_piper_voice_catalog(should_stop=should_stop)
     meta = catalog.get(voice_key)
     if not meta:
-        raise ValueError(f"语音目录中没有: {voice_key}")
+        raise ValueError(tr('语音目录中没有: {voice_key}', voice_key=voice_key))
 
     model_dir = _te.get_piper_model_dir()
     onnx_path = None
@@ -182,7 +183,7 @@ def download_piper_voice_from_catalog(voice_key: str, should_stop=None) -> str:
             onnx_path = dst
 
     if not onnx_path:
-        raise RuntimeError(f"语音 {voice_key} 的目录条目中没有 .onnx 模型文件")
+        raise RuntimeError(tr('语音 {voice_key} 的目录条目中没有 .onnx 模型文件', voice_key=voice_key))
     refresh_piper_voices()
     return onnx_path
 
@@ -191,9 +192,9 @@ def download_piper_voice_from_catalog(voice_key: str, should_stop=None) -> str:
 
 def _piper_install_hint() -> str:
     return (
-        "方式 1: pip install piper-tts\n"
+        tr("方式 1: pip install piper-tts\n"
         "方式 2: 从 https://github.com/rhasspy/piper/releases 下载 piper 可执行文件，\n"
-        "        放入便携 bin 目录或系统 PATH"
+        "        放入便携 bin 目录或系统 PATH")
     )
 
 
@@ -212,7 +213,7 @@ def _get_piper_mode() -> str:
     import tts_engine as _te
     if _te._refresh_piper_cli_path():
         return PIPER_MODE_CLI
-    raise RuntimeError("Piper TTS 不可用。\n" + _piper_install_hint())
+    raise RuntimeError(tr("Piper TTS 不可用。\n") + _piper_install_hint())
 
 
 # ======== 模型缓存（LRU，每线程上限 2 个模型） ========
@@ -253,7 +254,7 @@ def _load_piper_model(voice_name, should_stop=None):
 
     if mode == PIPER_MODE_PYTHON:
         if not os.path.exists(config_path):
-            raise FileNotFoundError(f"Piper配置文件不存在: {config_path}")
+            raise FileNotFoundError(tr('Piper配置文件不存在: {config_path}', config_path=config_path))
         voice_model = PiperVoice.load(model_path, _piper_config_path(model_path))
         # LRU：达到上限时淘汰最久未使用的
         if len(cache) >= MAX_PIPER_CACHE:
@@ -265,7 +266,7 @@ def _load_piper_model(voice_name, should_stop=None):
     else:
         # CLI模式：仅验证文件存在，不加载到内存
         if not os.path.exists(config_path):
-            raise FileNotFoundError(f"Piper配置文件不存在: {config_path}")
+            raise FileNotFoundError(tr('Piper配置文件不存在: {config_path}', config_path=config_path))
         cache[cache_key] = None  # CLI模式缓存标记
         logger.info(f"Piper CLI模式就绪: {voice_name}")
         return None
@@ -338,14 +339,14 @@ def _download_piper_model(voice_name, should_stop=None):
     """下载内置 Piper 语音的模型文件与配置"""
     import tts_engine as _te
     if voice_name not in PIPER_MODEL_URLS:
-        raise ValueError(f"不支持的Piper语音: {voice_name}")
+        raise ValueError(tr('不支持的Piper语音: {voice_name}', voice_name=voice_name))
 
     model_path = _get_piper_model_path(voice_name)
     config_path = model_path + ".json"
     _te._download_file_with_progress(PIPER_MODEL_URLS[voice_name], model_path,
-                                     f"Piper模型 {voice_name}", should_stop=should_stop)
+                                     tr('Piper模型 {voice_name}', voice_name=voice_name), should_stop=should_stop)
     _te._download_file_with_progress(PIPER_CONFIG_URLS[voice_name], config_path,
-                                     f"Piper配置 {voice_name}", should_stop=should_stop)
+                                     tr('Piper配置 {voice_name}', voice_name=voice_name), should_stop=should_stop)
     logger.info(f"Piper模型下载完成: {voice_name}")
 
 
@@ -370,7 +371,7 @@ def _piper_generate_cli(text, voice_name, speed, wav_path, should_stop=None):
     config_path = _piper_config_path(model_path)
     cli_path = _te._refresh_piper_cli_path()
     if not cli_path:
-        raise RuntimeError("Piper CLI 不可用。\n" + _piper_install_hint())
+        raise RuntimeError(tr("Piper CLI 不可用。\n") + _piper_install_hint())
 
     cmd = [
         cli_path,
@@ -386,7 +387,7 @@ def _piper_generate_cli(text, voice_name, speed, wav_path, should_stop=None):
     )
     if rc != 0:
         stderr = err.decode("utf-8", errors="replace") if err else ""
-        raise RuntimeError(f"Piper CLI失败 (code {rc}): {stderr}")
+        raise RuntimeError(tr('Piper CLI失败 (code {rc}): {stderr}', rc=rc, stderr=stderr))
 
 
 def _piper_sample_rate(voice_model) -> int:
@@ -456,7 +457,7 @@ def _piper_synthesize_to_wav(voice_model, text: str, speed: float,
             wf.setframerate(sample_rate)
             for chunk in iterator:
                 if should_stop and should_stop():
-                    raise _te.StopRequested("用户暂停")
+                    raise _te.StopRequested(tr("用户暂停"))
                 # 首块若携带 sample_rate，则修正
                 sr = getattr(chunk, "sample_rate", None)
                 if isinstance(sr, int) and sr > 0 and sr != sample_rate:
@@ -474,7 +475,7 @@ def _piper_synthesize_to_wav(voice_model, text: str, speed: float,
         pcm = bytearray()
         for audio_bytes in voice_model.synthesize_stream_raw(text, speed=speed):
             if should_stop and should_stop():
-                raise _te.StopRequested("用户暂停")
+                raise _te.StopRequested(tr("用户暂停"))
             pcm.extend(audio_bytes)
         with wave.open(wav_path, "wb") as wf:
             wf.setnchannels(1)
@@ -484,8 +485,8 @@ def _piper_synthesize_to_wav(voice_model, text: str, speed: float,
         return
 
     raise RuntimeError(
-        "Piper API 不兼容：未找到 synthesize 或 synthesize_stream_raw 方法。"
-        "\n请升级或重装 piper-tts。"
+        tr("Piper API 不兼容：未找到 synthesize 或 synthesize_stream_raw 方法。"
+        "\n请升级或重装 piper-tts。")
     )
 
 
@@ -493,10 +494,10 @@ def _piper_generate(text, voice, rate, output_path, should_stop=None):
     """用 Piper 把一段文本合成为 MP3（单次尝试，Python 包 / CLI 两种后端）"""
     import tts_engine as _te
     if not _piper_available():
-        raise RuntimeError("Piper TTS 不可用。\n" + _piper_install_hint())
+        raise RuntimeError(tr("Piper TTS 不可用。\n") + _piper_install_hint())
     # 与就绪检测一致只要求 ffmpeg：WAV→MP3 由 _wav_to_mp3 负责（有 pydub 用 pydub，否则直接调 ffmpeg）
     if _te._ffmpeg_path() is None:
-        raise RuntimeError("ffmpeg 未安装，Piper 引擎需要 ffmpeg 进行 WAV→MP3 转换。\n"
+        raise RuntimeError(tr("ffmpeg 未安装，Piper 引擎需要 ffmpeg 进行 WAV→MP3 转换。\n")
                            + _te._ffmpeg_install_hint())
 
     voice_model = _load_piper_model(voice, should_stop=should_stop)
@@ -512,7 +513,7 @@ def _piper_generate(text, voice, rate, output_path, should_stop=None):
             _piper_generate_cli(text, voice, speed, wav_path, should_stop=should_stop)
 
         if should_stop and should_stop():
-            raise _te.StopRequested("用户暂停")
+            raise _te.StopRequested(tr("用户暂停"))
         _te._wav_to_mp3(wav_path, output_path)
     finally:
         if os.path.exists(wav_path):

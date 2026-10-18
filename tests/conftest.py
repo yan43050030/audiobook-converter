@@ -11,6 +11,10 @@ _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
+# 界面语言默认跟随系统；CI 机器多为英文环境。现有界面测试按中文文案断言，
+# 这里固定为中文保证结果确定；英文界面由 test_i18n.py 显式切换验证。
+os.environ["AUDIOBOOK_LANG"] = "zh"
+
 
 @pytest.fixture
 def temp_dir():

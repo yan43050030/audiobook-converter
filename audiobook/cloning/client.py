@@ -20,6 +20,8 @@ import threading
 import time
 from typing import Optional, Tuple
 
+from audiobook.i18n import tr
+
 WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bridge_worker.py")
 PING_TIMEOUT = 120
 LOAD_TIMEOUT = 900
@@ -108,10 +110,10 @@ def _python_problem() -> str:
     """解释器配置问题（空串 = 没问题）。"""
     py = resolve_python()
     if not py:
-        return ("尚未配置 CosyVoice 的 Python 解释器。\n"
-                "请在「🎙 克隆音色… → 环境设置」里指定装好 CosyVoice 的 python（conda / venv 中的 python）。")
+        return (tr("尚未配置 CosyVoice 的 Python 解释器。\n"
+                "请在「🎙 克隆音色… → 环境设置」里指定装好 CosyVoice 的 python（conda / venv 中的 python）。"))
     if os.path.isabs(py) and not os.path.isfile(py):
-        return f"配置的 Python 解释器不存在：{py}"
+        return tr('配置的 Python 解释器不存在：{py}', py=py)
     return ""
 
 
@@ -123,14 +125,14 @@ def readiness(storage_dir: Optional[str] = None) -> Tuple[bool, str]:
         return False, problem
     md = resolve_model_dir(storage_dir)
     if not md:
-        return False, ("未找到可用于克隆的 CosyVoice 模型（Fun-CosyVoice3-0.5B / CosyVoice2-0.5B）。\n"
+        return False, (tr("未找到可用于克隆的 CosyVoice 模型（Fun-CosyVoice3-0.5B / CosyVoice2-0.5B）。\n"
                        "可在「声音克隆 → 环境设置」点「下载」获取（或命令行 "
                        "audiobook models get cosyvoice Fun-CosyVoice3-0.5B），"
-                       "也可自行放到存储目录的 cosyvoice-models/ 下，或在设置里指定模型目录。")
+                       "也可自行放到存储目录的 cosyvoice-models/ 下，或在设置里指定模型目录。"))
     n = len(profiles.list_profiles(storage_dir))
     if n == 0:
-        return False, "还没有克隆音色：先用一段 5–15 秒的清晰人声创建一个。"
-    return True, f"声音克隆可用（{model_type(md)}，{n} 个音色）"
+        return False, tr("还没有克隆音色：先用一段 5–15 秒的清晰人声创建一个。")
+    return True, tr('声音克隆可用（{v1}，{n} 个音色）', v1=model_type(md), n=n)
 
 
 def sft_readiness(storage_dir: Optional[str] = None) -> Tuple[bool, str]:
@@ -140,9 +142,9 @@ def sft_readiness(storage_dir: Optional[str] = None) -> Tuple[bool, str]:
         return False, problem
     md = resolve_sft_model_dir(storage_dir)
     if not md:
-        return False, ("未找到 CosyVoice-300M-SFT 模型（预置中文男女声等）。\n"
-                       "可在「模型管理」下载，或命令行 audiobook models get cosyvoice CosyVoice-300M-SFT。")
-    return True, f"CosyVoice 可用（预置说话人，{os.path.basename(md)}）"
+        return False, (tr("未找到 CosyVoice-300M-SFT 模型（预置中文男女声等）。\n"
+                       "可在「模型管理」下载，或命令行 audiobook models get cosyvoice CosyVoice-300M-SFT。"))
+    return True, tr('CosyVoice 可用（预置说话人，{v1}）', v1=os.path.basename(md))
 
 
 # ---------------- 桥接进程 ----------------
@@ -164,7 +166,7 @@ class CloneBridge:
 
     def start(self) -> None:
         if not os.path.isfile(WORKER):
-            raise CloneBridgeError(f"找不到声音克隆桥接脚本：{WORKER}（安装包不完整？）")
+            raise CloneBridgeError(tr('找不到声音克隆桥接脚本：{WORKER}（安装包不完整？）', WORKER=WORKER))
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUNBUFFERED"] = "1"
@@ -182,7 +184,7 @@ class CloneBridge:
                 env=env, text=True, encoding="utf-8", errors="replace", bufsize=1,
                 cwd=self.repo or None, **_te._quiet_popen_kwargs())
         except OSError as e:
-            raise CloneBridgeError(f"无法启动 CosyVoice 桥接进程（{self.python}）：{e}")
+            raise CloneBridgeError(tr('无法启动 CosyVoice 桥接进程（{python}）：{e}', python=self.python, e=e))
         self._q = queue.Queue()
         threading.Thread(target=self._reader, args=(self.proc, self._q), daemon=True).start()
 
@@ -240,7 +242,7 @@ class CloneBridge:
             except (BrokenPipeError, OSError):
                 tail = self._log_tail()
                 self.close(force=True)
-                raise CloneBridgeError("CosyVoice 桥接进程已退出。" + (f"\n日志：\n{tail}" if tail else ""))
+                raise CloneBridgeError(tr("CosyVoice 桥接进程已退出。") + (tr('\n日志：\n{tail}', tail=tail) if tail else ""))
 
             deadline = time.monotonic() + timeout
             while True:
@@ -248,10 +250,10 @@ class CloneBridge:
                     # 推理无法中途取消：直接结束子进程，下次调用会自动重启并重新加载模型
                     self.close(force=True)
                     import tts_engine as _te
-                    raise _te.StopRequested("用户暂停")
+                    raise _te.StopRequested(tr("用户暂停"))
                 if time.monotonic() > deadline:
                     self.close(force=True)
-                    raise CloneBridgeError(f"CosyVoice 响应超时（{cmd}，{int(timeout)} 秒）")
+                    raise CloneBridgeError(tr('CosyVoice 响应超时（{cmd}，{v1} 秒）', cmd=cmd, v1=int(timeout)))
                 try:
                     line = self._q.get(timeout=0.25)
                 except queue.Empty:
@@ -259,8 +261,8 @@ class CloneBridge:
                 if line is None:
                     tail = self._log_tail()
                     self.close(force=True)
-                    raise CloneBridgeError("CosyVoice 桥接进程意外退出。"
-                                           + (f"\n日志：\n{tail}" if tail else ""))
+                    raise CloneBridgeError(tr("CosyVoice 桥接进程意外退出。")
+                                           + (tr('\n日志：\n{tail}', tail=tail) if tail else ""))
                 try:
                     resp = json.loads(line)
                 except ValueError:
@@ -268,7 +270,7 @@ class CloneBridge:
                 if resp.get("id") != rid:
                     continue
                 if not resp.get("ok"):
-                    raise CloneBridgeError(resp.get("error") or "CosyVoice 处理失败")
+                    raise CloneBridgeError(resp.get("error") or tr("CosyVoice 处理失败"))
                 return resp
 
 

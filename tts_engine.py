@@ -13,6 +13,8 @@ import time
 from shutil import which
 from typing import Callable, List, Optional
 
+from audiobook.i18n import tr
+
 try:
     from pydub import AudioSegment
     PYDUB_AVAILABLE = True
@@ -371,11 +373,11 @@ def scan_storage_dependencies() -> dict:
 
     missing: List[str] = []
     if ffmpeg is None:
-        missing.append("ffmpeg（Piper/本地语音 MP3 转换依赖）")
+        missing.append(tr("ffmpeg（Piper/本地语音 MP3 转换依赖）"))
     if not PIPER_PYTHON_AVAILABLE and piper_cli is None:
-        missing.append("Piper 可执行文件（pip 未装 piper-tts 时需外置 piper）")
+        missing.append(tr("Piper 可执行文件（pip 未装 piper-tts 时需外置 piper）"))
     if not models:
-        missing.append("Piper 语音包（.onnx 模型）")
+        missing.append(tr("Piper 语音包（.onnx 模型）"))
 
     return {
         "storage_dir": storage,
@@ -520,16 +522,16 @@ def check_external_engine_ready(engine_id: str) -> tuple[bool, str]:
     engines = _scan_external_engines()
     info = engines.get(engine_id)
     if not info:
-        return False, f"外部引擎 '{engine_id}' 未安装。\n请将引擎可执行文件放入便携存储目录的 engines/{engine_id}/ 中。"
+        return False, tr("外部引擎 '{engine_id}' 未安装。\n请将引擎可执行文件放入便携存储目录的 engines/{engine_id}/ 中。", engine_id=engine_id)
     executable = info["executable"]
     if not os.path.isfile(executable):
-        return False, f"引擎可执行文件不存在: {executable}"
+        return False, tr('引擎可执行文件不存在: {executable}', executable=executable)
     # 尝试获取语音列表验证
     voices = _list_external_voices(engine_id, executable)
     if not voices:
         # 不视为错误：引擎可能还在初始化
         pass
-    return True, f"{info['name']} 可用（{len(voices)} 个语音）"
+    return True, tr('{v1} 可用（{v2} 个语音）', v1=info['name'], v2=len(voices))
 
 
 def _external_generate(text: str, voice: str, rate: str, output_path: str,
@@ -551,9 +553,9 @@ def _external_generate(text: str, voice: str, rate: str, output_path: str,
     rc, _out, err = _run_subprocess_interruptible(cmd, should_stop=should_stop)
     if rc != 0:
         stderr = err.decode("utf-8", errors="replace") if err else ""
-        raise RuntimeError(f"外部引擎 '{engine_id}' 失败 (code {rc}): {stderr}")
+        raise RuntimeError(tr("外部引擎 '{engine_id}' 失败 (code {rc}): {stderr}", engine_id=engine_id, rc=rc, stderr=stderr))
     if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-        raise RuntimeError(f"外部引擎 '{engine_id}' 生成文件为空: {output_path}")
+        raise RuntimeError(tr("外部引擎 '{engine_id}' 生成文件为空: {output_path}", engine_id=engine_id, output_path=output_path))
 
 
 # ======== 通用配置 ========
@@ -594,7 +596,7 @@ def _detect_local_voices_macos() -> dict:
             if match:
                 voice_name = match.group(1)
                 lang = match.group(2)
-                display = f"{voice_name}（中文）" if lang == "zh_CN" else f"{voice_name}（{lang}）"
+                display = tr('{voice_name}（中文）', voice_name=voice_name) if lang == "zh_CN" else tr('{voice_name}（{lang}）', voice_name=voice_name, lang=lang)
                 voices[display] = voice_name
     except Exception as e:
         logger.warning(f"macOS 语音检测失败: {e}")
@@ -635,8 +637,9 @@ def _detect_local_voices_windows() -> dict:
                 continue
             if culture.lower().startswith("zh"):
                 gender = parts[2].strip() if len(parts) > 2 else ""
-                gender_tag = "女声" if "Female" in gender else ("男声" if "Male" in gender else "")
-                display = f"{name}（{culture}{('，' + gender_tag) if gender_tag else ''}）"
+                gender_tag = tr("女声") if "Female" in gender else (tr("男声") if "Male" in gender else "")
+                display = (tr("{name}（{culture}，{gender}）", name=name, culture=culture, gender=gender_tag)
+                           if gender_tag else tr("{name}（{culture}）", name=name, culture=culture))
                 voices[display] = name
     except Exception as e:
         logger.warning(f"Windows 语音检测失败: {e}")
@@ -670,7 +673,7 @@ def _detect_local_voices_linux() -> dict:
                 continue
             # 用语言标识符（cmn / cmn-latn-pinyin 等）作为 voice_id：espeak-ng 能
             # 直接以 `-v <lang>` 解析出可用语音，避免选到不可用的 VoiceName。
-            display = f"{voice_name}（{lang}）"
+            display = tr('{voice_name}（{lang}）', voice_name=voice_name, lang=lang)
             voices[display] = lang
         # 至少保留一个默认选项（bare `zh` 由 espeak-ng 解析为可用的普通话语音）
         if not voices:
@@ -689,22 +692,22 @@ def _detect_local_voices() -> dict:
         voices = _detect_local_voices_macos()
         if not voices:
             _LOCAL_UNAVAILABLE_REASON = (
-                "macOS 未检测到中文语音。\n"
-                "请在 系统设置 → 辅助功能 → 语音内容 → 系统语音 中下载中文语音包。"
+                tr("macOS 未检测到中文语音。\n"
+                "请在 系统设置 → 辅助功能 → 语音内容 → 系统语音 中下载中文语音包。")
             )
         return voices
 
     if _PLATFORM == "Windows":
         ps = which("powershell") or which("pwsh")
         if not ps:
-            _LOCAL_UNAVAILABLE_REASON = "未找到 powershell，无法调用 Windows 系统语音。"
+            _LOCAL_UNAVAILABLE_REASON = tr("未找到 powershell，无法调用 Windows 系统语音。")
             return {}
         voices = _detect_local_voices_windows()
         if not voices:
             _LOCAL_UNAVAILABLE_REASON = (
-                "Windows 未检测到中文语音。\n"
+                tr("Windows 未检测到中文语音。\n"
                 "请在 设置 → 时间和语言 → 语言 → 添加中文 → 安装语音包；\n"
-                "或 设置 → 辅助功能 → 讲述人 → 添加自然语音 中下载中文语音。"
+                "或 设置 → 辅助功能 → 讲述人 → 添加自然语音 中下载中文语音。")
             )
         return voices
 
@@ -712,15 +715,15 @@ def _detect_local_voices() -> dict:
         espeak = which("espeak-ng") or which("espeak")
         if not espeak:
             _LOCAL_UNAVAILABLE_REASON = (
-                "未检测到 espeak-ng。请安装：\n"
+                tr("未检测到 espeak-ng。请安装：\n"
                 "  Debian/Ubuntu: sudo apt install espeak-ng\n"
                 "  Fedora:        sudo dnf install espeak-ng\n"
-                "  Arch:          sudo pacman -S espeak-ng"
+                "  Arch:          sudo pacman -S espeak-ng")
             )
             return {}
         return _detect_local_voices_linux()
 
-    _LOCAL_UNAVAILABLE_REASON = f"暂不支持的平台：{_PLATFORM}"
+    _LOCAL_UNAVAILABLE_REASON = tr('暂不支持的平台：{_PLATFORM}', _PLATFORM=_PLATFORM)
     return {}
 
 
@@ -836,10 +839,10 @@ _COSYVOICE_SPK_ALIASES = {
 def _cosyvoice_install_hint() -> str:
     """CosyVoice 安装引导提示"""
     return (
-        "CosyVoice 需要单独安装（依赖 torch）：\n"
+        tr("CosyVoice 需要单独安装（依赖 torch）：\n"
         "1. 按 README「声音克隆」一节安装 CosyVoice，并在「🎙 克隆音色… → 环境设置」里填写其 Python 与仓库路径；\n"
         "2. 在「模型管理」下载 CosyVoice-300M-SFT 模型；\n"
-        "3. 或将 CosyVoice 可执行文件放入 engines/cosyvoice/ 作为外挂引擎"
+        "3. 或将 CosyVoice 可执行文件放入 engines/cosyvoice/ 作为外挂引擎")
     )
 
 
@@ -847,7 +850,7 @@ def _download_cosyvoice_model(model_key: str, should_stop=None):
     """整库下载 CosyVoice 模型到 cosyvoice-models/<model_key>/（可续传，完成后才出现目录）"""
     meta = COSYVOICE_MODELS.get(model_key)
     if meta is None:
-        raise ValueError(f"不支持的 CosyVoice 模型: {model_key}（可选：{', '.join(COSYVOICE_MODELS)}）")
+        raise ValueError(tr('不支持的 CosyVoice 模型: {model_key}（可选：{v1}）', model_key=model_key, v1=', '.join(COSYVOICE_MODELS)))
     from audiobook.io import hub
     extract_dir = os.path.join(get_cosyvoice_model_dir(), model_key)
     hub.snapshot_download(meta["repos"], extract_dir, f"CosyVoice {model_key}",
@@ -953,7 +956,7 @@ def _run_subprocess_interruptible(cmd, should_stop=None, input_bytes: Optional[b
                 except subprocess.TimeoutExpired:
                     proc.kill()
             finally:
-                raise StopRequested("用户暂停")
+                raise StopRequested(tr("用户暂停"))
         if timeout is not None and (time.monotonic() - start) > timeout:
             proc.kill()
             raise subprocess.TimeoutExpired(cmd, timeout)
@@ -1041,31 +1044,31 @@ def _ffmpeg_install_hint() -> str:
     if _PLATFORM == "Darwin":
         return "macOS: brew install ffmpeg"
     if _PLATFORM == "Windows":
-        return "Windows: 从 https://www.gyan.dev/ffmpeg/builds/ 下载 ffmpeg.exe，放入便携 bin 目录或系统 PATH"
-    return "Linux: sudo apt install ffmpeg（或对应发行版包管理器）"
+        return tr("Windows: 从 https://www.gyan.dev/ffmpeg/builds/ 下载 ffmpeg.exe，放入便携 bin 目录或系统 PATH")
+    return tr("Linux: sudo apt install ffmpeg（或对应发行版包管理器）")
 
 
 def check_engine_ready(engine="edge"):
     """检测引擎是否可用，返回 (ready: bool, message: str)"""
     if engine == "edge":
         if not EDGE_TTS_AVAILABLE:
-            return False, "Edge TTS 未安装。\n请运行: pip install edge-tts"
-        return True, "Edge TTS 可用（微软在线语音，需要联网）"
+            return False, tr("Edge TTS 未安装。\n请运行: pip install edge-tts")
+        return True, tr("Edge TTS 可用（微软在线语音，需要联网）")
 
     if engine == "local":
         _ensure_local_voices()
         if LOCAL_VOICES:
             plat_name = {"Darwin": "macOS", "Windows": "Windows", "Linux": "Linux"}.get(_PLATFORM, _PLATFORM)
-            return True, f"{plat_name} 系统语音可用（{len(LOCAL_VOICES)} 个中文语音）"
-        reason = _LOCAL_UNAVAILABLE_REASON or "未检测到中文系统语音"
-        return False, f"本地语音不可用：\n{reason}"
+            return True, tr('{plat_name} 系统语音可用（{v1} 个中文语音）', plat_name=plat_name, v1=len(LOCAL_VOICES))
+        reason = _LOCAL_UNAVAILABLE_REASON or tr("未检测到中文系统语音")
+        return False, tr('本地语音不可用：\n{reason}', reason=reason)
 
     if engine == "piper":
         if not _piper_available():
-            return False, "Piper 未安装。\n" + _piper_install_hint()
+            return False, tr("Piper 未安装。\n") + _piper_install_hint()
         if _ffmpeg_path() is None:
-            return False, "ffmpeg 未安装（Piper 需要 ffmpeg 转换音频）。\n" + _ffmpeg_install_hint()
-        return True, "Piper 可用（首次使用将自动下载语音模型）"
+            return False, tr("ffmpeg 未安装（Piper 需要 ffmpeg 转换音频）。\n") + _ffmpeg_install_hint()
+        return True, tr("Piper 可用（首次使用将自动下载语音模型）")
 
     if engine == "clone":
         from audiobook.cloning.client import readiness
@@ -1078,14 +1081,14 @@ def check_engine_ready(engine="edge"):
             return True, msg
         ext = _scan_external_engines()
         if "cosyvoice" in ext:
-            return True, f"CosyVoice 外挂引擎可用（{ext['cosyvoice'].get('name')}）"
+            return True, tr('CosyVoice 外挂引擎可用（{v1}）', v1=ext['cosyvoice'].get('name'))
         return False, msg + "\n\n" + _cosyvoice_install_hint()
 
     # 外部引擎
     if _is_external_engine(engine):
         return check_external_engine_ready(engine)
 
-    return False, f"未知引擎: {engine}"
+    return False, tr('未知引擎: {engine}', engine=engine)
 
 
 # estimate_duration / sanitize_filename 已迁至 audiobook.core.text（顶部再导入）
@@ -1125,7 +1128,7 @@ def _download_file_with_progress(url, filepath, description="", timeout=60, shou
 
     for try_url in urls_to_try:
         if should_stop and should_stop():
-            raise StopRequested("用户暂停")
+            raise StopRequested(tr("用户暂停"))
         try:
             _download_file_single(try_url, filepath, description, timeout, should_stop=should_stop)
             return
@@ -1135,7 +1138,7 @@ def _download_file_with_progress(url, filepath, description="", timeout=60, shou
             last_exception = e
             logger.warning(f"下载失败，尝试镜像: {try_url} -> {e}")
 
-    raise RuntimeError(f"所有下载源均失败: {last_exception}")
+    raise RuntimeError(tr('所有下载源均失败: {last_exception}', last_exception=last_exception))
 
 
 def _download_file_single(url, filepath, description="", timeout=60, should_stop=None):
@@ -1195,7 +1198,7 @@ def _download_file_single(url, filepath, description="", timeout=60, should_stop
                     response.close()
                 except Exception:
                     pass
-                raise StopRequested("用户暂停")
+                raise StopRequested(tr("用户暂停"))
             if chunk:
                 f.write(chunk)
                 pbar.update(len(chunk))
@@ -1254,7 +1257,7 @@ def _wav_to_mp3(wav_path: str, mp3_path: str) -> None:
 
     ff = _ffmpeg_path()
     if not ff:
-        raise RuntimeError("ffmpeg 不可用，无法转换为 MP3。\n" + _ffmpeg_install_hint())
+        raise RuntimeError(tr("ffmpeg 不可用，无法转换为 MP3。\n") + _ffmpeg_install_hint())
     subprocess.run(
         [ff, "-y", "-i", wav_path, "-codec:a", "libmp3lame", "-b:a", "128k", mp3_path],
         check=True, capture_output=True,
@@ -1278,7 +1281,7 @@ def _generate_one_safe_multi_voice(
     try:
         for i, seg in enumerate(dialogue_segments):
             if should_stop and should_stop():
-                raise StopRequested("用户暂停")
+                raise StopRequested(tr("用户暂停"))
 
             seg_text = seg["text"]
             seg_voice = _resolve_segment_voice(seg, default_voice, voice_map)
@@ -1305,7 +1308,7 @@ def _resolve_engine(engine):
     try:
         return get_engine(engine)
     except KeyError:
-        raise ValueError(f"不支持的引擎类型: {engine}") from None
+        raise ValueError(tr('不支持的引擎类型: {engine}', engine=engine)) from None
 
 
 def _raw_segment_synth(engine):
@@ -1316,7 +1319,7 @@ def _raw_segment_synth(engine):
     """
     ext_info = _scan_external_engines().get(engine)
     if not ext_info:
-        raise RuntimeError(f"外部引擎 '{engine}' 不可用")
+        raise RuntimeError(tr("外部引擎 '{engine}' 不可用", engine=engine))
     executable = ext_info["executable"]
 
     def _ext(text, voice, rate, out_path, should_stop=None):
@@ -1353,7 +1356,7 @@ def _generate_one_safe(text, voice, rate, output_path, engine="edge", should_sto
 
     for attempt in range(MAX_RETRIES + 1):
         if should_stop and should_stop():
-            raise StopRequested("用户暂停")
+            raise StopRequested(tr("用户暂停"))
         try:
             logger.info(f"生成单文件 → {output_path} (尝试 {attempt + 1}, {total_segs} 段)")
 
@@ -1366,7 +1369,7 @@ def _generate_one_safe(text, voice, rate, output_path, engine="edge", should_sto
                 try:
                     for i, seg in enumerate(segments):
                         if should_stop and should_stop():
-                            raise StopRequested("用户暂停")
+                            raise StopRequested(tr("用户暂停"))
                         tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
                         seg_synth(seg, voice, rate, tp, should_stop=should_stop)
                         temp_files.append(tp)
@@ -1379,7 +1382,7 @@ def _generate_one_safe(text, voice, rate, output_path, engine="edge", should_sto
                 logger.info(f"完成: {output_path} ({os.path.getsize(output_path)} bytes)")
                 return
             else:
-                raise RuntimeError(f"生成文件为空: {output_path}")
+                raise RuntimeError(tr('生成文件为空: {output_path}', output_path=output_path))
 
         except StopRequested:
             raise
@@ -1389,7 +1392,7 @@ def _generate_one_safe(text, voice, rate, output_path, engine="edge", should_sto
             if attempt < MAX_RETRIES:
                 logger.info(f"等待 {delay}秒 后重试...")
                 if _interruptible_sleep(delay, should_stop):
-                    raise StopRequested("用户暂停")
+                    raise StopRequested(tr("用户暂停"))
             else:
                 raise
 
@@ -1598,7 +1601,7 @@ def convert_batch(
     output_dir,
     split_mode="chapter",
     time_minutes=30,
-    file_prefix="有声读物",
+    file_prefix=None,
     selected_indices=None,
     engine="edge",
     progress_callback=None,
@@ -1620,6 +1623,8 @@ def convert_batch(
     其余未完成条目本次保持原状态不动。
     """
     os.makedirs(output_dir, exist_ok=True)
+    if not file_prefix:
+        file_prefix = tr("有声读物")
 
     # 构建任务列表
     if resume:
@@ -1686,7 +1691,7 @@ def convert_batch(
                     continue
                 file_idx = pi + 1
                 if total_parts > 1:
-                    label = f"{file_prefix}_第{file_idx}部分"
+                    label = tr('{file_prefix}_第{file_idx}部分', file_prefix=file_prefix, file_idx=file_idx)
                 else:
                     label = file_prefix
                 fn = f"{file_idx:03d}_{sanitize_filename(label)}.mp3"
@@ -1770,7 +1775,7 @@ def convert_batch(
                         try:
                             progress_callback(i + 1, len(output_files),
                                               seg_current=i + 1, seg_total=len(output_files),
-                                              seg_title="响度归一化")
+                                              seg_title=tr("响度归一化"))
                         except TypeError:
                             try:
                                 progress_callback(i + 1, len(output_files))
@@ -1834,7 +1839,7 @@ def convert_batch(
                         break
             detail = "\n".join(first_errors)
             raise RuntimeError(
-                f"全部 {error_count} 个文件生成失败，请检查后重试。\n\n{detail}"
+                tr('全部 {error_count} 个文件生成失败，请检查后重试。\n\n{detail}', error_count=error_count, detail=detail)
             )
 
     return output_files
@@ -1854,7 +1859,7 @@ def generate_preview(text, voice, rate="+0%", engine="edge", should_stop=None, m
     else:
         preview_text = text
     if not preview_text.strip():
-        raise ValueError("没有可预览的文本")
+        raise ValueError(tr("没有可预览的文本"))
     suffix = "_full" if max_chars <= 0 else "_short"
     temp_path = os.path.join(tempfile.gettempdir(), f"audiobook_preview{suffix}.mp3")
     _generate_one_safe(preview_text, voice, rate, temp_path, engine=engine, should_stop=should_stop)

@@ -17,6 +17,7 @@ import shutil
 import tempfile
 
 from audiobook.engines.base import Engine
+from audiobook.i18n import tr
 
 # 可选导入 - Edge TTS（在线引擎，与其他引擎一致按可选依赖处理）
 try:
@@ -38,14 +39,12 @@ EDGE_VOICES = {
 }
 EDGE_DEFAULT_VOICE = "zh-CN-XiaoxiaoNeural"
 
-EDGE_NOT_INSTALLED = "Edge TTS 未安装。请运行: pip install edge-tts"
-
 
 # ======== 合成 ========
 
 async def _edge_generate(text, voice, rate, output_path):
     if not EDGE_TTS_AVAILABLE:
-        raise RuntimeError(EDGE_NOT_INSTALLED)
+        raise RuntimeError(tr("Edge TTS 未安装。请运行: pip install edge-tts"))
     communicate = edge_tts.Communicate(text, voice, rate=rate)
     await communicate.save(output_path)
 
@@ -76,7 +75,7 @@ async def _edge_generate_dialogue(dialogue_segments, default_voice, voice_map,
     try:
         for i, seg in enumerate(dialogue_segments):
             if stop_event is not None and stop_event.is_set():
-                raise _te.StopRequested("用户暂停")
+                raise _te.StopRequested(tr("用户暂停"))
             seg_voice = _resolve_segment_voice(seg, default_voice, voice_map)
             tp = os.path.join(temp_dir, f"seg_{i:04d}.mp3")
             await _edge_generate(seg["text"], seg_voice, rate, tp)
@@ -133,7 +132,7 @@ async def _generate_one_item(item, voice, rate, output_dir, semaphore, stop_even
                     logger.info(f"完成 [{item['title']}] ({os.path.getsize(out_path)} bytes)")
                     return
                 else:
-                    raise RuntimeError(f"生成文件为空: {out_path}")
+                    raise RuntimeError(tr('生成文件为空: {out_path}', out_path=out_path))
 
             except Exception as e:
                 delay = _te.RETRY_DELAY * (2 ** attempt)  # 指数退避: 5s, 10s, 20s
@@ -227,7 +226,8 @@ class EdgeEngine(Engine):
                   should_stop=None, item_callback=None) -> bool:
         # 整批走单一事件循环并发：网络合成的瓶颈在往返延迟，并发远快于逐章串行。
         if not EDGE_TTS_AVAILABLE:
-            raise RuntimeError(EDGE_NOT_INSTALLED + "，或切换到离线引擎（系统语音 / Piper / CosyVoice）。")
+            raise RuntimeError(tr("Edge TTS 未安装。请运行: pip install edge-tts，"
+                                  "或切换到离线引擎（系统语音 / Piper / CosyVoice）。"))
         asyncio.run(_edge_batch_generate(items, voice, rate, output_dir, progress_callback,
                                          should_stop, item_callback=item_callback))
         return True

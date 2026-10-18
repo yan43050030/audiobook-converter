@@ -14,6 +14,8 @@ import tempfile
 from shutil import which
 from typing import Callable, Optional
 
+from audiobook.i18n import tr
+
 # 可选导入：实际使用 faster-whisper
 try:
     from faster_whisper import WhisperModel
@@ -83,9 +85,9 @@ def check_asr_ready(storage_dir: str) -> tuple[bool, str]:
     """检测 ASR 引擎是否可用"""
     if not FASTER_WHISPER_AVAILABLE:
         return False, (
-            "faster-whisper 未安装。\n"
+            tr("faster-whisper 未安装。\n"
             "请运行: pip install faster-whisper\n"
-            "（需要约 800MB 磁盘空间，首次运行自动下载模型）"
+            "（需要约 800MB 磁盘空间，首次运行自动下载模型）")
         )
     # 检测 ffmpeg
     ffmpeg = which("ffmpeg")
@@ -93,8 +95,8 @@ def check_asr_ready(storage_dir: str) -> tuple[bool, str]:
         bin_dir = os.path.join(storage_dir, "bin")
         ffmpeg = shutil_which_in(os.path.join(bin_dir, "ffmpeg"))
     if not ffmpeg:
-        return False, "ffmpeg 未安装，ASR 需要 ffmpeg 转换音频格式。"
-    return True, "ASR 引擎就绪"
+        return False, tr("ffmpeg 未安装，ASR 需要 ffmpeg 转换音频格式。")
+    return True, tr("ASR 引擎就绪")
 
 
 def shutil_which_in(path: str):
@@ -107,7 +109,7 @@ def convert_audio_to_wav(input_path: str, sample_rate: int = 16000) -> str:
     from tts_engine import _ffmpeg_path
     ff = _ffmpeg_path()
     if not ff:
-        raise RuntimeError("ffmpeg 不可用，无法转换音频格式。")
+        raise RuntimeError(tr("ffmpeg 不可用，无法转换音频格式。"))
     fd, output_path = tempfile.mkstemp(prefix="asr_input_", suffix=".wav")
     os.close(fd)  # 只要唯一路径，句柄立即关闭，由 ffmpeg -y 覆盖写入
     subprocess.run(
@@ -185,7 +187,7 @@ def _load_whisper_model(model_size: str, storage_dir: str,
                          should_stop: Optional[Callable[[], bool]] = None) -> "WhisperModel":
     """加载 Whisper 模型（缓存）"""
     if not FASTER_WHISPER_AVAILABLE:
-        raise ImportError("faster-whisper 未安装")
+        raise ImportError(tr("faster-whisper 未安装"))
 
     if device == "auto":
         device = "cuda" if _cuda_available() else "cpu"
@@ -290,7 +292,7 @@ def transcribe(
         转录文本
     """
     if not FASTER_WHISPER_AVAILABLE:
-        raise ImportError("faster-whisper 未安装")
+        raise ImportError(tr("faster-whisper 未安装"))
 
     # 1. 转换为 WAV
     logger.info(f"ASR: 转换音频格式 {input_path}")
@@ -446,7 +448,7 @@ def external_asr_transcribe(engine_id: str, input_path: str, output_format: str 
     engines = scan_external_asr_engines(get_storage_dir())
     info = engines.get(engine_id)
     if not info:
-        raise RuntimeError(f"外挂 ASR 引擎 '{engine_id}' 未找到。请放入 asr-engines/{engine_id}/ 目录。")
+        raise RuntimeError(tr("外挂 ASR 引擎 '{engine_id}' 未找到。请放入 asr-engines/{engine_id}/ 目录。", engine_id=engine_id))
 
     exe = info["executable"]
     # 需要先将音频转为 WAV（外挂引擎可能只支持 WAV）
@@ -464,12 +466,12 @@ def external_asr_transcribe(engine_id: str, input_path: str, output_format: str 
         rc, _out, err = _run_subprocess_interruptible(cmd, should_stop=should_stop, timeout=1800)
         if rc != 0:
             stderr = err.decode("utf-8", errors="replace") if err else ""
-            raise RuntimeError(f"外挂 ASR 引擎 '{engine_id}' 失败 (code {rc}): {stderr}")
+            raise RuntimeError(tr("外挂 ASR 引擎 '{engine_id}' 失败 (code {rc}): {stderr}", engine_id=engine_id, rc=rc, stderr=stderr))
         # out_path 由 mkstemp 预创建，用内容非空判断引擎是否产出结果
         if os.path.exists(out_path) and os.path.getsize(out_path) > 0:
             with open(out_path, "r", encoding="utf-8") as f:
                 return f.read()
-        raise RuntimeError(f"外挂 ASR 引擎 '{engine_id}' 未生成输出内容")
+        raise RuntimeError(tr("外挂 ASR 引擎 '{engine_id}' 未生成输出内容", engine_id=engine_id))
     finally:
         if os.path.exists(wav_path):
             try:

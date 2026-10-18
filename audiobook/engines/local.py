@@ -13,6 +13,7 @@ import tempfile
 from shutil import which
 
 from audiobook.engines.base import Engine
+from audiobook.i18n import tr
 
 
 def _local_generate_macos(text: str, voice: str, rate: str, output_path: str, should_stop=None) -> None:
@@ -27,13 +28,13 @@ def _local_generate_macos(text: str, voice: str, rate: str, output_path: str, sh
             should_stop=should_stop,
         )
         if rc != 0:
-            raise RuntimeError(f"say 失败: {err.decode('utf-8', errors='replace')}")
+            raise RuntimeError(tr('say 失败: {v1}', v1=err.decode('utf-8', errors='replace')))
         rc, _o, err = _te._run_subprocess_interruptible(
             ["afconvert", "-f", "mp4f", "-d", "aac", aiff_path, output_path],
             should_stop=should_stop,
         )
         if rc != 0:
-            raise RuntimeError(f"afconvert 失败: {err.decode('utf-8', errors='replace')}")
+            raise RuntimeError(tr('afconvert 失败: {v1}', v1=err.decode('utf-8', errors='replace')))
     finally:
         if os.path.exists(aiff_path):
             try:
@@ -60,7 +61,7 @@ def _local_generate_windows(text: str, voice: str, rate: str, output_path: str, 
     import tts_engine as _te
     ps = which("powershell") or which("pwsh")
     if not ps:
-        raise RuntimeError("未找到 PowerShell，无法调用 Windows 系统语音")
+        raise RuntimeError(tr("未找到 PowerShell，无法调用 Windows 系统语音"))
 
     rate_val = int(rate.replace("%", "").replace("+", ""))
     sapi_rate = max(min(int(rate_val / 10), 10), -10)
@@ -82,7 +83,7 @@ def _local_generate_windows(text: str, voice: str, rate: str, output_path: str, 
             should_stop=should_stop, timeout=600,
         )
         if rc != 0 or not os.path.exists(wav_path) or os.path.getsize(wav_path) == 0:
-            raise RuntimeError(f"Windows SAPI 合成失败: {err.decode('utf-8', errors='replace').strip()}")
+            raise RuntimeError(tr('Windows SAPI 合成失败: {v1}', v1=err.decode('utf-8', errors='replace').strip()))
         _te._wav_to_mp3(wav_path, output_path)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -93,7 +94,7 @@ def _local_generate_linux(text: str, voice: str, rate: str, output_path: str, sh
     import tts_engine as _te
     espeak = which("espeak-ng") or which("espeak")
     if not espeak:
-        raise RuntimeError("未找到 espeak-ng，请先安装（sudo apt install espeak-ng）")
+        raise RuntimeError(tr("未找到 espeak-ng，请先安装（sudo apt install espeak-ng）"))
 
     rate_val = int(rate.replace("%", "").replace("+", ""))
     wpm = max(int(175 * (1 + rate_val / 100.0)), 80)
@@ -106,7 +107,7 @@ def _local_generate_linux(text: str, voice: str, rate: str, output_path: str, sh
             should_stop=should_stop, timeout=600,
         )
         if rc != 0:
-            raise RuntimeError(f"espeak 失败: {err.decode('utf-8', errors='replace')}")
+            raise RuntimeError(tr('espeak 失败: {v1}', v1=err.decode('utf-8', errors='replace')))
         _te._wav_to_mp3(wav_path, output_path)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
@@ -122,7 +123,7 @@ def _local_generate(text: str, voice: str, rate: str, output_path: str, should_s
     elif _te._PLATFORM == "Linux":
         _local_generate_linux(text, voice, rate, output_path, should_stop=should_stop)
     else:
-        raise RuntimeError(f"暂不支持的平台: {_te._PLATFORM}")
+        raise RuntimeError(tr('暂不支持的平台: {PLATFORM}', PLATFORM=_te._PLATFORM))
 
 
 class LocalEngine(Engine):

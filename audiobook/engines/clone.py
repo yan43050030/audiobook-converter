@@ -8,6 +8,7 @@ import os
 import tempfile
 
 from audiobook.engines.base import Engine
+from audiobook.i18n import tr
 
 
 def speed_from_rate(rate: str) -> float:
@@ -41,7 +42,7 @@ class CloneEngine(Engine):
         pid = profiles.parse_voice_id(voice)
         prof = profiles.get_profile(pid) if pid else None
         if prof is None:
-            raise CloneBridgeError(f"克隆音色不存在或已删除：{voice}")
+            raise CloneBridgeError(tr('克隆音色不存在或已删除：{voice}', voice=voice))
         fd, wav = tempfile.mkstemp(suffix=".wav", prefix="clone_")
         os.close(fd)
         try:

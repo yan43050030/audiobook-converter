@@ -12,7 +12,7 @@ a = Analysis(
                    'audiobook', 'audiobook.config', 'audiobook.models', 'audiobook.io.hub', 'audiobook.onboarding', 'audiobook.core', 'audiobook.core.text', 'audiobook.io', 'audiobook.io.readers',
                    'audiobook.io.audio', 'audiobook.engines', 'audiobook.engines.base', 'audiobook.engines.local',
                    'audiobook.engines.edge', 'audiobook.engines.piper', 'audiobook.engines.cosyvoice', 'audiobook.engines.clone', 'audiobook.cloning', 'audiobook.cloning.profiles', 'audiobook.cloning.client',
-                   'audiobook.engines.asr'],
+                   'audiobook.engines.asr', 'audiobook.i18n', 'audiobook.locales', 'audiobook.locales.en'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

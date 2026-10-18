@@ -53,11 +53,14 @@ def _run_qt(backend, prefix):
         from PyQt6.QtGui import QPalette, QColor
 
     from tts_engine import _load_config, VERSION
+    # 首次调用 tr() 会确定界面语言，必须在上面导入 Qt 之后：系统语言要靠 QLocale 判断
+    # （macOS 从 Finder 启动时 LANG 往往为空）
+    from audiobook.i18n import tr
     cfg = _load_config()
     theme = cfg.get("theme", "light")
 
     app = QApplication(sys.argv)
-    app.setApplicationName("文字转有声读物")
+    app.setApplicationName(tr("文字转有声读物"))
     app.setOrganizationName("AudiobookConverter")
 
     if theme == "dark":
@@ -74,7 +77,7 @@ def _run_qt(backend, prefix):
 
     from gui_pyside6 import AudiobookConverterMain
     window = AudiobookConverterMain()
-    window.setWindowTitle(f"文字转有声读物 v{VERSION}")
+    window.setWindowTitle(tr("文字转有声读物 v{version}", version=VERSION))
     window.resize(1200, 800)
     window.show()
 

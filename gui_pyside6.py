@@ -57,6 +57,8 @@ from asr_engine import (transcribe, check_asr_ready, WHISPER_MODELS, WHISPER_COM
                         scan_external_asr_engines, external_asr_transcribe)
 from audio_player import AudioPlayer
 from file_reader import load_file_content
+from audiobook import i18n
+from audiobook.i18n import tr
 
 
 # ===================== Worker Threads =====================
@@ -214,8 +216,8 @@ class AsrWorker(_BaseWorker):
                 lines = [f"✅ {os.path.basename(p)} → {os.path.basename(o)}"
                          for p, o, _r in done]
                 if len(done) < len(input_paths):
-                    lines.append(f"（已停止，完成 {len(done)}/{len(input_paths)}）")
-                self.finished_ok.emit("批量转录完成:\n" + "\n".join(lines))
+                    lines.append(tr('（已停止，完成 {v1}/{v2}）', v1=len(done), v2=len(input_paths)))
+                self.finished_ok.emit(tr("批量转录完成:\n") + "\n".join(lines))
             else:
                 self.finished_ok.emit(done[0][2] if done else "")
         except Exception as e:
@@ -689,6 +691,9 @@ class AudiobookConverterMain(QMainWindow):
         self._build_ui()
         self._wire_signals()
         self._load_theme()
+        # 首次选中引擎时底栏尚未创建，那次刷新被跳过；界面建好后补一次，
+        # 否则底栏一直显示「未选择语音」而右侧已选了语音
+        self._update_quickbar()
 
         # Download progress listener
         add_download_listener(self._on_download_progress)
@@ -710,9 +715,9 @@ class AudiobookConverterMain(QMainWindow):
         self._tts_tab = QWidget()
         self._queue_tab = QWidget()
         self._asr_tab = QWidget()
-        self._tab_widget.addTab(self._tts_tab, "文字转语音")
-        self._tab_widget.addTab(self._queue_tab, "生成队列")
-        self._tab_widget.addTab(self._asr_tab, "语音转文字")
+        self._tab_widget.addTab(self._tts_tab, tr("文字转语音"))
+        self._tab_widget.addTab(self._queue_tab, tr("生成队列"))
+        self._tab_widget.addTab(self._asr_tab, tr("语音转文字"))
         root.addWidget(self._tab_widget, 1)
 
         # === TTS Tab ===
@@ -732,17 +737,17 @@ class AudiobookConverterMain(QMainWindow):
         # 章节列表与文本内容改用竖向分隔条，用户可自由分配二者高度
         left_splitter = QSplitter(Qt.Orientation.Vertical)
 
-        ch_group = QGroupBox("章节列表（勾选要生成的章节）")
+        ch_group = QGroupBox(tr("章节列表（勾选要生成的章节）"))
         ch_layout = QVBoxLayout(ch_group)
         ch_toolbar = QHBoxLayout()
-        btn_all = QPushButton("全选"); btn_all.clicked.connect(self._select_all_chapters)
-        btn_none = QPushButton("全不选"); btn_none.clicked.connect(self._deselect_all_chapters)
+        btn_all = QPushButton(tr("全选")); btn_all.clicked.connect(self._select_all_chapters)
+        btn_none = QPushButton(tr("全不选")); btn_none.clicked.connect(self._deselect_all_chapters)
         ch_toolbar.addWidget(btn_all); ch_toolbar.addWidget(btn_none)
         self._chapter_count = QLabel(""); self._chapter_count.setStyleSheet("color:gray")
         ch_toolbar.addStretch(); ch_toolbar.addWidget(self._chapter_count)
         ch_layout.addLayout(ch_toolbar)
         search_row = QHBoxLayout()
-        self._chapter_search = QLineEdit(); self._chapter_search.setPlaceholderText("搜索章节...")
+        self._chapter_search = QLineEdit(); self._chapter_search.setPlaceholderText(tr("搜索章节..."))
         self._chapter_search.textChanged.connect(self._filter_chapters)
         search_row.addWidget(self._chapter_search)
         ch_layout.addLayout(search_row)
@@ -757,7 +762,7 @@ class AudiobookConverterMain(QMainWindow):
         ch_layout.addWidget(self._chapter_tree)
         left_splitter.addWidget(ch_group)
 
-        text_group = QGroupBox("文本内容")
+        text_group = QGroupBox(tr("文本内容"))
         text_gl = QVBoxLayout(text_group)
         self._text_area = QPlainTextEdit()
         # 使用系统默认字体（对中文回退更可靠），仅指定字号
@@ -843,7 +848,7 @@ class AudiobookConverterMain(QMainWindow):
         root.addWidget(bottom)
 
         # 单一状态行（合并原状态栏 + 状态标签）
-        self._status_label = QLabel("● 就绪")
+        self._status_label = QLabel(tr("● 就绪"))
         self._status_label.setObjectName("statusLine")
         self._status_label.setStyleSheet("color:#777;font-size:12px;padding:3px 6px")
         bottom_layout.addWidget(self._status_label)
@@ -872,7 +877,7 @@ class AudiobookConverterMain(QMainWindow):
         layout = QVBoxLayout(w)
         layout.setSpacing(8)
 
-        engine_card = QGroupBox("选择引擎")
+        engine_card = QGroupBox(tr("选择引擎"))
         self._engine_card_layout = QVBoxLayout(engine_card)
         self._engine_group = QButtonGroup(self)
         self._engine_group.setExclusive(True)
@@ -885,11 +890,11 @@ class AudiobookConverterMain(QMainWindow):
         self._engine_group.buttonClicked.connect(self._remember_engine)
         layout.addWidget(engine_card)
 
-        voice_card = QGroupBox("语音参数")
+        voice_card = QGroupBox(tr("语音参数"))
         vc_layout = QVBoxLayout(voice_card)
         # 第一行：语音标签 + 下拉（下拉可随面板收窄而压缩，避免溢出裁切）
         voice_row = QHBoxLayout()
-        voice_row.addWidget(QLabel("语音:"))
+        voice_row.addWidget(QLabel(tr("语音:")))
         self._voice_combo = QComboBox()
         self._voice_combo.setMinimumWidth(120)
         self._voice_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
@@ -899,20 +904,20 @@ class AudiobookConverterMain(QMainWindow):
         vc_layout.addLayout(voice_row)
         # 第二行：试听 / 刷新按钮（独立成行，窄面板下不再被挤出可视区）
         btn_row = QHBoxLayout()
-        btn_preview = QPushButton("试听")
+        btn_preview = QPushButton(tr("试听"))
         btn_preview.clicked.connect(self._preview_voice_sample)
         btn_row.addWidget(btn_preview)
-        btn_refresh = QPushButton("刷新")
+        btn_refresh = QPushButton(tr("刷新"))
         btn_refresh.clicked.connect(self._refresh_voices)
         btn_row.addWidget(btn_refresh)
-        btn_clone = QPushButton("🎙 克隆音色…")
-        btn_clone.setToolTip("用一段 5–15 秒的人声复刻音色（基于 CosyVoice）")
+        btn_clone = QPushButton(tr("🎙 克隆音色…"))
+        btn_clone.setToolTip(tr("用一段 5–15 秒的人声复刻音色（基于 CosyVoice）"))
         btn_clone.clicked.connect(self._open_clone_dialog)
         btn_row.addWidget(btn_clone)
         vc_layout.addLayout(btn_row)
         layout.addWidget(voice_card)
 
-        btn_ext = QPushButton("+ 添加 / 配置外挂引擎")
+        btn_ext = QPushButton(tr("+ 添加 / 配置外挂引擎"))
         btn_ext.clicked.connect(self._open_external_dialog)
         layout.addWidget(btn_ext)
 
@@ -924,9 +929,9 @@ class AudiobookConverterMain(QMainWindow):
         layout = QVBoxLayout(w)
         layout.setSpacing(8)
 
-        rate_card = QGroupBox("语速控制")
+        rate_card = QGroupBox(tr("语速控制"))
         rc_layout = QVBoxLayout(rate_card)
-        self._rate_label = QLabel("正常")
+        self._rate_label = QLabel(tr("正常"))
         self._rate_label.setAlignment(Qt.AlignmentFlag.AlignRight)
         rc_layout.addWidget(self._rate_label)
         self._rate_slider = QSlider(Qt.Orientation.Horizontal)
@@ -936,11 +941,12 @@ class AudiobookConverterMain(QMainWindow):
         rc_layout.addWidget(self._rate_slider)
         layout.addWidget(rate_card)
 
-        out_card = QGroupBox("输出模式")
+        out_card = QGroupBox(tr("输出模式"))
         oc_layout = QVBoxLayout(out_card)
         self._mode_group = QButtonGroup(self)
-        for label, val in [("按章节拆分", "chapter"), ("按时间拆分", "time"), ("合并为一个文件", "single")]:
+        for label, val in [(tr("按章节拆分"), "chapter"), (tr("按时间拆分"), "time"), (tr("合并为一个文件"), "single")]:
             rb = QRadioButton(label)
+            rb.setProperty("mode", val)  # 取值靠属性，不靠（会被翻译的）按钮文字
             self._mode_group.addButton(rb)
             oc_layout.addWidget(rb)
         self._mode_group.buttonClicked.connect(self._on_mode_change)
@@ -950,7 +956,7 @@ class AudiobookConverterMain(QMainWindow):
         self._time_frame = QWidget()
         tf_layout = QVBoxLayout(self._time_frame)
         tf_layout.setContentsMargins(0, 0, 0, 0)
-        self._time_label = QLabel("30 分钟")
+        self._time_label = QLabel(tr("30 分钟"))
         self._time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         tf_layout.addWidget(self._time_label)
         self._time_slider = QSlider(Qt.Orientation.Horizontal)
@@ -967,24 +973,24 @@ class AudiobookConverterMain(QMainWindow):
         self._split_estimate.setStyleSheet("color:gray;font-size:11px")
         oc_layout.addWidget(self._split_estimate)
 
-        self._normalize_cb = QCheckBox("响度归一化（统一各文件音量，需 ffmpeg）")
+        self._normalize_cb = QCheckBox(tr("响度归一化（统一各文件音量，需 ffmpeg）"))
         oc_layout.addWidget(self._normalize_cb)
-        self._subtitle_cb = QCheckBox("同时生成 srt 字幕（按句估算时间轴）")
+        self._subtitle_cb = QCheckBox(tr("同时生成 srt 字幕（按句估算时间轴）"))
         oc_layout.addWidget(self._subtitle_cb)
-        self._metadata_cb = QCheckBox("写入 ID3 元数据（专辑/章节标题/音轨号，需 ffmpeg）")
+        self._metadata_cb = QCheckBox(tr("写入 ID3 元数据（专辑/章节标题/音轨号，需 ffmpeg）"))
         oc_layout.addWidget(self._metadata_cb)
         layout.addWidget(out_card)
 
         # 快捷操作（仅保留试听/合并/日志）
-        ops_card = QGroupBox("快捷操作")
+        ops_card = QGroupBox(tr("快捷操作"))
         ops_layout = QVBoxLayout(ops_card)
-        self._btn_preview_full = QPushButton("🔊 试听全文（可暂停）")
+        self._btn_preview_full = QPushButton(tr("🔊 试听全文（可暂停）"))
         self._btn_preview_full.clicked.connect(self._toggle_preview_full)
         ops_layout.addWidget(self._btn_preview_full)
         tool_row = QHBoxLayout()
-        tool_row.addWidget(QPushButton("🔀 合并MP3", clicked=self._merge_mp3))
-        tool_row.addWidget(QPushButton("📚 导出 m4b", clicked=self._export_m4b))
-        tool_row.addWidget(QPushButton("📋 日志", clicked=self._show_log))
+        tool_row.addWidget(QPushButton(tr("🔀 合并MP3"), clicked=self._merge_mp3))
+        tool_row.addWidget(QPushButton(tr("📚 导出 m4b"), clicked=self._export_m4b))
+        tool_row.addWidget(QPushButton(tr("📋 日志"), clicked=self._show_log))
         ops_layout.addLayout(tool_row)
         layout.addWidget(ops_card)
         return w
@@ -993,36 +999,36 @@ class AudiobookConverterMain(QMainWindow):
         w = QWidget()
         layout = QVBoxLayout(w)
         layout.setSpacing(8)
-        card = QGroupBox("多人对话")
+        card = QGroupBox(tr("多人对话"))
         cl = QVBoxLayout(card)
-        self._dialogue_enabled_cb = QCheckBox("启用对话检测（为旁白/对话分配不同语音）")
+        self._dialogue_enabled_cb = QCheckBox(tr("启用对话检测（为旁白/对话分配不同语音）"))
         self._dialogue_enabled_cb.toggled.connect(self._on_dialogue_toggle)
         cl.addWidget(self._dialogue_enabled_cb)
         nr = QHBoxLayout()
-        nr.addWidget(QLabel("旁白语音:"))
+        nr.addWidget(QLabel(tr("旁白语音:")))
         self._dialogue_narration_combo = QComboBox()
         nr.addWidget(self._dialogue_narration_combo, 1)
         cl.addLayout(nr)
         dr = QHBoxLayout()
-        dr.addWidget(QLabel("对话语音:"))
+        dr.addWidget(QLabel(tr("对话语音:")))
         self._dialogue_voice_combo = QComboBox()
         dr.addWidget(self._dialogue_voice_combo, 1)
         cl.addLayout(dr)
         layout.addWidget(card)
 
         # 角色→音色映射（可选，覆盖统一的"对话语音"）
-        spk_card = QGroupBox("角色音色映射（可选）")
+        spk_card = QGroupBox(tr("角色音色映射（可选）"))
         sl = QVBoxLayout(spk_card)
-        self._btn_detect_speakers = QPushButton("🔍 从文本检测角色")
+        self._btn_detect_speakers = QPushButton(tr("🔍 从文本检测角色"))
         self._btn_detect_speakers.clicked.connect(self._detect_speakers)
         sl.addWidget(self._btn_detect_speakers)
         self._speaker_table = QTableWidget(0, 2)
-        self._speaker_table.setHorizontalHeaderLabels(["角色", "语音"])
+        self._speaker_table.setHorizontalHeaderLabels([tr("角色"), tr("语音")])
         self._speaker_table.horizontalHeader().setStretchLastSection(True)
         self._speaker_table.verticalHeader().setVisible(False)
         self._speaker_table.setMaximumHeight(180)
         sl.addWidget(self._speaker_table)
-        self._speaker_hint = QLabel("未映射的角色使用统一的对话语音")
+        self._speaker_hint = QLabel(tr("未映射的角色使用统一的对话语音"))
         self._speaker_hint.setStyleSheet("color:gray;font-size:11px")
         sl.addWidget(self._speaker_hint)
         layout.addWidget(spk_card)
@@ -1034,12 +1040,12 @@ class AudiobookConverterMain(QMainWindow):
     def _detect_speakers(self):
         text = self._text_area.toPlainText().strip()
         if not text:
-            QMessageBox.information(self, "提示", "请先导入或输入文本")
+            QMessageBox.information(self, tr("提示"), tr("请先导入或输入文本"))
             return
         speakers = extract_speakers(text)
         self._speaker_table.setRowCount(0)
         if not speakers:
-            self._speaker_hint.setText("未检测到带名字的对话（形如「XX说：“…”」）")
+            self._speaker_hint.setText(tr("未检测到带名字的对话（形如「XX说：“…”」）"))
             return
         engine = self._get_current_engine()
         voices = get_voice_list(engine)
@@ -1050,11 +1056,11 @@ class AudiobookConverterMain(QMainWindow):
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self._speaker_table.setItem(row, 0, item)
             combo = QComboBox()
-            combo.addItem("（使用对话语音）", "")
+            combo.addItem(tr("（使用对话语音）"), "")
             for v in voices:
-                combo.addItem(v, v)
+                combo.addItem(tr(v), v)
             self._speaker_table.setCellWidget(row, 1, combo)
-        self._speaker_hint.setText(f"检测到 {len(speakers)} 个角色；未映射的角色使用统一的对话语音")
+        self._speaker_hint.setText(tr('检测到 {v1} 个角色；未映射的角色使用统一的对话语音', v1=len(speakers)))
 
     def _collect_speaker_map(self, engine) -> dict:
         """从角色映射表收集 {角色名: voice_id}，未选择的跳过"""
@@ -1074,27 +1080,29 @@ class AudiobookConverterMain(QMainWindow):
         layout = QVBoxLayout(w)
         layout.setSpacing(8)
 
-        dir_card = QGroupBox("便携存储目录")
+        dir_card = QGroupBox(tr("便携存储目录"))
         dc = QVBoxLayout(dir_card)
         dir_row = QHBoxLayout()
         self._storage_label = QLabel(get_storage_dir())
         self._storage_label.setWordWrap(True)
         self._storage_label.setStyleSheet("padding:4px;border:1px solid #ddd;border-radius:4px")
         dir_row.addWidget(self._storage_label, 1)
-        btn_choose = QPushButton("选择文件夹")
+        btn_choose = QPushButton(tr("选择文件夹"))
         btn_choose.clicked.connect(self._choose_storage)
         dir_row.addWidget(btn_choose)
-        btn_open = QPushButton("打开")
+        btn_open = QPushButton(tr("打开"))
         btn_open.clicked.connect(self._open_storage)
         dir_row.addWidget(btn_open)
-        btn_reset = QPushButton("恢复默认")
+        btn_reset = QPushButton(tr("恢复默认"))
         btn_reset.clicked.connect(self._reset_storage)
         dir_row.addWidget(btn_reset)
         dc.addLayout(dir_row)
-        dc.addWidget(QLabel("bin/ 存放可执行文件；piper-models/ 存放语音包。程序自动在子目录搜索。"))
+        storage_hint = QLabel(tr("bin/ 存放可执行文件；piper-models/ 存放语音包。程序自动在子目录搜索。"))
+        storage_hint.setWordWrap(True)  # 不换行时会把整个右栏撑宽，出现横向滚动条
+        dc.addWidget(storage_hint)
         layout.addWidget(dir_card)
 
-        deps_card = QGroupBox("依赖检测")
+        deps_card = QGroupBox(tr("依赖检测"))
         dps = QVBoxLayout(deps_card)
         self._deps_text = QPlainTextEdit()
         self._deps_text.setReadOnly(True)
@@ -1102,19 +1110,19 @@ class AudiobookConverterMain(QMainWindow):
         self._deps_text.setFont(QFont("Helvetica", 11))
         dps.addWidget(self._deps_text)
         # 模型的下载 / 删除 / 占用统一收进「模型管理器」，取代原先分散的下载按钮
-        btn_models = QPushButton("🗂 模型管理器（下载 / 删除 / 占用）")
+        btn_models = QPushButton(tr("🗂 模型管理器（下载 / 删除 / 占用）"))
         btn_models.setMinimumHeight(34)
         btn_models.clicked.connect(self._open_model_manager)
         dps.addWidget(btn_models)
-        btn_wizard = QPushButton("🧭 首次运行向导（选场景 / 备模型 / 试听）")
+        btn_wizard = QPushButton(tr("🧭 首次运行向导（选场景 / 备模型 / 试听）"))
         btn_wizard.clicked.connect(self._open_first_run_wizard)
         dps.addWidget(btn_wizard)
         br1 = QHBoxLayout()
-        br1.addWidget(QPushButton("⚙ 重新扫描", clicked=self._refresh_deps))
+        br1.addWidget(QPushButton(tr("⚙ 重新扫描"), clicked=self._refresh_deps))
         dps.addLayout(br1)
         br3 = QHBoxLayout()
-        br3.addWidget(QPushButton("📁 添加模型文件夹", clicked=self._add_model_folder))
-        br3.addWidget(QPushButton("📁 添加程序文件夹", clicked=self._add_binary_folder))
+        br3.addWidget(QPushButton(tr("📁 添加模型文件夹"), clicked=self._add_model_folder))
+        br3.addWidget(QPushButton(tr("📁 添加程序文件夹"), clicked=self._add_binary_folder))
         dps.addLayout(br3)
         layout.addWidget(deps_card)
         return w
@@ -1123,20 +1131,20 @@ class AudiobookConverterMain(QMainWindow):
         w = QWidget()
         layout = QVBoxLayout(w)
         layout.setSpacing(8)
-        card = QGroupBox("已加载文件")
+        card = QGroupBox(tr("已加载文件"))
         cl = QVBoxLayout(card)
         fr = QHBoxLayout()
-        fr.addWidget(QPushButton("📂 添加文件（可多选）", clicked=self._add_files))
-        fr.addWidget(QPushButton("🗑 移除选中", clicked=self._remove_selected_file))
+        fr.addWidget(QPushButton(tr("📂 添加文件（可多选）"), clicked=self._add_files))
+        fr.addWidget(QPushButton(tr("🗑 移除选中"), clicked=self._remove_selected_file))
         cl.addLayout(fr)
         self._file_tree = QTreeWidget()
-        self._file_tree.setHeaderLabels(["文件名", "大小", "状态"])
+        self._file_tree.setHeaderLabels([tr("文件名"), tr("大小"), tr("状态")])
         self._file_tree.setRootIsDecorated(False)
         self._file_tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         # 左栏顶部空间有限，限高避免挤占章节列表
         self._file_tree.setMaximumHeight(130)
         cl.addWidget(self._file_tree)
-        self._file_count_label = QLabel("未加载文件")
+        self._file_count_label = QLabel(tr("未加载文件"))
         self._file_count_label.setStyleSheet("color:gray")
         cl.addWidget(self._file_count_label)
         layout.addWidget(card)
@@ -1146,16 +1154,45 @@ class AudiobookConverterMain(QMainWindow):
         w = QWidget()
         layout = QVBoxLayout(w)
         layout.setSpacing(8)
-        card = QGroupBox("主题")
+        card = QGroupBox(tr("主题"))
         cl = QVBoxLayout(card)
-        self._theme_btn = QPushButton("🔄 切换深色/浅色主题")
+        self._theme_btn = QPushButton(tr("🔄 切换深色/浅色主题"))
         self._theme_btn.clicked.connect(self._toggle_theme)
         cl.addWidget(self._theme_btn)
         self._theme_status = QLabel("")
         self._theme_status.setStyleSheet("color:gray")
         cl.addWidget(self._theme_status)
         layout.addWidget(card)
+
+        # 语言名称各用其自身书写（"简体中文" / "English"），任何界面语言下都认得出
+        lang_card = QGroupBox(tr("界面语言 / Language"))
+        ll = QVBoxLayout(lang_card)
+        self._lang_combo = QComboBox()
+        for code in i18n.LANGUAGE_CHOICES:
+            self._lang_combo.addItem(i18n.language_display_name(code), code)
+        current = i18n.configured_language()
+        self._lang_combo.setCurrentIndex(max(0, self._lang_combo.findData(current)))
+        self._lang_combo.currentIndexChanged.connect(self._on_language_change)
+        ll.addWidget(self._lang_combo)
+        self._lang_status = QLabel("")
+        self._lang_status.setStyleSheet("color:gray")
+        self._lang_status.setWordWrap(True)
+        ll.addWidget(self._lang_status)
+        layout.addWidget(lang_card)
         return w
+
+    def _on_language_change(self, _index):
+        code = self._lang_combo.currentData() or "auto"
+        try:
+            from tts_engine import _load_config, _save_config
+            cfg = _load_config()
+            cfg["language"] = code
+            _save_config(cfg)
+        except Exception as e:
+            self._lang_status.setText(tr('保存失败：{e}', e=e))
+            return
+        # 界面文案在构建时确定，切换语言需重启；提示用两种语言写，切换后立刻看得懂
+        self._lang_status.setText("重启程序后生效 / Restart the app to apply")
 
     def _build_quickbar(self):
         w = QFrame()
@@ -1167,15 +1204,15 @@ class AudiobookConverterMain(QMainWindow):
         self._qb_engine.setFont(QFont("Helvetica", 11, QFont.Weight.Bold))
         layout.addWidget(self._qb_engine)
         layout.addWidget(QLabel("|"))
-        self._qb_voice = QLabel("▸ 未选择语音")
+        self._qb_voice = QLabel(tr("▸ 未选择语音"))
         layout.addWidget(self._qb_voice)
         layout.addWidget(QLabel("|"))
-        layout.addWidget(QLabel("语速:"))
-        self._qb_rate = QLabel("正常")
+        layout.addWidget(QLabel(tr("语速:")))
+        self._qb_rate = QLabel(tr("正常"))
         self._qb_rate.setStyleSheet("color:#2563EB;font-weight:bold")
         layout.addWidget(self._qb_rate)
         layout.addStretch()
-        self._qb_convert = QPushButton("▶ 开始转换")
+        self._qb_convert = QPushButton(tr("▶ 开始转换"))
         self._qb_convert.setObjectName("accentBtn")
         self._qb_convert.setMinimumHeight(40)
         self._qb_convert.setMinimumWidth(150)
@@ -1183,13 +1220,13 @@ class AudiobookConverterMain(QMainWindow):
         self._qb_convert.setFont(_bf)
         self._qb_convert.clicked.connect(self._start_convert)
         layout.addWidget(self._qb_convert)
-        self._qb_pause = QPushButton("⏹ 停止")
+        self._qb_pause = QPushButton(tr("⏹ 停止"))
         self._qb_pause.setObjectName("stopBtn")
         self._qb_pause.setMinimumHeight(40)
         self._qb_pause.setEnabled(False)
         self._qb_pause.clicked.connect(self._pause_convert)
         layout.addWidget(self._qb_pause)
-        self._qb_resume = QPushButton("▶ 继续生成")
+        self._qb_resume = QPushButton(tr("▶ 继续生成"))
         self._qb_resume.setObjectName("accentBtn")
         self._qb_resume.setMinimumHeight(40)
         self._qb_resume.setEnabled(False)
@@ -1205,11 +1242,11 @@ class AudiobookConverterMain(QMainWindow):
 
     _QUEUE_STATUS = {
         # status: (显示文字, 颜色)
-        "pending": ("⏳ 等待", "#888888"),
-        "running": ("🔊 生成中", "#2563EB"),
-        "done": ("✅ 完成", "#2E7D32"),
-        "error": ("❌ 失败", "#C62828"),
-        "skipped": ("— 未勾选", "#AAAAAA"),
+        "pending": (tr("⏳ 等待"), "#888888"),
+        "running": (tr("🔊 生成中"), "#2563EB"),
+        "done": (tr("✅ 完成"), "#2E7D32"),
+        "error": (tr("❌ 失败"), "#C62828"),
+        "skipped": (tr("— 未勾选"), "#AAAAAA"),
     }
 
     def _build_queue_tab(self):
@@ -1217,20 +1254,20 @@ class AudiobookConverterMain(QMainWindow):
         layout.setSpacing(8)
 
         top = QHBoxLayout()
-        self._queue_summary = QLabel("尚未开始生成。开始转换后，这里会逐章显示状态；失败的章节可单独重试。")
+        self._queue_summary = QLabel(tr("尚未开始生成。开始转换后，这里会逐章显示状态；失败的章节可单独重试。"))
         self._queue_summary.setWordWrap(True)
         top.addWidget(self._queue_summary, 1)
-        self._queue_retry_all_btn = QPushButton("🔁 重试全部失败项")
+        self._queue_retry_all_btn = QPushButton(tr("🔁 重试全部失败项"))
         self._queue_retry_all_btn.clicked.connect(self._queue_retry_failed)
         top.addWidget(self._queue_retry_all_btn)
-        self._queue_open_btn = QPushButton("📂 打开输出目录")
+        self._queue_open_btn = QPushButton(tr("📂 打开输出目录"))
         self._queue_open_btn.clicked.connect(
             lambda: self._last_output_dir and self._open_path(self._last_output_dir))
         top.addWidget(self._queue_open_btn)
         layout.addLayout(top)
 
         t = QTableWidget(0, 5)
-        t.setHorizontalHeaderLabels(["#", "章节", "状态", "说明", ""])
+        t.setHorizontalHeaderLabels(["#", tr("章节"), tr("状态"), tr("说明"), ""])
         t.verticalHeader().setVisible(False)
         t.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         t.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -1294,7 +1331,7 @@ class AudiobookConverterMain(QMainWindow):
                 cell.setToolTip(it.get("filename", ""))
             self._queue_table.setItem(i, col, cell)
         if status == "error":
-            btn = QPushButton("重试")
+            btn = QPushButton(tr("重试"))
             # 全局按钮样式（min-height 32 + 上下 padding）放进表格行会溢出；行内用紧凑样式
             btn.setStyleSheet("padding:1px 14px; min-height:0px; font-size:13px;")
             btn.setEnabled(not self.is_converting)
@@ -1312,19 +1349,19 @@ class AudiobookConverterMain(QMainWindow):
         active = len(items) - counts.get("skipped", 0)
         done, failed = counts.get("done", 0), counts.get("error", 0)
         if items:
-            parts = [f"共 {active} 项", f"完成 {done}"]
+            parts = [tr('共 {active} 项', active=active), tr('完成 {done}', done=done)]
             if counts.get("running"):
-                parts.append(f"生成中 {counts['running']}")
+                parts.append(tr('生成中 {v1}', v1=counts['running']))
             if counts.get("pending"):
-                parts.append(f"等待 {counts['pending']}")
+                parts.append(tr('等待 {v1}', v1=counts['pending']))
             if failed:
-                parts.append(f"<span style='color:#C62828'>失败 {failed}</span>")
+                parts.append(tr("<span style='color:#C62828'>失败 {failed}</span>", failed=failed))
             if counts.get("skipped"):
-                parts.append(f"未勾选 {counts['skipped']}")
+                parts.append(tr('未勾选 {v1}', v1=counts['skipped']))
             self._queue_summary.setText(" · ".join(parts))
-            tab_text = f"生成队列 ({done}/{active})" + (f" · 失败 {failed}" if failed else "")
+            tab_text = tr('生成队列 ({done}/{active})', done=done, active=active) + (tr(' · 失败 {failed}', failed=failed) if failed else "")
         else:
-            tab_text = "生成队列"
+            tab_text = tr("生成队列")
         idx = self._tab_widget.indexOf(self._queue_tab)
         if idx >= 0:
             self._tab_widget.setTabText(idx, tab_text)
@@ -1341,10 +1378,10 @@ class AudiobookConverterMain(QMainWindow):
         if self.is_converting or not indices:
             return
         if not self._last_output_dir or not load_progress(self._last_output_dir):
-            QMessageBox.information(self, "无法重试",
-                                    "找不到本次生成的进度文件（可能已被删除或目录已移动），请重新开始转换。")
+            QMessageBox.information(self, tr("无法重试"),
+                                    tr("找不到本次生成的进度文件（可能已被删除或目录已移动），请重新开始转换。"))
             return
-        self._run_convert(self._last_output_dir, self._last_prefix or "有声读物", None,
+        self._run_convert(self._last_output_dir, self._last_prefix or tr("有声读物"), None,
                           resume=True, only_indices=set(indices))
 
     def _queue_retry_failed(self):
@@ -1355,60 +1392,61 @@ class AudiobookConverterMain(QMainWindow):
         layout.setSpacing(8)
 
         audio_row = QHBoxLayout()
-        self._audio_file_label = QLabel("未选择文件")
+        self._audio_file_label = QLabel(tr("未选择文件"))
         self._audio_file_label.setStyleSheet("color:gray")
-        audio_row.addWidget(QLabel("音频文件:"))
+        audio_row.addWidget(QLabel(tr("音频文件:")))
         audio_row.addWidget(self._audio_file_label, 1)
-        audio_row.addWidget(QPushButton("📂 选择音频文件", clicked=self._select_audio_file))
+        audio_row.addWidget(QPushButton(tr("📂 选择音频文件"), clicked=self._select_audio_file))
         layout.addLayout(audio_row)
 
         # ASR 引擎选择（内置 + 外挂）
         eng_row = QHBoxLayout()
-        eng_row.addWidget(QLabel("ASR 引擎:"))
+        eng_row.addWidget(QLabel(tr("ASR 引擎:")))
         self._asr_engine_combo = QComboBox()
-        self._asr_engine_combo.addItem("faster-whisper（内置）", "builtin")
+        self._asr_engine_combo.addItem(tr("faster-whisper（内置）"), "builtin")
         eng_row.addWidget(self._asr_engine_combo, 1)
         self._asr_engine_combo.currentIndexChanged.connect(self._on_asr_engine_change)
         layout.addLayout(eng_row)
 
         model_row = QHBoxLayout()
-        model_row.addWidget(QLabel("Whisper 模型:"))
+        model_row.addWidget(QLabel(tr("Whisper 模型:")))
         self._asr_model_combo = QComboBox()
         self._asr_model_combo.addItems(list(WHISPER_MODELS.keys()))
         self._asr_model_combo.setCurrentText("base")
         model_row.addWidget(self._asr_model_combo, 1)
-        model_row.addWidget(QLabel("精度:"))
+        model_row.addWidget(QLabel(tr("精度:")))
         self._asr_compute_combo = QComboBox()
         for label, val in WHISPER_COMPUTE_TYPES.items():
-            self._asr_compute_combo.addItem(label, val)
+            self._asr_compute_combo.addItem(tr(label), val)
         self._asr_compute_combo.setToolTip(
-            "auto: CPU 用 int8、GPU 用 float16\n"
-            "int8_float16: GPU 上更省显存，速度接近 float16")
+            tr("auto: CPU 用 int8、GPU 用 float16\n"
+            "int8_float16: GPU 上更省显存，速度接近 float16"))
         model_row.addWidget(self._asr_compute_combo, 1)
         layout.addLayout(model_row)
-        layout.addWidget(QLabel("tiny=最快 ~150MB | base=推荐 ~300MB | small ~1GB | medium ~3GB | large-v3=最准 ~6GB"))
+        layout.addWidget(QLabel(tr("tiny=最快 ~150MB | base=推荐 ~300MB | small ~1GB | medium ~3GB | large-v3=最准 ~6GB")))
 
         lang_row = QHBoxLayout()
-        lang_row.addWidget(QLabel("语言:"))
+        lang_row.addWidget(QLabel(tr("语言:")))
         self._asr_lang_combo = QComboBox()
-        self._asr_lang_combo.addItems([
-            "auto（自动检测）", "zh（中文）", "en（英文）", "ja（日文）",
-            "ko（韩文）", "fr（法文）", "de（德文）", "es（西班牙文）", "ru（俄文）",
-        ])
+        for code, name in [("auto", tr("自动检测")), ("zh", tr("中文")), ("en", tr("英文")), ("ja", tr("日文")),
+                           ("ko", tr("韩文")), ("fr", tr("法文")), ("de", tr("德文")), ("es", tr("西班牙文")),
+                           ("ru", tr("俄文"))]:
+            self._asr_lang_combo.addItem(tr("{code}（{name}）", code=code, name=name), code)
         lang_row.addWidget(self._asr_lang_combo, 1)
         layout.addLayout(lang_row)
 
         fmt_row = QHBoxLayout()
-        fmt_row.addWidget(QLabel("输出格式:"))
+        fmt_row.addWidget(QLabel(tr("输出格式:")))
         self._asr_format_group = QButtonGroup(self)
-        for label, val in [("纯文本 (txt)", "txt"), ("字幕 (srt)", "srt"), ("JSON", "json")]:
+        for label, val in [(tr("纯文本 (txt)"), "txt"), (tr("字幕 (srt)"), "srt"), ("JSON", "json")]:
             rb = QRadioButton(label)
+            rb.setProperty("format", val)
             self._asr_format_group.addButton(rb)
             fmt_row.addWidget(rb)
         self._asr_format_group.buttons()[0].setChecked(True)
         layout.addLayout(fmt_row)
 
-        self._btn_asr_start = QPushButton("▶ 开始识别")
+        self._btn_asr_start = QPushButton(tr("▶ 开始识别"))
         self._btn_asr_start.setObjectName("accentBtn")
         self._btn_asr_start.clicked.connect(self._start_asr)
         layout.addWidget(self._btn_asr_start)
@@ -1423,8 +1461,8 @@ class AudiobookConverterMain(QMainWindow):
         layout.addWidget(self._asr_result, 1)
 
         btn_row = QHBoxLayout()
-        btn_row.addWidget(QPushButton("📋 复制结果", clicked=self._copy_asr_result))
-        btn_row.addWidget(QPushButton("💾 保存到文件", clicked=self._save_asr_result))
+        btn_row.addWidget(QPushButton(tr("📋 复制结果"), clicked=self._copy_asr_result))
+        btn_row.addWidget(QPushButton(tr("💾 保存到文件"), clicked=self._save_asr_result))
         layout.addLayout(btn_row)
 
     # ================ Signal Wiring ================
@@ -1462,11 +1500,11 @@ class AudiobookConverterMain(QMainWindow):
 
         engines = get_registered_engines()
         BUILTIN = {
-            "edge": ("Edge", "联网 · 快速"),
-            "local": ("本地", "离线 · 系统内置"),
-            "piper": ("Piper", "离线高质量"),
-            "cosyvoice": ("CosyVoice", "离线神经网络"),
-            "clone": ("声音克隆", "复刻你的音色"),
+            "edge": ("Edge", tr("联网 · 快速")),
+            "local": (tr("本地"), tr("离线 · 系统内置")),
+            "piper": ("Piper", tr("离线高质量")),
+            "cosyvoice": ("CosyVoice", tr("离线神经网络")),
+            "clone": (tr("声音克隆"), tr("复刻你的音色")),
         }
 
         first_btn = None
@@ -1475,11 +1513,11 @@ class AudiobookConverterMain(QMainWindow):
             if info["type"] == "builtin":
                 name, sub = BUILTIN.get(eng_id, (info.get("name", eng_id), ""))
                 ready, _ = check_engine_ready(eng_id)
-                suffix = "\n（需安装）" if not ready else ""
+                suffix = tr("\n（需安装）") if not ready else ""
                 btn = QRadioButton(f"{name}{suffix}\n{sub}")
             else:
                 name = info.get("name", eng_id)
-                btn = QRadioButton(f"⚡ {name}\n外挂引擎")
+                btn = QRadioButton(tr('⚡ {name}\n外挂引擎', name=name))
 
             btn.setStyleSheet("QRadioButton{font-size:11px;padding:6px}")
             self._engine_grid.addWidget(btn, i // COLS, i % COLS)
@@ -1526,20 +1564,21 @@ class AudiobookConverterMain(QMainWindow):
             engine = "edge"
 
         if self.is_converting:
-            self._status_label.setText("正在生成中，引擎/语音切换将在下次生成时生效")
+            self._status_label.setText(tr("正在生成中，引擎/语音切换将在下次生成时生效"))
             return
 
         voices = get_voice_list(engine)
         self._voice_combo.blockSignals(True)
         self._voice_combo.clear()
-        self._voice_combo.addItems(voices)
+        for v in voices:
+            self._voice_combo.addItem(tr(v), v)  # itemData 是 get_voice_id 的查找键，显示文字可翻译
         self._voice_combo.blockSignals(False)
 
         ready, msg = check_engine_ready(engine)
         if hasattr(self, '_qb_convert'):
             self._qb_convert.setEnabled(ready)
         if hasattr(self, '_status_label'):
-            self._status_label.setText("就绪")
+            self._status_label.setText(tr("就绪"))
 
         self._update_quickbar()
         self._update_statusbar()
@@ -1559,23 +1598,20 @@ class AudiobookConverterMain(QMainWindow):
         self._on_engine_change()
 
     def _on_rate_change(self, val):
-        if val == 0: label = "正常"
-        elif val > 0: label = f"快 +{val}%"
-        else: label = f"慢 {val}%"
+        if val == 0: label = tr("正常")
+        elif val > 0: label = tr('快 +{val}%', val=val)
+        else: label = tr('慢 {val}%', val=val)
         self._rate_label.setText(label)
         self._qb_rate.setText(label)
 
     def _on_mode_change(self, btn=None):
-        if btn:
-            for label, val in [("按章节拆分","chapter"),("按时间拆分","time"),("合并为一个文件","single")]:
-                if btn.text().startswith(label):
-                    self._mode_var = val
-                    break
+        if btn and btn.property("mode"):
+            self._mode_var = btn.property("mode")
         self._time_frame.setVisible(self._mode_var == "time")
         self._update_split_estimate()
 
     def _on_time_slider_change(self, val):
-        self._time_label.setText(f"{val} 分钟")
+        self._time_label.setText(tr('{val} 分钟', val=val))
         self._update_split_estimate()
 
     def _get_rate_string(self):
@@ -1607,10 +1643,10 @@ class AudiobookConverterMain(QMainWindow):
                     break
         ready, _ = check_engine_ready(engine)
         dot = "●" if ready else "○"
-        names = {"edge":"Edge","local":"本地","piper":"Piper","cosyvoice":"CosyVoice"}
+        names = {"edge":"Edge","local":tr("本地"),"piper":"Piper","cosyvoice":"CosyVoice"}
         self._qb_engine.setText(f"{dot} {names.get(engine, engine)}")
         voice = self._voice_combo.currentText()
-        self._qb_voice.setText(f"▸ {voice}" if voice else "▸ 未选择语音")
+        self._qb_voice.setText(f"▸ {voice}" if voice else tr("▸ 未选择语音"))
 
     def _update_statusbar(self):
         """空闲时把引擎就绪情况汇总到底部单一状态行"""
@@ -1626,7 +1662,7 @@ class AudiobookConverterMain(QMainWindow):
         ready, msg = check_engine_ready(engine)
         voices = get_voice_list(engine)
         dot = "●" if ready else "○"
-        self._status_label.setText(f"{dot} {msg[:40]} · {len(voices)} 语音 · v{VERSION}")
+        self._status_label.setText(tr('{dot} {v1} · {v2} 语音 · v{VERSION}', dot=dot, v1=msg[:40], v2=len(voices), VERSION=VERSION))
 
     # ================ Chapters ================
 
@@ -1698,16 +1734,16 @@ class AudiobookConverterMain(QMainWindow):
         for i in range(total):
             if self._chapter_tree.topLevelItem(i).checkState(0) == Qt.CheckState.Checked:
                 checked += 1
-        self._chapter_count.setText(f"已选 {checked}/{total} 章" if total else "未检测到章节")
+        self._chapter_count.setText(tr('已选 {checked}/{total} 章', checked=checked, total=total) if total else tr("未检测到章节"))
 
     def _update_split_estimate(self):
         mode = self._mode_var
         sel = set(self._get_selected_indices()) if self._chapter_tree.topLevelItemCount() > 0 else set(range(len(self.chapters)))
         sel_chs = [c for i, c in enumerate(self.chapters) if i in sel]
         if mode == "single":
-            self._split_estimate.setText("将生成 1 个合并文件")
+            self._split_estimate.setText(tr("将生成 1 个合并文件"))
         elif mode == "chapter":
-            self._split_estimate.setText(f"将生成 {len(sel_chs)} 个文件（每章一个）")
+            self._split_estimate.setText(tr('将生成 {v1} 个文件（每章一个）', v1=len(sel_chs)))
         elif mode == "time":
             mins = self._time_slider.value()
             rate = self._get_rate_string()
@@ -1723,7 +1759,7 @@ class AudiobookConverterMain(QMainWindow):
                     count = 1
             else:
                 count = 0
-            self._split_estimate.setText(f"将生成约 {count} 个文件（每段 ≈ {mins} 分钟）")
+            self._split_estimate.setText(tr('将生成约 {count} 个文件（每段 ≈ {mins} 分钟）', count=count, mins=mins))
         else:
             self._split_estimate.setText("")
 
@@ -1731,8 +1767,8 @@ class AudiobookConverterMain(QMainWindow):
 
     def _add_files(self):
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "选择一个或多个文本文件", "",
-            "支持的文档 (*.txt *.md *.markdown *.docx *.epub *.html *.htm *.pdf);;所有文件 (*.*)")
+            self, tr("选择一个或多个文本文件"), "",
+            tr("支持的文档 (*.txt *.md *.markdown *.docx *.epub *.html *.htm *.pdf);;所有文件 (*.*)"))
         if not paths:
             return
         existing = {f["path"] for f in self._file_paths}
@@ -1742,7 +1778,7 @@ class AudiobookConverterMain(QMainWindow):
                     info = load_file_content(path)
                     self._file_paths.append(info)
                 except Exception as e:
-                    QMessageBox.warning(self, "错误", f"读取文件失败: {e}")
+                    QMessageBox.warning(self, tr("错误"), tr('读取文件失败: {e}', e=e))
         self._rebuild_file_tree()
         self._reconcile_text()
 
@@ -1759,11 +1795,11 @@ class AudiobookConverterMain(QMainWindow):
     def _rebuild_file_tree(self):
         self._file_tree.clear()
         for fi in self._file_paths:
-            item = QTreeWidgetItem([fi["name"], f"{len(fi['content'])} 字", "已加载"])
+            item = QTreeWidgetItem([fi["name"], tr('{v1} 字', v1=len(fi['content'])), tr("已加载")])
             item.setData(0, Qt.ItemDataRole.UserRole, fi["path"])
             self._file_tree.addTopLevelItem(item)
         n = len(self._file_paths)
-        self._file_count_label.setText(f"已加载 {n} 个文件" if n else "未加载文件")
+        self._file_count_label.setText(tr('已加载 {n} 个文件', n=n) if n else tr("未加载文件"))
 
     def _reconcile_text(self):
         if not self._file_paths:
@@ -1774,19 +1810,19 @@ class AudiobookConverterMain(QMainWindow):
         merged = "\n\n".join(f["content"] for f in self._file_paths)
         self._text_area.setPlainText(merged)
         total = sum(len(f["content"]) for f in self._file_paths)
-        self._status_label.setText(f"已加载 {len(self._file_paths)} 个文件（{total}字）")
+        self._status_label.setText(tr('已加载 {v1} 个文件（{total}字）', v1=len(self._file_paths), total=total))
         self._refresh_chapters()
 
     # ================ Storage & Deps ================
 
     def _choose_storage(self):
-        path = QFileDialog.getExistingDirectory(self, "选择便携存储文件夹")
+        path = QFileDialog.getExistingDirectory(self, tr("选择便携存储文件夹"))
         if not path:
             return
         try:
             set_storage_dir(path)
         except Exception as e:
-            QMessageBox.critical(self, "错误", str(e))
+            QMessageBox.critical(self, tr("错误"), str(e))
             return
         self._storage_label.setText(get_storage_dir())
         self._refresh_deps()
@@ -1804,10 +1840,10 @@ class AudiobookConverterMain(QMainWindow):
             else:
                 subprocess.Popen(["xdg-open", path])
         except Exception:
-            QMessageBox.information(self, "目录", path)
+            QMessageBox.information(self, tr("目录"), path)
 
     def _reset_storage(self):
-        if QMessageBox.question(self, "确认", "恢复为默认存储目录（用户主目录）？") != QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, tr("确认"), tr("恢复为默认存储目录（用户主目录）？")) != QMessageBox.StandardButton.Yes:
             return
         set_storage_dir("")
         self._storage_label.setText(get_storage_dir())
@@ -1817,17 +1853,18 @@ class AudiobookConverterMain(QMainWindow):
         try:
             info = scan_storage_dependencies()
         except Exception as e:
-            self._deps_text.setPlainText(f"扫描失败: {e}")
+            self._deps_text.setPlainText(tr('扫描失败: {e}', e=e))
             return
 
         lines = []
         mark = lambda x: "✓" if x else "✗"
-        lines.append(f"{mark(info['ffmpeg'])} ffmpeg: {info['ffmpeg'] or '未找到'}")
-        lines.append(f"{mark(info['ffprobe'])} ffprobe: {info['ffprobe'] or '未找到'}")
-        lines.append(f"{mark(info['piper_python'])} Piper Python 包: {'已安装' if info['piper_python'] else '未安装'}")
+        lines.append(f"{mark(info['ffmpeg'])} ffmpeg: {info['ffmpeg'] or tr('未找到')}")
+        lines.append(f"{mark(info['ffprobe'])} ffprobe: {info['ffprobe'] or tr('未找到')}")
+        lines.append(tr('{mark} Piper Python 包: 已安装', mark=mark(True)) if info['piper_python']
+                     else tr('{mark} Piper Python 包: 未安装', mark=mark(False)))
         if info["piper_cli"]:
             lines.append(f"✓ Piper CLI: {info['piper_cli']}")
-        lines.append(f"Piper 语音包: {len(info['piper_models'])} 个")
+        lines.append(tr('Piper 语音包: {v1} 个', v1=len(info['piper_models'])))
         for m in info["piper_models"][:4]:
             lines.append(f"   · {os.path.basename(m)}")
 
@@ -1837,26 +1874,25 @@ class AudiobookConverterMain(QMainWindow):
 
         try:
             from audiobook.cloning.client import sft_readiness, readiness as clone_readiness
-            for label, (ok, msg) in (("CosyVoice", sft_readiness()), ("声音克隆", clone_readiness())):
+            for label, (ok, msg) in (("CosyVoice", sft_readiness()), (tr("声音克隆"), clone_readiness())):
                 lines.append(f"{mark(ok)} {label}: {msg.splitlines()[0]}")
         except Exception:
-            lines.append("○ CosyVoice: 检测失败")
+            lines.append(tr("○ CosyVoice: 检测失败"))
 
         try:
             from audiobook import models as _M
             _entries = _M.list_installed()
-            lines.append(f"模型总占用: {_M.format_size(_M.total_size(_entries))}"
-                         f"（{len(_entries)} 个，详见「模型管理器」）")
+            lines.append(tr('模型总占用: {v1}（{v2} 个，详见「模型管理器」）', v1=_M.format_size(_M.total_size(_entries)), v2=len(_entries)))
         except Exception:
             pass
 
         if info["missing"]:
             lines.append("")
-            lines.append("缺少:")
+            lines.append(tr("缺少:"))
             for m in info["missing"]:
                 lines.append(f"  - {m}")
             lines.append("")
-            lines.append("下载地址:")
+            lines.append(tr("下载地址:"))
             if any("ffmpeg" in m for m in info["missing"]):
                 lines.append("  ffmpeg: https://www.gyan.dev/ffmpeg/builds/")
             if any("Piper" in m for m in info["missing"]):
@@ -1871,7 +1907,7 @@ class AudiobookConverterMain(QMainWindow):
                     engine = eng_id
                     break
         ready, msg = check_engine_ready(engine)
-        lines.append(f"\n{'✓' if ready else '✗'} 当前引擎: {msg}")
+        lines.append(tr('\n{v1} 当前引擎: {msg}', v1='✓' if ready else '✗', msg=msg))
 
         self._deps_text.setPlainText("\n".join(lines))
         self._rebuild_engine_buttons()
@@ -1881,7 +1917,7 @@ class AudiobookConverterMain(QMainWindow):
         from audiobook import models as M
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("模型管理器")
+        dlg.setWindowTitle(tr("模型管理器"))
         dlg.resize(780, 660)
         v = QVBoxLayout(dlg)
 
@@ -1890,7 +1926,7 @@ class AudiobookConverterMain(QMainWindow):
         v.addWidget(summary)
 
         tree = QTreeWidget()
-        tree.setHeaderLabels(["名称", "大小", "位置"])
+        tree.setHeaderLabels([tr("名称"), tr("大小"), tr("位置")])
         tree.setRootIsDecorated(True)
         tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         tree.header().setStretchLastSection(True)
@@ -1900,27 +1936,27 @@ class AudiobookConverterMain(QMainWindow):
         v.addWidget(tree, 1)
 
         act_row = QHBoxLayout()
-        btn_refresh = QPushButton("🔄 刷新")
-        btn_delete = QPushButton("🗑 删除选中")
+        btn_refresh = QPushButton(tr("🔄 刷新"))
+        btn_delete = QPushButton(tr("🗑 删除选中"))
         btn_delete.setEnabled(False)
-        btn_open = QPushButton("📂 打开所在文件夹")
+        btn_open = QPushButton(tr("📂 打开所在文件夹"))
         btn_open.setEnabled(False)
         for b in (btn_refresh, btn_delete, btn_open):
             act_row.addWidget(b)
         act_row.addStretch()
         v.addLayout(act_row)
 
-        dl_box = QGroupBox("下载模型")
+        dl_box = QGroupBox(tr("下载模型"))
         dl_l = QVBoxLayout(dl_box)
         dl_row = QHBoxLayout()
         dl_combo = QComboBox()
         dl_row.addWidget(dl_combo, 1)
-        btn_dl = QPushButton("⬇ 下载")
+        btn_dl = QPushButton(tr("⬇ 下载"))
         dl_row.addWidget(btn_dl)
         dl_l.addLayout(dl_row)
         cat_row = QHBoxLayout()
-        cat_row.addWidget(QLabel("更多多语言 Piper 语音包："))
-        btn_catalog = QPushButton("🌐 Piper 语音包目录…")
+        cat_row.addWidget(QLabel(tr("更多多语言 Piper 语音包：")))
+        btn_catalog = QPushButton(tr("🌐 Piper 语音包目录…"))
         cat_row.addWidget(btn_catalog)
         cat_row.addStretch()
         dl_l.addLayout(cat_row)
@@ -1931,7 +1967,7 @@ class AudiobookConverterMain(QMainWindow):
         v.addWidget(status)
         close_row = QHBoxLayout()
         close_row.addStretch()
-        btn_close = QPushButton("关闭")
+        btn_close = QPushButton(tr("关闭"))
         btn_close.clicked.connect(dlg.close)
         close_row.addWidget(btn_close)
         v.addLayout(close_row)
@@ -1943,7 +1979,7 @@ class AudiobookConverterMain(QMainWindow):
             entries = M.list_installed()
             for kind in M.KIND_ORDER:
                 group = [e for e in entries if e.kind == kind]
-                top = QTreeWidgetItem([f"{M.KIND_LABELS[kind]}（{len(group)}）",
+                top = QTreeWidgetItem([tr("{kind}（{n}）", kind=tr(M.KIND_LABELS[kind]), n=len(group)),
                                        M.format_size(M.total_size(group)), ""])
                 f = top.font(0)
                 f.setBold(True)
@@ -1954,24 +1990,23 @@ class AudiobookConverterMain(QMainWindow):
                     child = QTreeWidgetItem([e.name, M.format_size(e.size_bytes), e.location])
                     child.setData(0, ENTRY_ROLE, e)
                     if not e.managed:
-                        child.setText(0, f"{e.name}  [外部·只读]")
+                        child.setText(0, tr('{name}  [外部·只读]', name=e.name))
                         child.setForeground(0, QColor("gray"))
-                        child.setToolTip(0, "来自「添加模型文件夹」的外部目录，为安全起见不在此删除")
+                        child.setToolTip(0, tr("来自「添加模型文件夹」的外部目录，为安全起见不在此删除"))
                     top.addChild(child)
                 if not group:
-                    hint = QTreeWidgetItem(["（未安装）", "", ""])
+                    hint = QTreeWidgetItem([tr("（未安装）"), "", ""])
                     hint.setForeground(0, QColor("gray"))
                     hint.setFlags(hint.flags() & ~Qt.ItemFlag.ItemIsSelectable)
                     top.addChild(hint)
                 top.setExpanded(True)
             summary.setText(
-                f"已安装 <b>{len(entries)}</b> 个模型，共占用 <b>{M.format_size(M.total_size(entries))}</b>"
-                f"　·　存储目录：{get_storage_dir()}")
+                tr('已安装 <b>{v1}</b> 个模型，共占用 <b>{v2}</b>\u3000·\u3000存储目录：{v3}', v1=len(entries), v2=M.format_size(M.total_size(entries)), v3=get_storage_dir()))
 
             dl_combo.clear()
             for it in M.downloadable():
-                mark = "✓ 已安装 · " if it.installed else ""
-                dl_combo.addItem(f"{mark}{M.KIND_LABELS[it.kind]} — {it.label}", (it.kind, it.id))
+                mark = tr("✓ 已安装 · ") if it.installed else ""
+                dl_combo.addItem(f"{mark}{tr(M.KIND_LABELS[it.kind])} — {it.label}", (it.kind, it.id))
             _on_select()
 
         def _selected_entry():
@@ -1994,19 +2029,19 @@ class AudiobookConverterMain(QMainWindow):
             if not e:
                 return
             if self._convert_worker is not None and self._convert_worker.isRunning():
-                QMessageBox.warning(dlg, "正在生成", "生成进行中，暂不能删除模型。请先停止或等待完成。")
+                QMessageBox.warning(dlg, tr("正在生成"), tr("生成进行中，暂不能删除模型。请先停止或等待完成。"))
                 return
             if QMessageBox.question(
-                    dlg, "删除模型",
-                    f"删除「{e.name}」？\n将释放 {M.format_size(e.size_bytes)}，删除后需重新下载才能使用。"
+                    dlg, tr("删除模型"),
+                    tr('删除「{name}」？\n将释放 {v1}，删除后需重新下载才能使用。', name=e.name, v1=M.format_size(e.size_bytes))
             ) != QMessageBox.StandardButton.Yes:
                 return
             try:
                 M.delete_model(e)
             except Exception as ex:
-                QMessageBox.critical(dlg, "删除失败", str(ex))
+                QMessageBox.critical(dlg, tr("删除失败"), str(ex))
                 return
-            status.setText(f"已删除 {e.name}，释放 {M.format_size(e.size_bytes)}")
+            status.setText(tr('已删除 {name}，释放 {v1}', name=e.name, v1=M.format_size(e.size_bytes)))
             _after_change()
 
         def _open_location():
@@ -2019,18 +2054,18 @@ class AudiobookConverterMain(QMainWindow):
             if not data:
                 return
             kind, model_id = data
-            status.setText(f"正在下载 {model_id}…（进度见主窗口底部）")
+            status.setText(tr('正在下载 {model_id}…（进度见主窗口底部）', model_id=model_id))
             btn_dl.setEnabled(False)
             self._model_dl_worker = _ModelDownloadWorker()
             self._model_dl_worker.setup(kind, model_id)
 
             def _done(_r):
-                status.setText(f"{model_id} 下载完成")
+                status.setText(tr('{model_id} 下载完成', model_id=model_id))
                 btn_dl.setEnabled(True)
                 _after_change()
 
             def _fail(err):
-                status.setText(f"下载失败: {err}")
+                status.setText(tr('下载失败: {err}', err=err))
                 btn_dl.setEnabled(True)
 
             self._model_dl_worker.finished_ok.connect(_done)
@@ -2066,13 +2101,13 @@ class AudiobookConverterMain(QMainWindow):
         from tts_engine import _load_config, _save_config
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("声音克隆")
+        dlg.setWindowTitle(tr("声音克隆"))
         dlg.resize(780, 620)
         root = QVBoxLayout(dlg)
         tabs = QTabWidget()
         tabs.setObjectName("cloneTabs")
         root.addWidget(tabs, 1)
-        consent = QLabel("⚠ 请只克隆你本人或已获明确授权的声音。")
+        consent = QLabel(tr("⚠ 请只克隆你本人或已获明确授权的声音。"))
         consent.setStyleSheet("color:#B45309")
         root.addWidget(consent)
         status = QLabel("")
@@ -2081,7 +2116,7 @@ class AudiobookConverterMain(QMainWindow):
         root.addWidget(status)
         close_row = QHBoxLayout()
         close_row.addStretch()
-        btn_close = QPushButton("关闭")
+        btn_close = QPushButton(tr("关闭"))
         btn_close.clicked.connect(dlg.close)
         close_row.addWidget(btn_close)
         root.addLayout(close_row)
@@ -2091,7 +2126,7 @@ class AudiobookConverterMain(QMainWindow):
         lv = QVBoxLayout(pv)
         tbl = QTableWidget(0, 3)
         tbl.setObjectName("cloneTable")
-        tbl.setHorizontalHeaderLabels(["名称", "时长", "文字稿"])
+        tbl.setHorizontalHeaderLabels([tr("名称"), tr("时长"), tr("文字稿")])
         tbl.verticalHeader().setVisible(False)
         tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         tbl.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -2103,44 +2138,44 @@ class AudiobookConverterMain(QMainWindow):
         tbl.setColumnWidth(0, 180)
         lv.addWidget(tbl, 1)
         ops = QHBoxLayout()
-        btn_new = QPushButton("＋ 新建音色…")
+        btn_new = QPushButton(tr("＋ 新建音色…"))
         btn_new.setObjectName("cloneNew")
-        btn_text = QPushButton("编辑文字稿")
+        btn_text = QPushButton(tr("编辑文字稿"))
         btn_text.setObjectName("cloneEditText")
-        btn_rename = QPushButton("重命名")
+        btn_rename = QPushButton(tr("重命名"))
         btn_rename.setObjectName("cloneRename")
-        btn_del = QPushButton("删除")
+        btn_del = QPushButton(tr("删除"))
         btn_del.setObjectName("cloneDelete")
         for b in (btn_new, btn_text, btn_rename, btn_del):
             ops.addWidget(b)
         ops.addStretch()
         lv.addLayout(ops)
         listen = QHBoxLayout()
-        sample = QLineEdit("你好，这是用我的声音朗读的有声书。")
+        sample = QLineEdit(tr("你好，这是用我的声音朗读的有声书。"))
         sample.setObjectName("cloneSampleText")
         listen.addWidget(sample, 1)
-        btn_listen = QPushButton("▶ 试听所选音色")
+        btn_listen = QPushButton(tr("▶ 试听所选音色"))
         btn_listen.setObjectName("cloneListen")
         listen.addWidget(btn_listen)
         lv.addLayout(listen)
-        tip = QLabel("首次试听需要加载模型（GPU 约十几秒，CPU 可能一分钟以上），之后会快很多。")
+        tip = QLabel(tr("首次试听需要加载模型（GPU 约十几秒，CPU 可能一分钟以上），之后会快很多。"))
         tip.setWordWrap(True)
         tip.setStyleSheet("color:gray")
         lv.addWidget(tip)
-        tabs.addTab(pv, "音色")
+        tabs.addTab(pv, tr("音色"))
 
         # ---------- 环境设置页 ----------
         pe = QWidget()
         le = QVBoxLayout(pe)
         intro = QLabel(
-            "声音克隆基于开源的 CosyVoice（依赖 torch，建议 NVIDIA 显卡），需要单独安装：<ol>"
+            tr("声音克隆基于开源的 CosyVoice（依赖 torch，建议 NVIDIA 显卡），需要单独安装：<ol>"
             "<li>按官方说明 <code>git clone --recursive https://github.com/FunAudioLLM/CosyVoice.git</code> "
             "并在独立的 conda / venv 环境里安装依赖；</li>"
             "<li>用下面的「下载模型」获取 <b>Fun-CosyVoice3-0.5B</b>（或 CosyVoice2-0.5B），"
             "也可自行下载到存储目录的 <code>cosyvoice-models/</code> 下；</li>"
             "<li>在下面填写该环境的 Python 与仓库路径，点「检测环境」。</li></ol>"
             "这里的环境同时用于「CosyVoice」引擎（预置中文男女声等，需下载 CosyVoice-300M-SFT）。"
-            "详细命令见 README「声音克隆」一节。")
+            "详细命令见 README「声音克隆」一节。"))
         intro.setWordWrap(True)
         intro.setTextFormat(Qt.TextFormat.RichText)
         le.addWidget(intro)
@@ -2149,19 +2184,19 @@ class AudiobookConverterMain(QMainWindow):
         py_edit = QLineEdit(cfg.get("cosyvoice_python", ""))
         py_edit.setObjectName("clonePython")
         default_py = C.resolve_python() if not cfg.get("cosyvoice_python") else ""
-        py_edit.setPlaceholderText(f"留空 = 当前解释器（{default_py}）" if default_py
-                                   else "必填：CosyVoice 环境里的 python，如 …/envs/cosyvoice/bin/python")
+        py_edit.setPlaceholderText(tr('留空 = 当前解释器（{default_py}）', default_py=default_py) if default_py
+                                   else tr("必填：CosyVoice 环境里的 python，如 …/envs/cosyvoice/bin/python"))
         repo_edit = QLineEdit(cfg.get("cosyvoice_repo", ""))
         repo_edit.setObjectName("cloneRepo")
-        repo_edit.setPlaceholderText("CosyVoice 仓库目录（git clone 下来的文件夹）")
+        repo_edit.setPlaceholderText(tr("CosyVoice 仓库目录（git clone 下来的文件夹）"))
         model_edit = QLineEdit(cfg.get("clone_model_dir", ""))
         model_edit.setObjectName("cloneModelDir")
         auto_md = C.resolve_model_dir() if not cfg.get("clone_model_dir") else ""
-        model_edit.setPlaceholderText(f"留空 = 自动：{auto_md}" if auto_md
-                                      else "留空 = 自动在 cosyvoice-models/ 下查找（当前未找到）")
+        model_edit.setPlaceholderText(tr('留空 = 自动：{auto_md}', auto_md=auto_md) if auto_md
+                                      else tr("留空 = 自动在 cosyvoice-models/ 下查找（当前未找到）"))
 
         def _browse_file(edit):
-            path, _ = QFileDialog.getOpenFileName(dlg, "选择 Python 解释器")
+            path, _ = QFileDialog.getOpenFileName(dlg, tr("选择 Python 解释器"))
             if path:
                 edit.setText(path)
 
@@ -2171,27 +2206,27 @@ class AudiobookConverterMain(QMainWindow):
                 edit.setText(path)
 
         for row, (label, edit, browse) in enumerate((
-                ("Python 解释器", py_edit, lambda: _browse_file(py_edit)),
-                ("CosyVoice 仓库", repo_edit, lambda: _browse_dir(repo_edit, "选择 CosyVoice 仓库目录")),
-                ("模型目录", model_edit, lambda: _browse_dir(model_edit, "选择 CosyVoice 模型目录")))):
+                (tr("Python 解释器"), py_edit, lambda: _browse_file(py_edit)),
+                (tr("CosyVoice 仓库"), repo_edit, lambda: _browse_dir(repo_edit, tr("选择 CosyVoice 仓库目录"))),
+                (tr("模型目录"), model_edit, lambda: _browse_dir(model_edit, tr("选择 CosyVoice 模型目录"))))):
             grid.addWidget(QLabel(label), row, 0)
             grid.addWidget(edit, row, 1)
-            b = QPushButton("浏览…")
+            b = QPushButton(tr("浏览…"))
             b.clicked.connect(browse)
             grid.addWidget(b, row, 2)
         le.addLayout(grid)
         # 模型下载（整库下载，HuggingFace → hf-mirror → ModelScope 自动回退，可续传）
         from tts_engine import COSYVOICE_MODELS, COSYVOICE_CLONE_MODEL
         dl_row = QHBoxLayout()
-        dl_row.addWidget(QLabel("下载模型"))
+        dl_row.addWidget(QLabel(tr("下载模型")))
         dl_model = QComboBox()
         dl_model.setObjectName("cloneDlModel")
         for key in (COSYVOICE_CLONE_MODEL, "CosyVoice2-0.5B", "CosyVoice-300M-SFT"):
-            dl_model.addItem(COSYVOICE_MODELS[key]["description"], key)
+            dl_model.addItem(tr(COSYVOICE_MODELS[key]["description"]), key)
         dl_row.addWidget(dl_model, 1)
-        btn_dl = QPushButton("⬇ 下载")
+        btn_dl = QPushButton(tr("⬇ 下载"))
         btn_dl.setObjectName("cloneDlStart")
-        btn_dl_stop = QPushButton("暂停")
+        btn_dl_stop = QPushButton(tr("暂停"))
         btn_dl_stop.setObjectName("cloneDlStop")
         btn_dl_stop.setEnabled(False)
         dl_row.addWidget(btn_dl)
@@ -2207,9 +2242,9 @@ class AudiobookConverterMain(QMainWindow):
         dl_msg.setStyleSheet("color:gray")
         le.addWidget(dl_msg)
         env_ops = QHBoxLayout()
-        btn_save = QPushButton("保存设置")
+        btn_save = QPushButton(tr("保存设置"))
         btn_save.setObjectName("cloneSave")
-        btn_check = QPushButton("🔍 检测环境（会实际加载一次模型）")
+        btn_check = QPushButton(tr("🔍 检测环境（会实际加载一次模型）"))
         btn_check.setObjectName("cloneCheck")
         env_ops.addWidget(btn_save)
         env_ops.addWidget(btn_check)
@@ -2218,9 +2253,9 @@ class AudiobookConverterMain(QMainWindow):
         report = QPlainTextEdit()
         report.setObjectName("cloneReport")
         report.setReadOnly(True)
-        report.setPlaceholderText("检测结果会显示在这里。")
+        report.setPlaceholderText(tr("检测结果会显示在这里。"))
         le.addWidget(report, 1)
-        tabs.addTab(pe, "环境设置")
+        tabs.addTab(pe, tr("环境设置"))
 
         # ---------- 逻辑 ----------
         ID_ROLE = Qt.ItemDataRole.UserRole
@@ -2247,8 +2282,8 @@ class AudiobookConverterMain(QMainWindow):
                 name = QTableWidgetItem(p.name)
                 name.setData(ID_ROLE, p.id)
                 tbl.setItem(r, 0, name)
-                tbl.setItem(r, 1, QTableWidgetItem(f"{p.duration:.1f} 秒"))
-                text = QTableWidgetItem(p.prompt_text or "（无文字稿 · 效果会差一些）")
+                tbl.setItem(r, 1, QTableWidgetItem(tr('{duration:.1f} 秒', duration=p.duration)))
+                text = QTableWidgetItem(p.prompt_text or tr("（无文字稿 · 效果会差一些）"))
                 if not p.prompt_text:
                     text.setForeground(QColor("gray"))
                 text.setToolTip(p.prompt_text)
@@ -2268,13 +2303,13 @@ class AudiobookConverterMain(QMainWindow):
             nd = self._build_clone_new_dialog(dlg)
             if nd.exec() == QDialog.DialogCode.Accepted and nd.created is not None:
                 _changed(nd.created.id)
-                status.setText(f"已创建音色「{nd.created.name}」。")
+                status.setText(tr('已创建音色「{name}」。', name=nd.created.name))
 
         def _edit_text():
             p = _selected()
             if not p:
                 return
-            text, ok = QInputDialog.getMultiLineText(dlg, "编辑文字稿", "参考音频里说的话（逐字填写效果更好）：",
+            text, ok = QInputDialog.getMultiLineText(dlg, tr("编辑文字稿"), tr("参考音频里说的话（逐字填写效果更好）："),
                                                      p.prompt_text)
             if ok:
                 P.update_profile(p.id, prompt_text=text)
@@ -2284,7 +2319,7 @@ class AudiobookConverterMain(QMainWindow):
             p = _selected()
             if not p:
                 return
-            name, ok = QInputDialog.getText(dlg, "重命名", "音色名称：", text=p.name)
+            name, ok = QInputDialog.getText(dlg, tr("重命名"), tr("音色名称："), text=p.name)
             if ok and name.strip():
                 P.update_profile(p.id, name=name)
                 _changed(p.id)
@@ -2293,7 +2328,7 @@ class AudiobookConverterMain(QMainWindow):
             p = _selected()
             if not p:
                 return
-            if QMessageBox.question(dlg, "删除音色", f"删除克隆音色「{p.name}」？") \
+            if QMessageBox.question(dlg, tr("删除音色"), tr('删除克隆音色「{name}」？', name=p.name)) \
                     != QMessageBox.StandardButton.Yes:
                 return
             P.delete_profile(p.id)
@@ -2309,21 +2344,21 @@ class AudiobookConverterMain(QMainWindow):
                 tabs.setCurrentIndex(1)
                 return
             btn_listen.setEnabled(False)
-            status.setText(f"正在用「{p.name}」合成试听…")
+            status.setText(tr('正在用「{name}」合成试听…', name=p.name))
             w = _ClonePreviewWorker()
-            w.setup(p.voice_id, sample.text().strip() or "你好")
+            w.setup(p.voice_id, sample.text().strip() or tr("你好"))
 
             def _ok(path):
                 _update_buttons()
                 try:
                     self.player.play(path)
-                    status.setText(f"✓ 正在播放「{p.name}」的试听。")
+                    status.setText(tr('✓ 正在播放「{name}」的试听。', name=p.name))
                 except Exception as e:
-                    status.setText(f"试听已生成，但播放失败：{e}")
+                    status.setText(tr('试听已生成，但播放失败：{e}', e=e))
 
             def _err(e):
                 _update_buttons()
-                status.setText(f"✗ 试听失败：{e}")
+                status.setText(tr('✗ 试听失败：{e}', e=e))
 
             w.finished_ok.connect(_ok)
             w.error_occurred.connect(_err)
@@ -2343,34 +2378,34 @@ class AudiobookConverterMain(QMainWindow):
         def _check():
             _save()
             btn_check.setEnabled(False)
-            report.setPlainText("正在检测：启动 CosyVoice 环境并加载模型，可能需要一两分钟…")
+            report.setPlainText(tr("正在检测：启动 CosyVoice 环境并加载模型，可能需要一两分钟…"))
             w = _CloneCheckWorker()
             w.setup(load=True)
 
             def _done(rep):
                 btn_check.setEnabled(True)
-                lines = [f"Python 解释器：{rep.get('python') or '（未配置）'}",
-                         f"CosyVoice 仓库：{rep.get('repo') or '（未配置）'}",
-                         f"模型目录：{rep.get('model_dir') or '（未找到）'}"
+                lines = [tr('Python 解释器：{v1}', v1=rep.get('python') or tr('（未配置）')),
+                         tr('CosyVoice 仓库：{v1}', v1=rep.get('repo') or tr('（未配置）')),
+                         tr('模型目录：{v1}', v1=rep.get('model_dir') or tr('（未找到）'))
                          + (f"  [{rep['model_type']}]" if rep.get("model_type") else "")]
                 pg = rep.get("ping") or {}
                 if pg:
-                    lines.append(f"桥接进程：Python {pg.get('python')}，cosyvoice "
-                                 + ("可导入 ✓" if pg.get("cosyvoice")
-                                    else f"无法导入 ✗\n  {pg.get('import_error')}"))
+                    lines.append(tr('桥接进程：Python {v1}，cosyvoice ', v1=pg.get('python'))
+                                 + (tr("可导入 ✓") if pg.get("cosyvoice")
+                                    else tr('无法导入 ✗\n  {v1}', v1=pg.get('import_error'))))
                 ld = rep.get("load") or {}
                 if ld:
-                    lines.append(f"模型加载：{ld.get('model_type')}，采样率 {ld.get('sample_rate')} ✓")
+                    lines.append(tr('模型加载：{v1}，采样率 {v2} ✓', v1=ld.get('model_type'), v2=ld.get('sample_rate')))
                 if rep.get("error"):
-                    lines.append(f"\n错误：{rep['error']}")
+                    lines.append(tr('\n错误：{v1}', v1=rep['error']))
                 good = bool(pg.get("cosyvoice")) and bool(ld) and not rep.get("error")
-                lines.append("\n✓ 环境可用" if good else "\n✗ 环境未就绪，请按上面的提示检查")
+                lines.append(tr("\n✓ 环境可用") if good else tr("\n✗ 环境未就绪，请按上面的提示检查"))
                 report.setPlainText("\n".join(lines))
                 _update_status()
 
             def _fail(e):
                 btn_check.setEnabled(True)
-                report.setPlainText(f"检测失败：{e}")
+                report.setPlainText(tr('检测失败：{e}', e=e))
 
             w.finished_ok.connect(_done)
             w.error_occurred.connect(_fail)
@@ -2380,8 +2415,8 @@ class AudiobookConverterMain(QMainWindow):
         def _refresh_model_hint():
             if not model_edit.text().strip():
                 md = C.resolve_model_dir()
-                model_edit.setPlaceholderText(f"留空 = 自动：{md}" if md
-                                              else "留空 = 自动在 cosyvoice-models/ 下查找（当前未找到）")
+                model_edit.setPlaceholderText(tr('留空 = 自动：{md}', md=md) if md
+                                              else tr("留空 = 自动在 cosyvoice-models/ 下查找（当前未找到）"))
 
         def _download_model():
             key = dl_model.currentData()
@@ -2389,7 +2424,7 @@ class AudiobookConverterMain(QMainWindow):
             btn_dl_stop.setEnabled(True)
             dl_bar.setVisible(True)
             dl_bar.setRange(0, 0)
-            dl_msg.setText(f"正在获取 {key} 的文件清单…（模型较大，可随时暂停，下次继续下载会续传）")
+            dl_msg.setText(tr('正在获取 {key} 的文件清单…（模型较大，可随时暂停，下次继续下载会续传）', key=key))
             w = _WizardDownloadWorker()
             w.setup([("cosyvoice", key)])
 
@@ -2397,19 +2432,19 @@ class AudiobookConverterMain(QMainWindow):
                 if total > 0:
                     dl_bar.setRange(0, 1000)
                     dl_bar.setValue(int(cur * 1000 / total))
-                    dl_msg.setText(f"{desc}　{cur / 1048576:.1f} / {total / 1048576:.1f} MB")
+                    dl_msg.setText(tr('{desc}\u3000{v1:.1f} / {v2:.1f} MB', desc=desc, v1=cur / 1048576, v2=total / 1048576))
 
-            paused = "已暂停；再次点击「下载」会从断点继续。"
+            paused = tr("已暂停；再次点击「下载」会从断点继续。")
 
             def _failed(_i, err):
-                dl_msg.setText(paused if w._should_stop else f"✗ 下载失败：{err}")
+                dl_msg.setText(paused if w._should_stop else tr('✗ 下载失败：{err}', err=err))
 
             def _finished(failed):
                 btn_dl.setEnabled(True)
                 btn_dl_stop.setEnabled(False)
                 dl_bar.setVisible(False)
                 if not failed:
-                    dl_msg.setText(paused if w._should_stop else f"✓ {key} 下载完成。")
+                    dl_msg.setText(paused if w._should_stop else tr('✓ {key} 下载完成。', key=key))
                 _refresh_model_hint()
                 _update_status()
                 self._after_clone_change()
@@ -2425,7 +2460,7 @@ class AudiobookConverterMain(QMainWindow):
             if w is not None and w.isRunning():
                 w.request_stop()
                 btn_dl_stop.setEnabled(False)
-                dl_msg.setText("正在暂停…")
+                dl_msg.setText(tr("正在暂停…"))
 
         tbl.itemSelectionChanged.connect(_update_buttons)
         btn_dl.clicked.connect(_download_model)
@@ -2449,42 +2484,41 @@ class AudiobookConverterMain(QMainWindow):
         from audiobook.cloning import profiles as P
 
         d = QDialog(parent)
-        d.setWindowTitle("新建克隆音色")
+        d.setWindowTitle(tr("新建克隆音色"))
         d.resize(580, 460)
         d.created = None
         st = {"src": None, "tmp": None, "dur": 0.0}
         v = QVBoxLayout(d)
-        v.addWidget(QLabel("名称"))
+        v.addWidget(QLabel(tr("名称")))
         name_edit = QLineEdit()
         name_edit.setObjectName("cloneNewName")
-        name_edit.setPlaceholderText("例如：我的声音")
+        name_edit.setPlaceholderText(tr("例如：我的声音"))
         v.addWidget(name_edit)
-        v.addWidget(QLabel("参考音频"))
+        v.addWidget(QLabel(tr("参考音频")))
         frow = QHBoxLayout()
-        file_label = QLabel("未选择")
+        file_label = QLabel(tr("未选择"))
         file_label.setObjectName("cloneNewFile")
         file_label.setWordWrap(True)
         frow.addWidget(file_label, 1)
-        btn_pick = QPushButton("选择参考音频…")
+        btn_pick = QPushButton(tr("选择参考音频…"))
         btn_pick.setObjectName("cloneNewPick")
         frow.addWidget(btn_pick)
         v.addLayout(frow)
-        hint = QLabel(f"建议 5–15 秒、单人、无背景音乐的清晰人声；短于 {P.MIN_SECONDS:.0f} 秒无法使用，"
-                      f"超过 {P.MAX_SECONDS:.0f} 秒只取前 {P.MAX_SECONDS:.0f} 秒。")
+        hint = QLabel(tr('建议 5–15 秒、单人、无背景音乐的清晰人声；短于 {MIN_SECONDS:.0f} 秒无法使用，超过 {MAX_SECONDS:.0f} 秒只取前 {MAX_SECONDS:.0f} 秒。', MIN_SECONDS=P.MIN_SECONDS, MAX_SECONDS=P.MAX_SECONDS))
         hint.setWordWrap(True)
         hint.setStyleSheet("color:gray")
         v.addWidget(hint)
         trow = QHBoxLayout()
-        trow.addWidget(QLabel("文字稿（参考音频里说的话）"))
+        trow.addWidget(QLabel(tr("文字稿（参考音频里说的话）")))
         trow.addStretch()
-        btn_asr = QPushButton("🎧 自动识别（Whisper）")
+        btn_asr = QPushButton(tr("🎧 自动识别（Whisper）"))
         btn_asr.setObjectName("cloneNewAsr")
         btn_asr.setEnabled(False)
         trow.addWidget(btn_asr)
         v.addLayout(trow)
         text_edit = QPlainTextEdit()
         text_edit.setObjectName("cloneNewText")
-        text_edit.setPlaceholderText("逐字填写效果明显更好；留空也能用（只取音色）。")
+        text_edit.setPlaceholderText(tr("逐字填写效果明显更好；留空也能用（只取音色）。"))
         v.addWidget(text_edit, 1)
         msg = QLabel("")
         msg.setObjectName("cloneNewMsg")
@@ -2492,8 +2526,8 @@ class AudiobookConverterMain(QMainWindow):
         v.addWidget(msg)
         brow = QHBoxLayout()
         brow.addStretch()
-        btn_cancel = QPushButton("取消")
-        btn_ok = QPushButton("创建")
+        btn_cancel = QPushButton(tr("取消"))
+        btn_ok = QPushButton(tr("创建"))
         btn_ok.setObjectName("cloneNewCreate")
         btn_ok.setEnabled(False)
         brow.addWidget(btn_cancel)
@@ -2505,7 +2539,7 @@ class AudiobookConverterMain(QMainWindow):
         except Exception:
             asr_ok = False
         if not asr_ok:
-            btn_asr.setToolTip("需要安装 faster-whisper（语音转文字）才能自动识别")
+            btn_asr.setToolTip(tr("需要安装 faster-whisper（语音转文字）才能自动识别"))
 
         def _cleanup_tmp():
             if st["tmp"]:
@@ -2518,8 +2552,8 @@ class AudiobookConverterMain(QMainWindow):
 
         def _pick():
             path, _ = QFileDialog.getOpenFileName(
-                d, "选择参考音频", "",
-                "音频 (*.wav *.mp3 *.m4a *.flac *.ogg *.aac *.wma *.opus);;所有文件 (*)")
+                d, tr("选择参考音频"), "",
+                tr("音频 (*.wav *.mp3 *.m4a *.flac *.ogg *.aac *.wma *.opus);;所有文件 (*)"))
             if not path:
                 return
             _cleanup_tmp()
@@ -2527,22 +2561,22 @@ class AudiobookConverterMain(QMainWindow):
             try:
                 tmp, dur = P.prepare_reference(path)
             except Exception as e:
-                file_label.setText("未选择")
+                file_label.setText(tr("未选择"))
                 msg.setStyleSheet("color:#C62828")
                 msg.setText(f"✗ {e}")
                 btn_asr.setEnabled(False)
                 _update_ok()
                 return
             st.update(src=path, tmp=tmp, dur=dur)
-            trimmed = "（已截取前 30 秒）" if dur >= P.MAX_SECONDS - 0.05 else ""
-            file_label.setText(f"{os.path.basename(path)}　{dur:.1f} 秒{trimmed}")
+            trimmed = tr("（已截取前 30 秒）") if dur >= P.MAX_SECONDS - 0.05 else ""
+            file_label.setText(tr('{v1}\u3000{dur:.1f} 秒{trimmed}', v1=os.path.basename(path), dur=dur, trimmed=trimmed))
             if dur < P.MIN_SECONDS:
                 msg.setStyleSheet("color:#C62828")
-                msg.setText(f"✗ 太短（{dur:.1f} 秒），至少需要 {P.MIN_SECONDS:.0f} 秒。")
+                msg.setText(tr('✗ 太短（{dur:.1f} 秒），至少需要 {MIN_SECONDS:.0f} 秒。', dur=dur, MIN_SECONDS=P.MIN_SECONDS))
             else:
                 msg.setStyleSheet("color:gray")
-                msg.setText("✓ 音频可用。" + ("" if text_edit.toPlainText().strip()
-                                              else "建议填写或自动识别文字稿。"))
+                msg.setText(tr("✓ 音频可用。") + ("" if text_edit.toPlainText().strip()
+                                              else tr("建议填写或自动识别文字稿。")))
             if not name_edit.text().strip():
                 name_edit.setText(os.path.splitext(os.path.basename(path))[0])
             btn_asr.setEnabled(asr_ok and dur >= P.MIN_SECONDS)
@@ -2553,7 +2587,7 @@ class AudiobookConverterMain(QMainWindow):
                 return
             btn_asr.setEnabled(False)
             msg.setStyleSheet("color:gray")
-            msg.setText("正在识别文字稿…（首次使用会下载 Whisper base 模型）")
+            msg.setText(tr("正在识别文字稿…（首次使用会下载 Whisper base 模型）"))
             w = _CloneTranscribeWorker()
             w.setup(st["tmp"])
 
@@ -2561,14 +2595,14 @@ class AudiobookConverterMain(QMainWindow):
                 btn_asr.setEnabled(True)
                 if text:
                     text_edit.setPlainText(text)
-                    msg.setText("✓ 已识别，请核对后再创建（错字会影响效果）。")
+                    msg.setText(tr("✓ 已识别，请核对后再创建（错字会影响效果）。"))
                 else:
-                    msg.setText("没有识别到文字，请手动填写。")
+                    msg.setText(tr("没有识别到文字，请手动填写。"))
 
             def _err(e):
                 btn_asr.setEnabled(True)
                 msg.setStyleSheet("color:#C62828")
-                msg.setText(f"✗ 识别失败：{e}")
+                msg.setText(tr('✗ 识别失败：{e}', e=e))
 
             w.finished_ok.connect(_ok)
             w.error_occurred.connect(_err)
@@ -2616,7 +2650,7 @@ class AudiobookConverterMain(QMainWindow):
         from audiobook import models as M
 
         dlg = QDialog(self)
-        dlg.setWindowTitle("首次运行向导")
+        dlg.setWindowTitle(tr("首次运行向导"))
         dlg.resize(680, 560)
         root = QVBoxLayout(dlg)
         step_label = QLabel()
@@ -2626,11 +2660,11 @@ class AudiobookConverterMain(QMainWindow):
         stack.setObjectName("wizardStack")
         root.addWidget(stack, 1)
         nav = QHBoxLayout()
-        btn_skip = QPushButton("跳过向导")
+        btn_skip = QPushButton(tr("跳过向导"))
         btn_skip.setObjectName("wizardSkip")
-        btn_back = QPushButton("← 上一步")
+        btn_back = QPushButton(tr("← 上一步"))
         btn_back.setObjectName("wizardBack")
-        btn_next = QPushButton("下一步 →")
+        btn_next = QPushButton(tr("下一步 →"))
         btn_next.setObjectName("wizardNext")
         nav.addWidget(btn_skip)
         nav.addStretch()
@@ -2640,16 +2674,16 @@ class AudiobookConverterMain(QMainWindow):
 
         st = {"scenario": None, "items": [], "labels": [], "todo": [], "failed_idx": [],
               "downloading": False, "finished": False}
-        ENGINE_NAMES = {"edge": "Edge 在线语音", "piper": "Piper 离线语音", "local": "系统语音"}
-        STEPS = ["第 1 步 / 共 3 步 · 选择使用场景", "第 2 步 / 共 3 步 · 准备模型",
-                 "第 3 步 / 共 3 步 · 试听验证"]
+        ENGINE_NAMES = {"edge": tr("Edge 在线语音"), "piper": tr("Piper 离线语音"), "local": tr("系统语音")}
+        STEPS = [tr("第 1 步 / 共 3 步 · 选择使用场景"), tr("第 2 步 / 共 3 步 · 准备模型"),
+                 tr("第 3 步 / 共 3 步 · 试听验证")]
 
         # ---------- 第 1 步：选择使用场景 ----------
         p1 = QWidget()
         l1 = QVBoxLayout(p1)
-        l1.addWidget(QLabel("<h2>欢迎使用文字转有声读物</h2>"))
-        intro = QLabel("先选一个使用场景，向导会帮你备好需要的东西。"
-                       "之后可在「存储与依赖」面板随时重新运行本向导。")
+        l1.addWidget(QLabel(tr("<h2>欢迎使用文字转有声读物</h2>")))
+        intro = QLabel(tr("先选一个使用场景，向导会帮你备好需要的东西。"
+                       "之后可在「存储与依赖」面板随时重新运行本向导。"))
         intro.setWordWrap(True)
         intro.setStyleSheet("color:gray")
         l1.addWidget(intro)
@@ -2660,22 +2694,22 @@ class AudiobookConverterMain(QMainWindow):
             ok, why = OB.availability(sc)
             pending = OB.pending_downloads(sc) if ok else []
             if not ok:
-                extra = f"不可用：{why}"
+                extra = tr('不可用：{why}', why=why)
             elif pending:
-                extra = f"需下载 {sc.size_hint}"
+                extra = tr('需下载 {size_hint}', size_hint=tr(sc.size_hint))
             elif sc.models:
-                extra = "模型已就绪"
+                extra = tr("模型已就绪")
             else:
-                extra = sc.size_hint
-            tag = "推荐 · " if sc.id == rec else ""
-            rb = QRadioButton(f"{sc.title}　（{tag}{extra}）")
+                extra = tr(sc.size_hint)
+            tag = tr("推荐 · ") if sc.id == rec else ""
+            rb = QRadioButton(tr("{title}　（{tag}{extra}）", title=tr(sc.title), tag=tag, extra=extra))
             rb.setObjectName(f"wizardScenario_{sc.id}")
             rb.setStyleSheet("font-weight:bold")
             rb.setEnabled(ok)
             sc_group.addButton(rb)
             sc_buttons[sc.id] = rb
             l1.addWidget(rb)
-            desc = QLabel(sc.description)
+            desc = QLabel(tr(sc.description))
             desc.setWordWrap(True)
             desc.setStyleSheet("color:gray; margin-left:24px; margin-bottom:6px")
             l1.addWidget(desc)
@@ -2687,7 +2721,7 @@ class AudiobookConverterMain(QMainWindow):
         # ---------- 第 2 步：准备模型 ----------
         p2 = QWidget()
         l2 = QVBoxLayout(p2)
-        l2.addWidget(QLabel("<h3>准备模型</h3>"))
+        l2.addWidget(QLabel(tr("<h3>准备模型</h3>")))
         dl_intro = QLabel()
         dl_intro.setWordWrap(True)
         l2.addWidget(dl_intro)
@@ -2702,7 +2736,7 @@ class AudiobookConverterMain(QMainWindow):
         dl_status.setWordWrap(True)
         dl_status.setStyleSheet("color:gray")
         l2.addWidget(dl_status)
-        btn_retry = QPushButton("🔁 重试失败项")
+        btn_retry = QPushButton(tr("🔁 重试失败项"))
         btn_retry.setObjectName("wizardRetry")
         btn_retry.setVisible(False)
         l2.addWidget(btn_retry, 0, Qt.AlignmentFlag.AlignLeft)
@@ -2711,14 +2745,14 @@ class AudiobookConverterMain(QMainWindow):
         # ---------- 第 3 步：试听验证 ----------
         p3 = QWidget()
         l3 = QVBoxLayout(p3)
-        l3.addWidget(QLabel("<h3>试听验证</h3>"))
+        l3.addWidget(QLabel(tr("<h3>试听验证</h3>")))
         ready_label = QLabel()
         ready_label.setWordWrap(True)
         l3.addWidget(ready_label)
-        sample = QLineEdit("你好，欢迎使用文字转有声读物。祝你听书愉快！")
+        sample = QLineEdit(tr("你好，欢迎使用文字转有声读物。祝你听书愉快！"))
         l3.addWidget(sample)
         listen_row = QHBoxLayout()
-        btn_listen = QPushButton("▶ 试听")
+        btn_listen = QPushButton(tr("▶ 试听"))
         btn_listen.setObjectName("wizardListen")
         listen_row.addWidget(btn_listen)
         listen_row.addStretch()
@@ -2727,7 +2761,7 @@ class AudiobookConverterMain(QMainWindow):
         listen_status.setObjectName("wizardListenStatus")
         listen_status.setWordWrap(True)
         l3.addWidget(listen_status)
-        hint = QLabel("听到声音就说明一切就绪。点「完成」后默认使用该引擎，之后仍可在右侧面板随时切换。")
+        hint = QLabel(tr("听到声音就说明一切就绪。点「完成」后默认使用该引擎，之后仍可在右侧面板随时切换。"))
         hint.setWordWrap(True)
         hint.setStyleSheet("color:gray")
         l3.addWidget(hint)
@@ -2746,7 +2780,7 @@ class AudiobookConverterMain(QMainWindow):
             step_label.setText(STEPS[i])
             btn_back.setVisible(i > 0)
             btn_back.setEnabled(not st["downloading"])
-            btn_next.setText("完成 ✓" if i == 2 else "下一步 →")
+            btn_next.setText(tr("完成 ✓") if i == 2 else tr("下一步 →"))
             if i == 0:
                 btn_next.setEnabled(_scenario_choice() is not None)
             elif i == 1:
@@ -2757,30 +2791,29 @@ class AudiobookConverterMain(QMainWindow):
         def _set_row(i, status):
             item = dl_list.item(i)
             if item is not None:
-                item.setText(f"{st['labels'][i]}　—　{status}")
+                item.setText(tr('{v1}\u3000—\u3000{status}', v1=st['labels'][i], status=status))
 
         def _on_bytes(desc, cur, total):
             if total > 0:
                 dl_bar.setRange(0, total)
                 dl_bar.setValue(min(cur, total))
-                dl_status.setText(f"{desc}：{cur / 1048576:.1f} / {total / 1048576:.1f} MB")
+                dl_status.setText(tr('{desc}：{v1:.1f} / {v2:.1f} MB', desc=desc, v1=cur / 1048576, v2=total / 1048576))
             else:
                 dl_bar.setRange(0, 0)
 
         def _on_failed(k, err):
             i = st["todo"][k]
             st["failed_idx"].append(i)
-            _set_row(i, f"✗ 失败：{err}")
+            _set_row(i, tr('✗ 失败：{err}', err=err))
 
         def _on_dl_finished(failed):
             st["downloading"] = False
             dl_bar.setVisible(False)
             if failed:
-                dl_status.setText(f"有 {failed} 项下载失败。可以重试，也可以先继续"
-                                  f"（之后在「模型管理器」里也能下载）。")
+                dl_status.setText(tr('有 {failed} 项下载失败。可以重试，也可以先继续（之后在「模型管理器」里也能下载）。', failed=failed))
                 btn_retry.setVisible(True)
             else:
-                dl_status.setText("✓ 全部就绪")
+                dl_status.setText(tr("✓ 全部就绪"))
             self._refresh_deps()
             _update_nav()
 
@@ -2791,13 +2824,13 @@ class AudiobookConverterMain(QMainWindow):
             btn_retry.setVisible(False)
             dl_bar.setVisible(True)
             dl_bar.setRange(0, 0)
-            dl_status.setText("正在下载…")
+            dl_status.setText(tr("正在下载…"))
             for i in indices:
-                _set_row(i, "等待")
+                _set_row(i, tr("等待"))
             w = _WizardDownloadWorker()
             w.setup([st["items"][i] for i in indices])
-            w.item_started.connect(lambda k: _set_row(st["todo"][k], "⬇ 下载中…"))
-            w.item_done.connect(lambda k: _set_row(st["todo"][k], "✓ 完成"))
+            w.item_started.connect(lambda k: _set_row(st["todo"][k], tr("⬇ 下载中…")))
+            w.item_done.connect(lambda k: _set_row(st["todo"][k], tr("✓ 完成")))
             w.item_failed.connect(_on_failed)
             w.bytes_progress.connect(_on_bytes)
             w.finished_ok.connect(_on_dl_finished)
@@ -2809,24 +2842,24 @@ class AudiobookConverterMain(QMainWindow):
             sc = st["scenario"]
             pending = OB.pending_downloads(sc)
             st["items"] = [(it.kind, it.id) for it in pending]
-            st["labels"] = [f"{M.KIND_LABELS[it.kind]} · {it.label}" for it in pending]
+            st["labels"] = [f"{tr(M.KIND_LABELS[it.kind])} · {it.label}" for it in pending]
             dl_list.clear()
             btn_retry.setVisible(False)
             if not pending:
-                dl_intro.setText(f"「{sc.title}」所需模型已全部就绪。")
-                dl_status.setText("✓ 全部就绪")
+                dl_intro.setText(tr('「{title}」所需模型已全部就绪。', title=tr(sc.title)))
+                dl_status.setText(tr("✓ 全部就绪"))
                 return
             for lab in st["labels"]:
-                dl_list.addItem(f"{lab}　—　等待")
-            dl_intro.setText(f"「{sc.title}」需要下载以下模型（{sc.size_hint}）。下载完成后点「下一步」试听。")
+                dl_list.addItem(tr('{lab}\u3000—\u3000等待', lab=lab))
+            dl_intro.setText(tr('「{title}」需要下载以下模型（{size_hint}）。下载完成后点「下一步」试听。', title=tr(sc.title), size_hint=tr(sc.size_hint)))
             _start_downloads(list(range(len(pending))))
 
         def _enter_listen():
             sc = st["scenario"]
             ok, why = OB.availability(sc)
-            text = f"已选择：<b>{sc.title}</b>（引擎：{ENGINE_NAMES.get(sc.engine, sc.engine)}）"
+            text = tr('已选择：<b>{title}</b>（引擎：{engine}）', title=tr(sc.title), engine=ENGINE_NAMES.get(sc.engine, sc.engine))
             if not ok:
-                text += f"<br><span style='color:#C62828'>引擎不可用：{why}</span>"
+                text += tr("<br><span style='color:#C62828'>引擎不可用：{why}</span>", why=why)
             ready_label.setText(text)
             btn_listen.setEnabled(ok)
             listen_status.setText("")
@@ -2843,25 +2876,25 @@ class AudiobookConverterMain(QMainWindow):
             sc = st["scenario"]
             voices = get_voice_list(sc.engine)
             if not voices:
-                listen_status.setText("✗ 该引擎没有可用语音。")
+                listen_status.setText(tr("✗ 该引擎没有可用语音。"))
                 return
             voice = get_voice_id(voices[0], sc.engine)
             btn_listen.setEnabled(False)
-            listen_status.setText("正在生成试听…（Piper 首次使用需要几秒加载模型）")
+            listen_status.setText(tr("正在生成试听…（Piper 首次使用需要几秒加载模型）"))
             w = PreviewWorker()
-            w.setup(sample.text().strip() or "你好", voice, "+0%", sc.engine)
+            w.setup(sample.text().strip() or tr("你好"), voice, "+0%", sc.engine)
 
             def _ok(path):
                 btn_listen.setEnabled(True)
                 try:
                     self.player.play(path)
-                    listen_status.setText("✓ 正在播放。听到声音就说明一切就绪。")
+                    listen_status.setText(tr("✓ 正在播放。听到声音就说明一切就绪。"))
                 except Exception as e:
-                    listen_status.setText(f"试听已生成，但播放失败：{e}")
+                    listen_status.setText(tr('试听已生成，但播放失败：{e}', e=e))
 
             def _err(e):
                 btn_listen.setEnabled(True)
-                listen_status.setText(f"✗ 试听失败：{e}")
+                listen_status.setText(tr('✗ 试听失败：{e}', e=e))
 
             w.finished_ok.connect(_ok)
             w.error_occurred.connect(_err)
@@ -2917,32 +2950,32 @@ class AudiobookConverterMain(QMainWindow):
     def _open_voice_catalog(self):
         """打开 Piper 语音包目录对话框：拉取官方 voices.json，按语言筛选下载"""
         dlg = QDialog(self)
-        dlg.setWindowTitle("Piper 语音包下载")
+        dlg.setWindowTitle(tr("Piper 语音包下载"))
         dlg.resize(560, 480)
         v = QVBoxLayout(dlg)
 
         top = QHBoxLayout()
-        top.addWidget(QLabel("语言:"))
+        top.addWidget(QLabel(tr("语言:")))
         lang_combo = QComboBox()
-        for label, code in [("中文 (zh)", "zh"), ("英文 (en)", "en"), ("日文 (ja)", "ja"),
-                            ("韩文 (ko)", "ko"), ("法文 (fr)", "fr"), ("德文 (de)", "de"),
-                            ("西班牙文 (es)", "es"), ("俄文 (ru)", "ru"), ("全部语言", "")]:
+        for label, code in [(tr("中文 (zh)"), "zh"), (tr("英文 (en)"), "en"), (tr("日文 (ja)"), "ja"),
+                            (tr("韩文 (ko)"), "ko"), (tr("法文 (fr)"), "fr"), (tr("德文 (de)"), "de"),
+                            (tr("西班牙文 (es)"), "es"), (tr("俄文 (ru)"), "ru"), (tr("全部语言"), "")]:
             lang_combo.addItem(label, code)
         top.addWidget(lang_combo, 1)
-        btn_refresh = QPushButton("🔄 刷新目录")
+        btn_refresh = QPushButton(tr("🔄 刷新目录"))
         top.addWidget(btn_refresh)
         v.addLayout(top)
 
         lst = QListWidget()
         v.addWidget(lst, 1)
-        status = QLabel("正在获取语音目录…")
+        status = QLabel(tr("正在获取语音目录…"))
         status.setStyleSheet("color:gray")
         v.addWidget(status)
         btn_row = QHBoxLayout()
-        btn_download = QPushButton("⬇ 下载选中语音")
+        btn_download = QPushButton(tr("⬇ 下载选中语音"))
         btn_download.setEnabled(False)
         btn_row.addWidget(btn_download)
-        btn_close = QPushButton("关闭")
+        btn_close = QPushButton(tr("关闭"))
         btn_close.clicked.connect(dlg.close)
         btn_row.addWidget(btn_close)
         v.addLayout(btn_row)
@@ -2957,45 +2990,45 @@ class AudiobookConverterMain(QMainWindow):
             entries = list_piper_catalog_voices(catalog, lang_combo.currentData() or "")
             for e in entries:
                 size_mb = e["size_bytes"] / 1024 / 1024
-                spk = f", {e['num_speakers']} 说话人" if e.get("num_speakers", 1) > 1 else ""
+                spk = tr(', {v1} 说话人', v1=e['num_speakers']) if e.get("num_speakers", 1) > 1 else ""
                 item = QListWidgetItem(
                     f"{e['key']}  [{e['language_name']} · {e['quality']}{spk} · {size_mb:.0f}MB]")
                 item.setData(Qt.ItemDataRole.UserRole, e["key"])
                 lst.addItem(item)
-            status.setText(f"共 {lst.count()} 个语音；下载后自动加入语音列表")
+            status.setText(tr('共 {v1} 个语音；下载后自动加入语音列表', v1=lst.count()))
             btn_download.setEnabled(lst.count() > 0)
 
         def _fetch(force=False):
-            status.setText("正在获取语音目录…")
+            status.setText(tr("正在获取语音目录…"))
             btn_download.setEnabled(False)
             self._catalog_worker = _CatalogWorker()
             self._catalog_worker.setup(force)
             self._catalog_worker.finished_ok.connect(
                 lambda cat: (catalog_holder.__setitem__("catalog", cat), _populate()))
             self._catalog_worker.error_occurred.connect(
-                lambda e: status.setText(f"目录获取失败: {e}"))
+                lambda e: status.setText(tr('目录获取失败: {e}', e=e)))
             self._catalog_worker.start()
 
         def _download():
             item = lst.currentItem()
             if item is None:
-                status.setText("请先选中一个语音")
+                status.setText(tr("请先选中一个语音"))
                 return
             key = item.data(Qt.ItemDataRole.UserRole)
-            status.setText(f"正在下载 {key}…（进度见主窗口底部）")
+            status.setText(tr('正在下载 {key}…（进度见主窗口底部）', key=key))
             btn_download.setEnabled(False)
             self._voice_dl_worker = _VoiceDownloadWorker()
             self._voice_dl_worker.setup(key)
 
             def _done(_r):
-                status.setText(f"{key} 下载完成，已加入语音列表")
+                status.setText(tr('{key} 下载完成，已加入语音列表', key=key))
                 btn_download.setEnabled(True)
                 self._refresh_deps()
                 self._on_engine_change()
 
             self._voice_dl_worker.finished_ok.connect(_done)
             self._voice_dl_worker.error_occurred.connect(
-                lambda e: (status.setText(f"下载失败: {e}"), btn_download.setEnabled(True)))
+                lambda e: (status.setText(tr('下载失败: {e}', e=e)), btn_download.setEnabled(True)))
             self._voice_dl_worker.start()
 
         lang_combo.currentIndexChanged.connect(lambda _i: _populate())
@@ -3005,27 +3038,27 @@ class AudiobookConverterMain(QMainWindow):
         dlg.exec()
 
     def _add_model_folder(self):
-        path = QFileDialog.getExistingDirectory(self, "选择包含语音模型的文件夹")
+        path = QFileDialog.getExistingDirectory(self, tr("选择包含语音模型的文件夹"))
         if not path:
             return
         try:
             added = add_model_search_path(path)
             self._refresh_deps()
-            QMessageBox.information(self, "已添加", f"已{'添加' if added else '存在'}: {path}")
+            QMessageBox.information(self, tr("已添加"), (tr('已添加: {path}', path=path) if added else tr('已存在: {path}', path=path)))
         except Exception as e:
-            QMessageBox.critical(self, "错误", str(e))
+            QMessageBox.critical(self, tr("错误"), str(e))
 
     def _add_binary_folder(self):
-        path = QFileDialog.getExistingDirectory(self, "选择包含可执行文件的文件夹")
+        path = QFileDialog.getExistingDirectory(self, tr("选择包含可执行文件的文件夹"))
         if not path:
             return
         try:
             added = add_model_search_path(path)
             _invalidate_scan_cache()
             self._refresh_deps()
-            QMessageBox.information(self, "已添加", f"已{'添加' if added else '存在'}: {path}")
+            QMessageBox.information(self, tr("已添加"), (tr('已添加: {path}', path=path) if added else tr('已存在: {path}', path=path)))
         except Exception as e:
-            QMessageBox.critical(self, "错误", str(e))
+            QMessageBox.critical(self, tr("错误"), str(e))
 
     # ================ Download Progress ================
 
@@ -3035,12 +3068,12 @@ class AudiobookConverterMain(QMainWindow):
         if total > 0:
             self._dl_progress.setMaximum(total)
             self._dl_progress.setValue(min(current, total))
-            self._dl_label.setText(f"下载中 {desc}: {current/1024/1024:.1f}/{total/1024/1024:.1f} MB")
+            self._dl_label.setText(tr('下载中 {desc}: {v1:.1f}/{v2:.1f} MB', desc=desc, v1=current/1024/1024, v2=total/1024/1024))
             if current >= total:
                 QTimer.singleShot(1500, self._hide_dl_progress)
         else:
             self._dl_progress.setMaximum(0)
-            self._dl_label.setText(f"下载中 {desc}: {current/1024/1024:.1f} MB")
+            self._dl_label.setText(tr('下载中 {desc}: {v1:.1f} MB', desc=desc, v1=current/1024/1024))
 
     def _hide_dl_progress(self):
         self._dl_label.setVisible(False)
@@ -3050,25 +3083,25 @@ class AudiobookConverterMain(QMainWindow):
 
     # ================ Preview & Playback ================
 
-    SAMPLE_PREVIEW_TEXT = "你好，这是一段语音试听示例。春江潮水连海平，海上明月共潮生。"
+    SAMPLE_PREVIEW_TEXT = tr("你好，这是一段语音试听示例。春江潮水连海平，海上明月共潮生。")
 
     def _preview_voice_sample(self):
         engine = self._get_current_engine()
         ready, msg = check_engine_ready(engine)
         if not ready:
-            QMessageBox.critical(self, "引擎不可用", msg)
+            QMessageBox.critical(self, tr("引擎不可用"), msg)
             return
-        voice = get_voice_id(self._voice_combo.currentText(), engine)
-        self._status_label.setText("正在生成语音试听...")
+        voice = get_voice_id(self._voice_combo.currentData() or "", engine)
+        self._status_label.setText(tr("正在生成语音试听..."))
         self._preview_worker = PreviewWorker()
         self._preview_worker.setup(self.SAMPLE_PREVIEW_TEXT, voice, self._get_rate_string(), engine)
         self._preview_worker.finished_ok.connect(self._on_preview_ready)
-        self._preview_worker.error_occurred.connect(lambda e: QMessageBox.critical(self, "错误", e))
+        self._preview_worker.error_occurred.connect(lambda e: QMessageBox.critical(self, tr("错误"), e))
         self._preview_worker.start()
 
     def _on_preview_ready(self, path):
         self.player.play(path)
-        self._status_label.setText("语音试听播放中...")
+        self._status_label.setText(tr("语音试听播放中..."))
 
     def _toggle_preview_full(self):
         state = self._preview_state
@@ -3079,52 +3112,52 @@ class AudiobookConverterMain(QMainWindow):
                 self._stream_worker.request_stop()
             self.player.stop()
             self._preview_state = "idle"
-            self._btn_preview_full.setText("🔊 试听全文（可暂停）")
+            self._btn_preview_full.setText(tr("🔊 试听全文（可暂停）"))
         elif state == "playing":
             if self.player.pause():
                 self._preview_state = "paused"
-                self._btn_preview_full.setText("▶ 继续播放")
+                self._btn_preview_full.setText(tr("▶ 继续播放"))
         elif state == "paused":
             if self.player.resume():
                 self._preview_state = "playing"
-                self._btn_preview_full.setText("⏸ 暂停播放")
+                self._btn_preview_full.setText(tr("⏸ 暂停播放"))
 
     def _start_preview_full(self):
         text = self._text_area.toPlainText().strip()
         if not text:
-            QMessageBox.warning(self, "提示", "请先输入或导入文字内容")
+            QMessageBox.warning(self, tr("提示"), tr("请先输入或导入文字内容"))
             return
         engine = self._get_current_engine()
         ready, msg = check_engine_ready(engine)
         if not ready:
-            QMessageBox.critical(self, "引擎不可用", msg)
+            QMessageBox.critical(self, tr("引擎不可用"), msg)
             return
-        voice = get_voice_id(self._voice_combo.currentText(), engine)
+        voice = get_voice_id(self._voice_combo.currentData() or "", engine)
         self._preview_state = "generating"
-        self._btn_preview_full.setText("⏹ 中止生成")
-        self._status_label.setText(f"正在生成首段试听...（{len(text)}字）")
+        self._btn_preview_full.setText(tr("⏹ 中止生成"))
+        self._status_label.setText(tr('正在生成首段试听...（{v1}字）', v1=len(text)))
         self._stream_worker = StreamPreviewWorker()
         self._stream_worker.setup(text, voice, self._get_rate_string(), engine)
         self._stream_worker.segment_ready.connect(self._on_stream_segment_ready)
         self._stream_worker.finished_ok.connect(self._on_stream_done)
-        self._stream_worker.error_occurred.connect(lambda e: QMessageBox.critical(self, "错误", e))
+        self._stream_worker.error_occurred.connect(lambda e: QMessageBox.critical(self, tr("错误"), e))
         self._stream_worker.start()
 
     def _on_stream_segment_ready(self, path):
         self.player.enqueue(path)
         if self._preview_state == "generating":
             self._preview_state = "playing"
-            self._btn_preview_full.setText("⏸ 暂停播放")
+            self._btn_preview_full.setText(tr("⏸ 暂停播放"))
 
     def _on_stream_done(self, _):
         self._preview_state = "idle"
-        self._btn_preview_full.setText("🔊 试听全文（可暂停）")
-        self._status_label.setText("全部段已生成，等待播放完毕")
+        self._btn_preview_full.setText(tr("🔊 试听全文（可暂停）"))
+        self._status_label.setText(tr("全部段已生成，等待播放完毕"))
 
     def _on_player_state_changed(self, state):
         if state == "ended":
             self._preview_state = "idle"
-            self._btn_preview_full.setText("🔊 试听全文（可暂停）")
+            self._btn_preview_full.setText(tr("🔊 试听全文（可暂停）"))
 
     # ================ Conversion ================
 
@@ -3139,11 +3172,11 @@ class AudiobookConverterMain(QMainWindow):
     def _start_convert(self):
         selected = self._get_selected_indices()
         if not selected:
-            QMessageBox.warning(self, "提示", "请至少勾选一个章节")
+            QMessageBox.warning(self, tr("提示"), tr("请至少勾选一个章节"))
             return
         text = self._text_area.toPlainText().strip()
         if not text:
-            QMessageBox.warning(self, "提示", "请先输入或导入文字内容")
+            QMessageBox.warning(self, tr("提示"), tr("请先输入或导入文字内容"))
             return
         if self.is_converting:
             return
@@ -3151,25 +3184,25 @@ class AudiobookConverterMain(QMainWindow):
         engine = self._get_current_engine()
         ready, msg = check_engine_ready(engine)
         if not ready:
-            QMessageBox.critical(self, "引擎不可用", msg)
+            QMessageBox.critical(self, tr("引擎不可用"), msg)
             return
 
-        output_dir = QFileDialog.getExistingDirectory(self, "选择保存目录")
+        output_dir = QFileDialog.getExistingDirectory(self, tr("选择保存目录"))
         if not output_dir:
             return
 
-        prefix = os.path.splitext(self._file_paths[0]["name"])[0] if len(self._file_paths) == 1 else "有声读物"
+        prefix = os.path.splitext(self._file_paths[0]["name"])[0] if len(self._file_paths) == 1 else tr("有声读物")
         self._run_convert(output_dir, prefix, selected, resume=False)
 
     def _resume_convert(self):
-        output_dir = QFileDialog.getExistingDirectory(self, "选择之前保存的目录（包含进度文件）")
+        output_dir = QFileDialog.getExistingDirectory(self, tr("选择之前保存的目录（包含进度文件）"))
         if not output_dir:
             return
         items = load_progress(output_dir)
         if not items:
-            QMessageBox.information(self, "提示", "该目录下没有找到进度文件")
+            QMessageBox.information(self, tr("提示"), tr("该目录下没有找到进度文件"))
             return
-        self._run_convert(output_dir, "有声读物", None, resume=True)
+        self._run_convert(output_dir, tr("有声读物"), None, resume=True)
 
     def _run_convert(self, output_dir, file_prefix, selected_indices, resume, only_indices=None):
         self.is_converting = True
@@ -3184,11 +3217,11 @@ class AudiobookConverterMain(QMainWindow):
         self._qb_convert.setEnabled(False)
         self._qb_pause.setEnabled(True)
         self._qb_resume.setEnabled(False)
-        self._status_label.setText("正在分析文本并拆分..." if not resume else "准备继续转换...")
+        self._status_label.setText(tr("正在分析文本并拆分...") if not resume else tr("准备继续转换..."))
         self._set_controls_enabled(False)
 
         engine = self._get_current_engine()
-        voice = get_voice_id(self._voice_combo.currentText(), engine)
+        voice = get_voice_id(self._voice_combo.currentData() or "", engine)
         rate = self._get_rate_string()
         mode = self._mode_var
         time_min = self._time_slider.value()
@@ -3196,8 +3229,8 @@ class AudiobookConverterMain(QMainWindow):
         dia_enabled = self._dialogue_enabled_cb.isChecked()
         voice_map = None
         if dia_enabled:
-            nv = get_voice_id(self._dialogue_narration_combo.currentText(), engine)
-            dv = get_voice_id(self._dialogue_voice_combo.currentText(), engine)
+            nv = get_voice_id(self._dialogue_narration_combo.currentData() or "", engine)
+            dv = get_voice_id(self._dialogue_voice_combo.currentData() or "", engine)
             if nv and dv:
                 voice_map = {"narration": nv, "dialogue": dv}
                 speakers = self._collect_speaker_map(engine)
@@ -3233,8 +3266,8 @@ class AudiobookConverterMain(QMainWindow):
         if hasattr(self, '_convert_start_time') and self._convert_start_time:
             mins = int((time.time() - self._convert_start_time) / 60)
             secs = int((time.time() - self._convert_start_time) % 60)
-            elapsed = f"（已用 {mins} 分 {secs} 秒）" if mins else f"（已用 {secs} 秒）"
-        self._status_label.setText(f"正在生成: {current}/{total} {elapsed}")
+            elapsed = tr('（已用 {mins} 分 {secs} 秒）', mins=mins, secs=secs) if mins else tr('（已用 {secs} 秒）', secs=secs)
+        self._status_label.setText(tr('正在生成: {current}/{total} {elapsed}', current=current, total=total, elapsed=elapsed))
 
     def _on_convert_done(self, output_dir, files):
         self._progress_bar.setValue(self._progress_bar.maximum())
@@ -3242,27 +3275,27 @@ class AudiobookConverterMain(QMainWindow):
         if hasattr(self, '_convert_start_time') and self._convert_start_time:
             mins = int((time.time() - self._convert_start_time) / 60)
             secs = int((time.time() - self._convert_start_time) % 60)
-            elapsed = f"（用时 {mins} 分 {secs} 秒）" if mins else f"（用时 {secs} 秒）"
+            elapsed = tr('（用时 {mins} 分 {secs} 秒）', mins=mins, secs=secs) if mins else tr('（用时 {secs} 秒）', secs=secs)
         count = len(files)
-        self._status_label.setText(f"完成! 共生成 {count} 个文件 {elapsed}")
+        self._status_label.setText(tr('完成! 共生成 {count} 个文件 {elapsed}', count=count, elapsed=elapsed))
         if not files:
-            self._status_label.setText("未生成文件，请查看日志了解详情")
-            QMessageBox.warning(self, "生成结果",
-                "未能生成任何文件。\n\n"
+            self._status_label.setText(tr("未生成文件，请查看日志了解详情"))
+            QMessageBox.warning(self, tr("生成结果"),
+                tr("未能生成任何文件。\n\n"
                 "可能原因：\n"
                 "  · 网络不通（Edge 引擎需要访问 speech.platform.bing.com）\n"
                 "  · 引擎未就绪\n"
                 "  · 文本内容为空\n\n"
-                "请查看日志文件了解详细错误。")
+                "请查看日志文件了解详细错误。"))
             return
         names = "\n".join(os.path.basename(f) for f in files[:8])
-        tail = f"\n  ... 等共 {count} 个文件" if count > 8 else ""
+        tail = tr('\n  ... 等共 {count} 个文件', count=count) if count > 8 else ""
         failed = sum(1 for it in self._queue_items if it.get("status") == "error")
-        fail_note = f"\n\n⚠ 另有 {failed} 个章节失败，可在「生成队列」页单独重试。" if failed else ""
+        fail_note = tr('\n\n⚠ 另有 {failed} 个章节失败，可在「生成队列」页单独重试。', failed=failed) if failed else ""
         if failed:
-            self._status_label.setText(f"完成 {count} 个，失败 {failed} 个（见「生成队列」）{elapsed}")
-        if QMessageBox.question(self, "完成",
-                                f"已生成 {count} 个MP3文件 {elapsed}:\n{names}{tail}{fail_note}\n\n是否打开文件夹？") == QMessageBox.StandardButton.Yes:
+            self._status_label.setText(tr('完成 {count} 个，失败 {failed} 个（见「生成队列」）{elapsed}', count=count, failed=failed, elapsed=elapsed))
+        if QMessageBox.question(self, tr("完成"),
+                                tr('已生成 {count} 个MP3文件 {elapsed}:\n{names}{tail}{fail_note}\n\n是否打开文件夹？', count=count, elapsed=elapsed, names=names, tail=tail, fail_note=fail_note)) == QMessageBox.StandardButton.Yes:
             if platform.system() == "Darwin":
                 subprocess.Popen(["open", output_dir])
             elif platform.system() == "Windows":
@@ -3271,7 +3304,7 @@ class AudiobookConverterMain(QMainWindow):
                 subprocess.Popen(["xdg-open", output_dir])
 
     def _on_convert_error(self, msg):
-        QMessageBox.critical(self, "生成失败", msg)
+        QMessageBox.critical(self, tr("生成失败"), msg)
 
     def _on_convert_finished(self):
         self.is_converting = False
@@ -3287,13 +3320,13 @@ class AudiobookConverterMain(QMainWindow):
             self._convert_worker.request_stop()
         self._qb_pause.setEnabled(False)
         self._qb_resume.setEnabled(True)
-        self._status_label.setText("正在暂停...")
+        self._status_label.setText(tr("正在暂停..."))
 
     def _qb_resume_convert(self):
         if self._last_output_dir:
             items = load_progress(self._last_output_dir)
             if items:
-                self._run_convert(self._last_output_dir, self._last_prefix or "有声读物", None, resume=True)
+                self._run_convert(self._last_output_dir, self._last_prefix or tr("有声读物"), None, resume=True)
                 return
         self._resume_convert()
 
@@ -3315,7 +3348,7 @@ class AudiobookConverterMain(QMainWindow):
     def _apply_theme(self):
         qss = DARK_QSS if self._theme == "dark" else LIGHT_QSS
         self.setStyleSheet(qss)
-        self._theme_status.setText(f"当前: {self._theme} 模式" if hasattr(self, '_theme_status') else "")
+        self._theme_status.setText(tr('当前: {theme} 模式', theme=self._theme) if hasattr(self, '_theme_status') else "")
 
     def _toggle_theme(self):
         self._theme = "dark" if self._theme == "light" else "light"
@@ -3340,9 +3373,10 @@ class AudiobookConverterMain(QMainWindow):
             engine = self._get_current_engine()
             voices = get_voice_list(engine)
             self._dialogue_narration_combo.clear()
-            self._dialogue_narration_combo.addItems(voices)
             self._dialogue_voice_combo.clear()
-            self._dialogue_voice_combo.addItems(voices)
+            for v in voices:
+                self._dialogue_narration_combo.addItem(tr(v), v)
+                self._dialogue_voice_combo.addItem(tr(v), v)
 
     # ================ ASR ================
 
@@ -3356,18 +3390,18 @@ class AudiobookConverterMain(QMainWindow):
         """扫描外挂 ASR 引擎"""
         self._asr_engine_combo.blockSignals(True)
         self._asr_engine_combo.clear()
-        self._asr_engine_combo.addItem("faster-whisper（内置）", "builtin")
+        self._asr_engine_combo.addItem(tr("faster-whisper（内置）"), "builtin")
         try:
             ext = scan_external_asr_engines(get_storage_dir())
             for eid, info in ext.items():
-                self._asr_engine_combo.addItem(f"⚡ {info['name']}（外挂）", eid)
+                self._asr_engine_combo.addItem(tr('⚡ {v1}（外挂）', v1=info['name']), eid)
         except Exception:
             pass
         self._asr_engine_combo.blockSignals(False)
 
     def _select_audio_file(self):
-        paths, _ = QFileDialog.getOpenFileNames(self, "选择音频文件（可多选，批量转录）", "",
-                                                 "音频文件 (*.mp3 *.wav *.m4a *.flac *.ogg *.aac *.wma);;所有文件 (*.*)")
+        paths, _ = QFileDialog.getOpenFileNames(self, tr("选择音频文件（可多选，批量转录）"), "",
+                                                 tr("音频文件 (*.mp3 *.wav *.m4a *.flac *.ogg *.aac *.wma);;所有文件 (*.*)"))
         if not paths:
             return
         self._audio_file_paths = paths
@@ -3378,40 +3412,32 @@ class AudiobookConverterMain(QMainWindow):
         else:
             total_mb = sum(os.path.getsize(p) for p in paths) / 1024 / 1024
             self._audio_file_label.setText(
-                f"已选 {len(paths)} 个文件（共 {total_mb:.1f} MB，批量转录结果自动存到各文件旁）")
+                tr('已选 {v1} 个文件（共 {total_mb:.1f} MB，批量转录结果自动存到各文件旁）', v1=len(paths), total_mb=total_mb))
 
     def _start_asr(self):
         audio_paths = getattr(self, '_audio_file_paths', None) or (
             [self._audio_file_path] if getattr(self, '_audio_file_path', None) else [])
         if not audio_paths:
-            QMessageBox.warning(self, "提示", "请先选择音频文件")
+            QMessageBox.warning(self, tr("提示"), tr("请先选择音频文件"))
             return
         if self.is_converting:
             return
         self._btn_asr_start.setEnabled(False)
-        self._btn_asr_start.setText("识别中...")
-        self._asr_status.setText("正在准备...")
+        self._btn_asr_start.setText(tr("识别中..."))
+        self._asr_status.setText(tr("正在准备..."))
         self._asr_result.clear()
 
         model_size = self._asr_model_combo.currentText()
-        lang_raw = self._asr_lang_combo.currentText()
-        language = lang_raw.split("（")[0] if "（" in lang_raw else lang_raw
-        if language == "auto":
-            language = "auto"
+        language = self._asr_lang_combo.currentData() or "auto"
 
         fmt_btn = self._asr_format_group.checkedButton()
-        output_format = "txt"
-        if fmt_btn:
-            for label, val in [("纯文本 (txt)","txt"),("字幕 (srt)","srt"),("JSON","json")]:
-                if fmt_btn.text() == label:
-                    output_format = val
-                    break
+        output_format = (fmt_btn.property("format") if fmt_btn else None) or "txt"
 
         # 检查是否选择了外挂引擎
         engine_id = self._asr_engine_combo.currentData()
         if engine_id and engine_id != "builtin":
             # 外挂引擎：直接用线程调用（多文件时逐个转录并存到源文件旁）
-            self._status_label.setText("外挂 ASR 引擎识别中...")
+            self._status_label.setText(tr("外挂 ASR 引擎识别中..."))
             batch = len(audio_paths) > 1
             ext_map = {"txt": ".txt", "srt": ".srt", "json": ".json"}
             def _ext_run():
@@ -3428,23 +3454,23 @@ class AudiobookConverterMain(QMainWindow):
                             results.append(f"✅ {os.path.basename(p)} → {os.path.basename(out_p)}")
                         else:
                             results.append(result)
-                    text = "批量转录完成:\n" + "\n".join(results) if batch else results[0]
+                    text = tr("批量转录完成:\n") + "\n".join(results) if batch else results[0]
                     self._asr_result.setPlainText(text)
-                    self._asr_status.setText("识别完成")
+                    self._asr_status.setText(tr("识别完成"))
                     self._asr_last_result = text
                 except Exception as e:
-                    QMessageBox.critical(self, "错误", f"外挂 ASR 识别失败: {e}")
+                    QMessageBox.critical(self, tr("错误"), tr('外挂 ASR 识别失败: {e}', e=e))
                 finally:
                     self._btn_asr_start.setEnabled(True)
-                    self._btn_asr_start.setText("▶ 开始识别")
+                    self._btn_asr_start.setText(tr("▶ 开始识别"))
             threading.Thread(target=_ext_run, daemon=True).start()
             return
 
         ready, msg = check_asr_ready(get_storage_dir())
         if not ready:
-            QMessageBox.critical(self, "ASR 不可用", msg)
+            QMessageBox.critical(self, tr("ASR 不可用"), msg)
             self._btn_asr_start.setEnabled(True)
-            self._btn_asr_start.setText("▶ 开始识别")
+            self._btn_asr_start.setText(tr("▶ 开始识别"))
             return
 
         compute_type = self._asr_compute_combo.currentData() or "default"
@@ -3452,11 +3478,11 @@ class AudiobookConverterMain(QMainWindow):
         self._asr_worker.setup(audio_paths, get_storage_dir(), model_size, language,
                                output_format, compute_type=compute_type)
         self._asr_worker.progress_update.connect(lambda c, t: self._asr_status.setText(
-            f"{getattr(self, '_asr_current_file', '')}识别进度: {c}/{t}"))
+            tr('{v1}识别进度: {c}/{t}', v1=getattr(self, '_asr_current_file', ''), c=c, t=t)))
         self._asr_worker.file_progress.connect(self._on_asr_file_progress)
         self._asr_worker.finished_ok.connect(self._on_asr_done)
         self._asr_worker.error_occurred.connect(lambda e: (
-            QMessageBox.critical(self, "错误", f"ASR 识别失败: {e}"),
+            QMessageBox.critical(self, tr("错误"), tr('ASR 识别失败: {e}', e=e)),
             self._on_asr_finished()
         ))
         self._asr_worker.finished.connect(self._on_asr_finished)
@@ -3465,17 +3491,17 @@ class AudiobookConverterMain(QMainWindow):
     def _on_asr_file_progress(self, idx, total, filename):
         self._asr_current_file = f"[{idx}/{total}] {filename} " if total > 1 else ""
         if total > 1:
-            self._asr_status.setText(f"正在转录 [{idx}/{total}]: {filename}")
+            self._asr_status.setText(tr('正在转录 [{idx}/{total}]: {filename}', idx=idx, total=total, filename=filename))
 
     def _on_asr_done(self, result):
         self._asr_result.setPlainText(result)
-        self._asr_status.setText("识别完成")
+        self._asr_status.setText(tr("识别完成"))
         self._asr_last_result = result
         self._asr_current_file = ""
 
     def _on_asr_finished(self):
         self._btn_asr_start.setEnabled(True)
-        self._btn_asr_start.setText("▶ 开始识别")
+        self._btn_asr_start.setText(tr("▶ 开始识别"))
 
     def _copy_asr_result(self):
         text = self._asr_result.toPlainText().strip()
@@ -3485,10 +3511,10 @@ class AudiobookConverterMain(QMainWindow):
     def _save_asr_result(self):
         text = self._asr_result.toPlainText().strip()
         if not text:
-            QMessageBox.warning(self, "提示", "没有可保存的内容")
+            QMessageBox.warning(self, tr("提示"), tr("没有可保存的内容"))
             return
-        path, _ = QFileDialog.getSaveFileName(self, "保存识别结果", "transcript.txt",
-                                               "文本文件 (*.txt);;所有文件 (*.*)")
+        path, _ = QFileDialog.getSaveFileName(self, tr("保存识别结果"), "transcript.txt",
+                                               tr("文本文件 (*.txt);;所有文件 (*.*)"))
         if path:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(text)
@@ -3496,45 +3522,45 @@ class AudiobookConverterMain(QMainWindow):
     # ================ Merge MP3 ================
 
     def _merge_mp3(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "选择要合并的MP3文件", "",
-                                                 "MP3文件 (*.mp3);;所有文件 (*.*)")
+        files, _ = QFileDialog.getOpenFileNames(self, tr("选择要合并的MP3文件"), "",
+                                                 tr("MP3文件 (*.mp3);;所有文件 (*.*)"))
         if len(files) < 2:
-            QMessageBox.information(self, "提示", "请选择至少2个文件")
+            QMessageBox.information(self, tr("提示"), tr("请选择至少2个文件"))
             return
-        out, _ = QFileDialog.getSaveFileName(self, "保存合并后的MP3", "合并_有声读物.mp3",
-                                              "MP3文件 (*.mp3)")
+        out, _ = QFileDialog.getSaveFileName(self, tr("保存合并后的MP3"), tr("合并_有声读物.mp3"),
+                                              tr("MP3文件 (*.mp3)"))
         if not out:
             return
         try:
             merge_mp3_files(sorted(list(files)), out)
             size_mb = os.path.getsize(out) / (1024 * 1024)
-            QMessageBox.information(self, "完成", f"已合并 {len(files)} 个文件:\n{os.path.basename(out)}\n大小: {size_mb:.1f}MB")
+            QMessageBox.information(self, tr("完成"), tr('已合并 {v1} 个文件:\n{v2}\n大小: {size_mb:.1f}MB', v1=len(files), v2=os.path.basename(out), size_mb=size_mb))
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"合并失败: {e}")
+            QMessageBox.critical(self, tr("错误"), tr('合并失败: {e}', e=e))
 
     def _export_m4b(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "选择要合并为 m4b 的 MP3 文件（按文件名排序为章节顺序）", "",
-                                                 "MP3文件 (*.mp3);;所有文件 (*.*)")
+        files, _ = QFileDialog.getOpenFileNames(self, tr("选择要合并为 m4b 的 MP3 文件（按文件名排序为章节顺序）"), "",
+                                                 tr("MP3文件 (*.mp3);;所有文件 (*.*)"))
         if not files:
             return
         # 用文件夹名作为默认书名
-        default_album = os.path.basename(os.path.dirname(files[0])) or "有声读物"
-        out, _ = QFileDialog.getSaveFileName(self, "保存 m4b 有声书",
-                                              f"{default_album}.m4b", "M4B 有声书 (*.m4b)")
+        default_album = os.path.basename(os.path.dirname(files[0])) or tr("有声读物")
+        out, _ = QFileDialog.getSaveFileName(self, tr("保存 m4b 有声书"),
+                                              f"{default_album}.m4b", tr("M4B 有声书 (*.m4b)"))
         if not out:
             return
         sorted_files = sorted(files)
-        self._status_label.setText("正在导出 m4b（重新编码为 AAC，可能需要几分钟）...")
+        self._status_label.setText(tr("正在导出 m4b（重新编码为 AAC，可能需要几分钟）..."))
 
         def _run():
             try:
                 export_m4b(sorted_files, out, album=default_album)
                 size_mb = os.path.getsize(out) / (1024 * 1024)
                 self._status_label.setText(
-                    f"m4b 导出完成: {os.path.basename(out)}（{len(sorted_files)} 章, {size_mb:.1f}MB）")
+                    tr('m4b 导出完成: {v1}（{v2} 章, {size_mb:.1f}MB）', v1=os.path.basename(out), v2=len(sorted_files), size_mb=size_mb))
             except Exception as e:
                 logger.error(f"m4b 导出失败: {e}", exc_info=True)
-                self._status_label.setText(f"m4b 导出失败: {e}")
+                self._status_label.setText(tr('m4b 导出失败: {e}', e=e))
 
         threading.Thread(target=_run, daemon=True).start()
 
@@ -3549,14 +3575,14 @@ class AudiobookConverterMain(QMainWindow):
             else:
                 subprocess.Popen(["xdg-open", LOG_PATH])
         else:
-            QMessageBox.information(self, "提示", "日志文件不存在")
+            QMessageBox.information(self, tr("提示"), tr("日志文件不存在"))
 
     # ================ External Engine Dialog ================
 
     def _open_external_dialog(self):
-        QMessageBox.information(self, "外挂引擎",
-                                "请在便携存储目录的 engines/ 子目录中放置外挂引擎。\n"
-                                "详见 README.md 中的「外挂引擎插件」章节。")
+        QMessageBox.information(self, tr("外挂引擎"),
+                                tr("请在便携存储目录的 engines/ 子目录中放置外挂引擎。\n"
+                                "详见 README.md 中的「外挂引擎插件」章节。"))
 
     # ================ Cleanup ================
 

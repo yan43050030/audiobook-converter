@@ -23,6 +23,8 @@ import shutil
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional
 
+from audiobook.i18n import tr
+
 
 KIND_PIPER = "piper"
 KIND_COSYVOICE = "cosyvoice"
@@ -149,7 +151,7 @@ def _list_cosyvoice(storage: str) -> List[ModelEntry]:
             # 未下载完的整库下载目录（.<名>.partial）也列出：占空间，可续传也可删
             if not (entry.endswith(".partial") and len(entry) > len("..partial")):
                 continue
-            name = f"{entry[1:-len('.partial')]}（未下载完整，再次下载可续传）"
+            name = tr('{v1}（未下载完整，再次下载可续传）', v1=entry[1:-len('.partial')])
         out.append(ModelEntry(
             kind=KIND_COSYVOICE, id=entry, name=name, paths=[p],
             size_bytes=_path_size(p), managed=_is_within(p, storage), location=root,
@@ -189,11 +191,11 @@ def _list_whisper(storage: str) -> List[ModelEntry]:
         if size is None:
             name = f"Whisper {entry}"
         elif entry.startswith("models--"):
-            name = f"Whisper {size}（HF 缓存）"
+            name = tr('Whisper {size}（HF 缓存）', size=size)
         else:
             name = f"Whisper {size}"
         if size is not None and not _whisper_dir_complete(p):
-            name += "（未下载完整）"
+            name += tr("（未下载完整）")
         out.append(ModelEntry(
             kind=KIND_WHISPER, id=entry, name=name, paths=[p],
             size_bytes=_path_size(p), managed=_is_within(p, storage), location=root,
@@ -224,7 +226,7 @@ def delete_model(entry: ModelEntry, storage_dir: Optional[str] = None) -> None:
     """
     storage = _storage(storage_dir)
     if not entry.managed or not all(_is_within(p, storage) for p in entry.paths):
-        raise PermissionError(f"「{entry.name}」不在便携存储目录内，为安全起见不在此删除：{entry.location}")
+        raise PermissionError(tr('「{name}」不在便携存储目录内，为安全起见不在此删除：{location}', name=entry.name, location=entry.location))
 
     import tts_engine as _te
     if entry.kind == KIND_PIPER:
@@ -268,12 +270,12 @@ def downloadable(storage_dir: Optional[str] = None) -> List[DownloadItem]:
 
     items: List[DownloadItem] = []
     for label, vid in _te.PIPER_BUILTIN_VOICES.items():
-        items.append(DownloadItem(KIND_PIPER, vid, label, (KIND_PIPER, vid) in installed))
+        items.append(DownloadItem(KIND_PIPER, vid, tr(label), (KIND_PIPER, vid) in installed))
     for key, meta in _te.COSYVOICE_MODELS.items():
-        items.append(DownloadItem(KIND_COSYVOICE, key, meta.get("description", key),
+        items.append(DownloadItem(KIND_COSYVOICE, key, tr(meta.get("description", key)),
                                   (KIND_COSYVOICE, key) in installed))
     for size, label in WHISPER_MODELS.items():
-        items.append(DownloadItem(KIND_WHISPER, size, f"Whisper {label}", size in whisper_installed))
+        items.append(DownloadItem(KIND_WHISPER, size, f"Whisper {tr(label)}", size in whisper_installed))
     return items
 
 
@@ -295,7 +297,7 @@ def download(kind: str, model_id: str, should_stop: Optional[Callable[[], bool]]
     elif kind == KIND_WHISPER:
         from audiobook.engines.asr import _ensure_whisper_model, WHISPER_HF_REPOS
         if model_id not in WHISPER_HF_REPOS:
-            raise ValueError(f"未知的 Whisper 模型规格: {model_id}")
+            raise ValueError(tr('未知的 Whisper 模型规格: {model_id}', model_id=model_id))
         _ensure_whisper_model(model_id, _storage(storage_dir), should_stop=should_stop)
     else:
-        raise ValueError(f"未知的模型类型: {kind}")
+        raise ValueError(tr('未知的模型类型: {kind}', kind=kind))

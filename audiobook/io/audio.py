@@ -14,6 +14,8 @@ import subprocess
 import tempfile
 from typing import List, Optional
 
+from audiobook.i18n import tr
+
 
 def _merge_mp3_files(file_paths, output_path):
     """合并多个MP3文件为一个，跳过后续文件的ID3标签"""
@@ -121,9 +123,9 @@ def export_m4b(file_paths: List[str], output_path: str,
     import tts_engine as _te
     ff = _te._ffmpeg_path()
     if not ff:
-        raise RuntimeError("ffmpeg 未安装，无法导出 m4b。\n" + _te._ffmpeg_install_hint())
+        raise RuntimeError(tr("ffmpeg 未安装，无法导出 m4b。\n") + _te._ffmpeg_install_hint())
     if not file_paths:
-        raise ValueError("没有要合并的文件")
+        raise ValueError(tr("没有要合并的文件"))
 
     if titles is None:
         titles = []
@@ -134,7 +136,7 @@ def export_m4b(file_paths: List[str], output_path: str,
     durations = []
     for i, p in enumerate(file_paths):
         if should_stop and should_stop():
-            raise _te.StopRequested("用户暂停")
+            raise _te.StopRequested(tr("用户暂停"))
         durations.append(get_audio_duration(p))
         if progress_callback:
             try:
@@ -160,7 +162,7 @@ def export_m4b(file_paths: List[str], output_path: str,
                                                           timeout=3600 * 4)
         if rc != 0:
             stderr = err.decode("utf-8", errors="replace") if err else ""
-            raise RuntimeError(f"m4b 导出失败 (rc={rc}): {stderr[-500:]}")
+            raise RuntimeError(tr('m4b 导出失败 (rc={rc}): {v1}', rc=rc, v1=stderr[-500:]))
         if progress_callback:
             try:
                 progress_callback(len(file_paths) + 1, len(file_paths) + 1)
@@ -177,7 +179,7 @@ def write_id3_tags(path: str, title: str = "", album: str = "", artist: str = ""
     import tts_engine as _te
     ff = _te._ffmpeg_path()
     if not ff:
-        raise RuntimeError("ffmpeg 未安装，无法写入元数据。\n" + _te._ffmpeg_install_hint())
+        raise RuntimeError(tr("ffmpeg 未安装，无法写入元数据。\n") + _te._ffmpeg_install_hint())
 
     tmp_path = path + ".tag.tmp.mp3"
     cmd = [ff, "-y", "-i", path]
@@ -199,7 +201,7 @@ def write_id3_tags(path: str, title: str = "", album: str = "", artist: str = ""
         rc, _out, err = _te._run_subprocess_interruptible(cmd, timeout=300)
         if rc != 0:
             stderr = err.decode("utf-8", errors="replace") if err else ""
-            raise RuntimeError(f"写入元数据失败 (rc={rc}): {stderr[-300:]}")
+            raise RuntimeError(tr('写入元数据失败 (rc={rc}): {v1}', rc=rc, v1=stderr[-300:]))
         os.replace(tmp_path, path)
     finally:
         if os.path.exists(tmp_path):
@@ -220,7 +222,7 @@ def normalize_loudness(input_path: str, output_path: Optional[str] = None,
     import tts_engine as _te
     ff = _te._ffmpeg_path()
     if not ff:
-        raise RuntimeError("ffmpeg 未安装，无法做响度归一化。\n" + _te._ffmpeg_install_hint())
+        raise RuntimeError(tr("ffmpeg 未安装，无法做响度归一化。\n") + _te._ffmpeg_install_hint())
     if output_path is None:
         output_path = input_path
 
@@ -236,7 +238,7 @@ def normalize_loudness(input_path: str, output_path: Optional[str] = None,
     _te.logger.info(f"响度归一化: {input_path} -> {work_path}")
     rc = subprocess.run(cmd, capture_output=True, **_te._quiet_popen_kwargs()).returncode
     if rc != 0 or not os.path.exists(work_path):
-        raise RuntimeError(f"loudnorm 失败 (rc={rc})")
+        raise RuntimeError(tr('loudnorm 失败 (rc={rc})', rc=rc))
     if in_place:
         os.replace(work_path, output_path)
     return output_path

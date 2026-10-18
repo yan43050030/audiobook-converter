@@ -34,6 +34,12 @@ SCHEMA: Dict[str, Dict[str, Any]] = {
         "choices": ["light", "dark"],
         "help": "界面主题：light / dark",
     },
+    "language": {
+        "type": str,
+        "default": "auto",
+        "choices": ["auto", "zh", "en"],
+        "help": "界面语言：auto（跟随系统）/ zh / en；环境变量 AUDIOBOOK_LANG 优先",
+    },
     "concurrency": {
         "type": int,
         "default": 0,

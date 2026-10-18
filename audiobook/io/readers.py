@@ -10,6 +10,8 @@ import zipfile
 import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 
+from audiobook.i18n import tr
+
 
 def read_docx(path: str) -> str:
     """读取 .docx：优先用 python-docx，否则回退到直接解析 zip 中的 document.xml"""
@@ -42,7 +44,7 @@ def read_markdown(path: str) -> str:
         except UnicodeDecodeError:
             continue
     if raw is None:
-        raise RuntimeError("无法解码 Markdown 文件")
+        raise RuntimeError(tr("无法解码 Markdown 文件"))
 
     text = raw
     text = _re.sub(r"```.*?```", "", text, flags=_re.DOTALL)
@@ -68,7 +70,7 @@ def read_epub(path: str) -> str:
         import ebooklib
         from ebooklib import epub
     except ImportError:
-        raise ImportError("ebooklib 未安装 (pip install ebooklib)")
+        raise ImportError(tr("ebooklib 未安装 (pip install ebooklib)"))
     book = epub.read_epub(path)
     chapters = []
     for item in book.get_items():
@@ -158,7 +160,7 @@ def read_pdf(path: str) -> str:
                     text_parts.append(text)
         return "\n\n".join(text_parts)
     except ImportError:
-        raise ImportError("需要安装 PyMuPDF 或 pdfplumber 来读取 PDF (pip install PyMuPDF)")
+        raise ImportError(tr("需要安装 PyMuPDF 或 pdfplumber 来读取 PDF (pip install PyMuPDF)"))
 
 
 def load_file_content(path: str) -> dict:
@@ -186,7 +188,7 @@ def load_file_content(path: str) -> dict:
             except UnicodeDecodeError:
                 continue
         if content is None:
-            raise RuntimeError("无法读取文件，编码不支持")
+            raise RuntimeError(tr("无法读取文件，编码不支持"))
 
     return {
         "path": path,

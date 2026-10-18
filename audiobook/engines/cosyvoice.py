@@ -11,6 +11,7 @@ import tempfile
 
 from audiobook.engines.base import Engine
 from audiobook.engines.clone import speed_from_rate
+from audiobook.i18n import tr
 
 
 def resolve_speaker(voice: str) -> str:
@@ -45,12 +46,12 @@ class CosyVoiceEngine(Engine):
         import tts_engine as _te
         from audiobook.cloning import client as _cv
         if should_stop and should_stop():
-            raise _te.StopRequested("用户暂停")
+            raise _te.StopRequested(tr("用户暂停"))
         ok, msg = _cv.sft_readiness()
         if not ok:
             ext = _te._scan_external_engines().get("cosyvoice")
             if not ext:
-                raise RuntimeError(f"CosyVoice 不可用：{msg}")
+                raise RuntimeError(tr('CosyVoice 不可用：{msg}', msg=msg))
             _te._external_generate(text, voice, rate, out_path, "cosyvoice",
                                    ext["executable"], should_stop=should_stop)
             return
